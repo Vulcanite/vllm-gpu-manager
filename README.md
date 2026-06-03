@@ -1,112 +1,222 @@
-# vLLM Management Console
+# vLLM GPU Manager
 
-A lightweight, standalone web console designed for managing local [vLLM](https://github.com/vllm-project/vllm) OpenAI-compatible inference servers on GPU-accelerated Linux hosts.
+A lightweight, single-binary web console for running [vLLM](https://github.com/vllm-project/vllm) OpenAI-compatible servers as Docker containers on NVIDIA GPU Linux hosts.
 
-This project wraps Docker, `nvidia-smi`, and Hugging Face model caching into a simple and intuitive UI. It allows you to quickly download models, allocate GPU resources, and spin up OpenAI-compatible API endpoints without having to memorize complex Docker run commands.
+This project is intentionally small. It is not a cluster scheduler, model platform, or desktop AI studio. It is an internal operations tool for a GPU server where you want a clear UI over Docker, `nvidia-smi`, Hugging Face cache management, and vLLM launch parameters.
 
-## Key Features
+## Features
 
-*   **GPU Monitoring:** Real-time visibility into NVIDIA GPU memory usage and utilization directly from `nvidia-smi`.
-*   **Model Management:** Download models directly from the Hugging Face Hub. View cached models and manage your local disk space.
-*   **vLLM Container Orchestration:**
-    *   Start new vLLM servers as Docker containers.
-    *   Configure exact port bindings, GPU count allocations, and specific GPU ID pinning.
-    *   Tune advanced vLLM parameters like memory utilization (`--gpu-memory-utilization`), max context length (`--max-model-len`), and tool call parsers (`--tool-call-parser`).
-*   **Lifecycle Management:** List running and stopped vLLM instances, and effortlessly stop, remove, or restart managed containers.
-*   **Single Binary Deployment:** The React (Vite) frontend is compiled and statically embedded into the Go backend binary using `go:embed`. Just drop the single executable on your server and run it.
+- **NVIDIA GPU monitoring:** Reads GPU memory and utilization from `nvidia-smi`.
+- **vLLM container lifecycle:** Start, stop, and restart managed vLLM Docker containers.
+- **GPU placement controls:** Select GPU count, pin exact GPU IDs, and tune `--gpu-memory-utilization`.
+- **VRAM launch checks:** Blocks launches when model weights plus estimated KV cache will not fit inside the requested GPU memory utilization budget.
+- **KV cache estimation:** Reads downloaded model config files to estimate KV cache bytes per token and required KV memory for `--max-model-len`.
+- **Hugging Face cache management:** Configure the host Hugging Face home directory, list cached models, download models, and delete cached model directories.
+- **Download progress:** Starts model downloads in background Docker containers and estimates progress from cached bytes on disk.
+- **HF token handling:** Stores an optional Hugging Face token in `settings.json` with file mode `0600`.
+- **Single binary deployment:** The React frontend is embedded into the Go binary using `go:embed`.
 
-## Architecture
+## Scope
 
-*   **Backend:** Go (Golang) standard library HTTP server (`net/http`). Interacts with the host OS via `os/exec` to run `docker` and `nvidia-smi` commands.
-*   **Frontend:** React 19, built with Vite and styled with CSS.
-*   **Storage:** Minimal local state is stored in a `settings.json` file in the same directory as the executable, which holds the Hugging Face cache directory path and API token.
+The manager currently targets:
+
+- Linux GPU hosts
+- NVIDIA GPUs
+- Docker
+- NVIDIA Container Toolkit
+- `vllm/vllm-openai:latest`
+- Hugging Face Hub model cache layout
+- internal/private network usage
+
+It does not provide authentication, HTTPS termination, multi-user authorization, Kubernetes orchestration, cluster scheduling, or a full OpenAI proxy gateway.
+
+## How It Works
+
+The backend is a Go `net/http` server. It serves the embedded React app and exposes internal JSON APIs under `/api`.
+
+Runtime operations are performed through host commands:
+
+- `nvidia-smi` for GPU status
+- `docker ps`, `docker inspect`, `docker run`, `docker stop`, and `docker restart` for container management
+- `docker run --entrypoint hf vllm/vllm-openai:latest download <model>` for model downloads
+- `docker run --rm -v <hf-home>/hub:/target alpine rm -rf /target/<model-dir>` for cached model deletion
+
+Managed Docker containers are labelled so the app can distinguish serving containers from download containers:
+
+- `vllm-manager.managed=true`
+- `vllm-manager.kind=server|download`
+- `vllm-manager.model=<huggingface-model-id>`
 
 ## Requirements
 
-To run the binary and manage vLLM instances, the host server must have:
+Runtime host:
 
-*   Linux operating system.
-*   NVIDIA GPU(s) with drivers installed.
-*   `nvidia-smi` available in the system PATH.
-*   [Docker](https://docs.docker.com/get-docker/) installed and running.
-*   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) (NVIDIA runtime support for Docker) properly configured so that `--runtime nvidia` works.
+- Linux
+- NVIDIA GPU drivers
+- `nvidia-smi` available in `PATH`
+- Docker installed and running
+- NVIDIA Container Toolkit configured so Docker supports `--runtime nvidia`
+- `vllm/vllm-openai:latest` available locally or pullable by Docker
+- `alpine` image available locally for cached model deletion
 
-To build the project from source, you will also need:
+Build machine:
 
-*   [Node.js](https://nodejs.org/) and `npm` (for the frontend).
-*   [Go](https://go.dev/) 1.21+ (for the backend).
+- Go version compatible with `go.mod`
+- Node.js and npm
 
-## Building from Source
-
-A helper script is provided to build the frontend, package it, and compile the Go backend into a single executable.
+## Build
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd gpu-vllm-management
-
-# Install frontend dependencies first!
 cd frontend
 npm install
 cd ..
 
-# Run the build script
 ./build.sh
 ```
 
-This script will:
-1. Navigate into the `frontend` directory.
-2. Run `npm run build` to generate the static SPA files in `frontend/dist`.
-3. Compile the Go backend, embedding the `frontend/dist` files into a single `vllm-manager` executable.
+The build script runs the frontend build and compiles a standalone backend binary named `vllm-manager`.
 
-## Running the Server
-
-Once built, you can run the binary directly:
+## Run
 
 ```bash
 ./vllm-manager -port 8000
 ```
 
-### Using the Manager Script
+Then open:
 
-A handy `manager.sh` script is included to help run the server as a background process (using `nohup`).
+```text
+http://<host>:8000
+```
+
+You can also use the helper script:
 
 ```bash
-# Start the server in the background (defaults to port 8000)
 ./manager.sh start
-
-# Start the server on a specific port
 ./manager.sh start 8080
-
-# Check if the server is running
 ./manager.sh status
-
-# Stop the background server
 ./manager.sh stop
-
-# Restart the server
 ./manager.sh restart
 ```
 
-Logs from the background process are written to `vllm-manager.log` in the current working directory.
+Logs are written to `vllm-manager.log` when started through `manager.sh`.
 
-## API Endpoints
+## Settings
 
-The Go backend exposes several internal API endpoints under the `/api` prefix, handling cross-origin resource sharing (CORS) natively:
+Settings are stored in `settings.json` beside the binary.
 
-*   `GET /api/settings` / `POST /api/settings`: Manage Hugging Face cache directory and token.
-*   `GET /api/gpus`: Retrieve parsed output from `nvidia-smi` about installed GPUs.
-*   `GET /api/models/active`: List currently running and stopped vLLM Docker containers.
-*   `GET /api/models/downloaded`: List models cached locally in the Hugging Face hub directory.
-*   `GET /api/models/info`: Fetch metadata (size, likes, downloads) directly from the Hugging Face API.
-*   `POST /api/models/download`: Trigger a containerized download of a Hugging Face model.
-*   `POST /api/models/start`: Launch a new vLLM Docker container with specified parameters.
-*   `POST /api/models/stop`: Gracefully stop a running vLLM container.
-*   `POST /api/models/restart`: Restart an existing vLLM container.
-*   `POST /api/models/remove`: Delete a stopped vLLM container.
+```json
+{
+  "hf_cache": "/mnt/data/models",
+  "hf_token": "hf_..."
+}
+```
 
-## Security Note
+`hf_cache` is the Hugging Face home directory, not the `hub` directory itself. If a user enters a path ending in `/hub`, the backend normalizes it to the parent directory.
 
-This tool is designed as an **internal utility** for secure environments. **It does not include user authentication, authorization, or HTTPS termination.** Anyone with access to the web interface can deploy models, utilize GPU resources, and view your Hugging Face token (if configured).
+Example:
 
-Do not expose this interface directly to the public internet. Ensure it is only accessible via localhost, a secure VPN/VPC, or behind a reverse proxy that implements proper authentication (like Nginx with Basic Auth, or OAuth2 Proxy).
+```text
+/mnt/data/models/hub -> /mnt/data/models
+```
+
+The app mounts the configured Hugging Face home into vLLM containers as:
+
+```text
+<hf_cache>:/hf_cache
+HF_HOME=/hf_cache
+```
+
+The Hugging Face cache path can only be changed when no managed vLLM containers exist. This avoids leaving existing containers attached to an old model cache while the UI points to a new one.
+
+## Model Downloads
+
+Downloads run in detached Docker containers using the vLLM image:
+
+```bash
+docker run -d --rm \
+  --network host \
+  -v <hf_cache>:/hf_cache \
+  -e HF_HOME=/hf_cache \
+  --entrypoint hf \
+  vllm/vllm-openai:latest \
+  download <model>
+```
+
+The UI shows progress by polling cached bytes on disk through `/api/models/download/progress`. The progress is an estimate based on expected Hugging Face model size and the current cache directory size.
+
+Only one download operation per model/cache path is allowed at a time.
+
+## Starting A Model
+
+Serving containers are launched with host networking and the NVIDIA runtime:
+
+```bash
+docker run -d \
+  --ipc=host \
+  --runtime nvidia \
+  --gpus <selection> \
+  --network host \
+  -v <hf_cache>:/hf_cache \
+  -e HF_HOME=/hf_cache \
+  vllm/vllm-openai:latest \
+  --model <model> \
+  --tensor-parallel-size <gpus> \
+  --port <port> \
+  --gpu-memory-utilization <mem_util>
+```
+
+Optional launch parameters currently exposed by the UI/API:
+
+- `--max-model-len`
+- `--tool-call-parser`
+- `--enable-auto-tool-choice`
+
+Before launching, the backend validates:
+
+- requested port is available
+- requested GPU count and GPU IDs are valid
+- no active download container is currently downloading the same model
+- combined `gpu_memory_utilization` on any selected GPU does not exceed 100%
+- downloaded model size can fit in the requested GPU budget
+- estimated KV cache can fit for the requested or default max context length
+- KV heads are compatible with the requested tensor parallel size when config data is available
+
+## Deleting Cached Models
+
+Cached model deletion removes the Hugging Face hub model directory through an Alpine container mounted at the configured cache hub path.
+
+Deletion is blocked when:
+
+- the model is currently being downloaded
+- a managed serving container references that model
+- the resolved model path would escape the configured Hugging Face hub directory
+
+## API
+
+All APIs are under `/api`.
+
+| Method | Path                                   | Description                                                               |
+|--------|----------------------------------------|---------------------------------------------------------------------------|
+| `GET`  | `/settings`                            | Read HF cache path, token status, cache disk usage, and system RAM usage. |
+| `POST` | `/settings`                            | Save HF cache path and optionally update or clear the HF token.           |
+| `GET`  | `/gpus`                                | Return parsed NVIDIA GPU status from `nvidia-smi`.                        |
+| `GET`  | `/models/active`                       | List managed vLLM serving containers.                                     |
+| `GET`  | `/models/downloaded`                   | List cached Hugging Face models and local size/KV metadata.               |
+| `GET`  | `/models/info?model=<id>`              | Fetch model metadata from the Hugging Face API.                           |
+| `POST` | `/models/download`                     | Start a background model download container.                              |
+| `GET`  | `/models/download/progress?model=<id>` | Return current cached byte count for a model.                             |
+| `POST` | `/models/start`                        | Start a vLLM serving container.                                           |
+| `POST` | `/models/stop`                         | Stop a serving container by port.                                         |
+| `POST` | `/models/restart`                      | Restart a managed serving container by container ID.                      |
+| `POST` | `/models/remove`                       | Remove a managed stopped container by container ID.                       |
+| `POST` | `/models/downloaded/delete`            | Delete a cached model directory.                                          |
+
+The frontend currently hides container removal from the active model UI, but the backend endpoint remains available for operational cleanup.
+
+## Security
+
+This is an internal utility. It does not include authentication, authorization, or HTTPS.
+
+Anyone who can access the web interface can inspect GPU state, start and stop model containers, trigger model downloads, delete cached models, and use the configured Hugging Face token indirectly.
+
+Do not expose the app directly to the public internet. Put it behind a private network, VPN, SSH tunnel, or a reverse proxy that provides authentication and TLS.
