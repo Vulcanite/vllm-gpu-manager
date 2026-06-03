@@ -1,0 +1,21 @@
+# Local settings and secrets
+settings.json
+
+# Runtime output
+vllm-manager
+vllm-manager.log
+*.log
+
+# Go build/test artifacts
+coverage.out
+bin/
+
+# Frontend dependencies and generated output
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
