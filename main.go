@@ -180,7 +180,7 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func main() {
-	port := flag.String("port", "8000", "Port to run the vllm-manager on")
+	port := flag.String("port", "9090", "Port to run the vllm-manager on")
 	flag.Parse()
 
 	mux := http.NewServeMux()

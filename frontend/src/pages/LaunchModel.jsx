@@ -14,7 +14,7 @@ const ACTIVE_DOWNLOAD_STORAGE_KEY = 'vllm-manager-active-download';
 
 export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, notify }) => {
   const [startModelName, setStartModelName] = useState('');
-  const [startPort, setStartPort] = useState(8000);
+  const [startPort, setStartPort] = useState(8080);
   const [startGpus, setStartGpus] = useState(1);
   const [startGpuIds, setStartGpuIds] = useState([]);
   const [startMem, setStartMem] = useState(0.9);

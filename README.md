@@ -76,16 +76,34 @@ cd ..
 
 The build script runs the frontend build and compiles a standalone backend binary named `vllm-manager`.
 
+## Release
+
+Pushing a version tag that starts with `v` creates a GitHub Release and uploads Linux AMD64 and ARM64 binaries plus SHA256 checksums.
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow builds the React frontend first, embeds it into the Go binary, runs frontend linting and backend tests, then publishes:
+
+```text
+vllm-manager-<tag>-linux-amd64
+vllm-manager-<tag>-linux-amd64.sha256
+vllm-manager-<tag>-linux-arm64
+vllm-manager-<tag>-linux-arm64.sha256
+```
+
 ## Run
 
 ```bash
-./vllm-manager -port 8000
+./vllm-manager -port 9090
 ```
 
 Then open:
 
 ```text
-http://<host>:8000
+http://<host>:9090
 ```
 
 You can also use the helper script:

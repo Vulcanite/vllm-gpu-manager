@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PORT=${2:-8000}
+PORT=${2:-9090}
 
 case "$1" in
     start)
@@ -33,7 +33,7 @@ case "$1" in
         ;;
     *)
         echo "Usage: $0 {start|stop|status|restart} [port]"
-        echo "  [port] is optional and defaults to 8000 when starting."
+        echo "  [port] is optional and defaults to 9090 when starting."
         exit 1
         ;;
 esac
