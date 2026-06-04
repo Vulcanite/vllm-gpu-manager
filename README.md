@@ -34,12 +34,12 @@ It does not provide authentication, HTTPS termination, multi-user authorization,
 
 The backend is a Go `net/http` server. It serves the embedded React app and exposes internal JSON APIs under `/api`.
 
-Runtime operations are performed through host commands:
+Runtime operations are performed through host integrations:
 
 - `nvidia-smi` for GPU status
-- `docker ps`, `docker inspect`, `docker run`, `docker stop`, and `docker restart` for container management
-- `docker run --entrypoint hf vllm/vllm-openai:latest download <model>` for model downloads
-- `docker run --rm -v <hf-home>/hub:/target alpine rm -rf /target/<model-dir>` for cached model deletion
+- Docker Engine API for container listing, inspection, creation, start, stop, restart, removal, image inspection, and image pulls
+- Detached Docker Engine API containers using `vllm/vllm-openai:latest` and entrypoint `hf` for model downloads
+- A short-lived Docker Engine API `alpine` container mounted at `<hf-home>/hub:/target` for cached model deletion
 
 Managed Docker containers are labelled so the app can distinguish serving containers from download containers:
 
@@ -148,7 +148,7 @@ The Hugging Face cache path can only be changed when no managed vLLM containers 
 
 ## Model Downloads
 
-Downloads run in detached Docker containers using the vLLM image:
+Downloads run in detached Docker containers using the vLLM image. The backend creates them through the Docker Engine API with settings equivalent to:
 
 ```bash
 docker run -d --rm \
@@ -166,7 +166,7 @@ Only one download operation per model/cache path is allowed at a time.
 
 ## Starting A Model
 
-Serving containers are launched with host networking and the NVIDIA runtime:
+Serving containers are created through the Docker Engine API with host networking and the NVIDIA runtime, equivalent to:
 
 ```bash
 docker run -d \

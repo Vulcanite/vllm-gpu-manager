@@ -47,7 +47,7 @@ func GetGPUInfo() ([]GPUInfo, error) {
 		memFree, _ := strconv.ParseUint(parts[4], 10, 64)
 		gpuUtil, _ := strconv.ParseUint(parts[5], 10, 32)
 
-		// Convert MiB to bytes
+		// Convert MiB to bytes.
 		memTotalBytes := memTotal * 1024 * 1024
 		memUsedBytes := memUsed * 1024 * 1024
 		memFreeBytes := memFree * 1024 * 1024
