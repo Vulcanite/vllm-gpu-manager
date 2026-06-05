@@ -15,6 +15,7 @@ const App = () => {
   const [downloadedModels, setDownloadedModels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState('');
+  const [gpuError, setGpuError] = useState('');
   const [notice, setNotice] = useState(null);
   const [stopConfirmPort, setStopConfirmPort] = useState(null);
   const [stopError, setStopError] = useState('');
@@ -32,8 +33,10 @@ const App = () => {
       setGpus(overview.gpus);
       setActiveModels(overview.activeModels);
       setDownloadedModels(overview.downloadedModels);
-      setFetchError('');
+      setGpuError(overview.gpuError || '');
+      setFetchError(overview.gpuError || '');
     } catch (error) {
+      setGpuError('');
       setFetchError(getErrorDetail(error, 'Unable to refresh vLLM manager data'));
     } finally {
       setLoading(false);
@@ -120,7 +123,7 @@ const App = () => {
           />
           <Route
             path="/launch"
-            element={<LaunchModel gpus={gpus} downloadedModels={downloadedModels} activeModels={activeModels} fetchData={fetchData} notify={notify} />}
+            element={<LaunchModel gpus={gpus} gpuError={gpuError} downloadedModels={downloadedModels} activeModels={activeModels} fetchData={fetchData} notify={notify} />}
           />
           <Route path="/settings" element={<SettingsPage fetchData={fetchData} />} />
         </Routes>

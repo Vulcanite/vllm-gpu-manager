@@ -19,6 +19,19 @@ type GPUInfo struct {
 	GPUUtilization uint32  `json:"gpu_utilization"`
 }
 
+var getGPUInfo = GetGPUInfo
+
+func RequireDetectedGPUs() ([]GPUInfo, error) {
+	gpus, err := getGPUInfo()
+	if err != nil {
+		return nil, fmt.Errorf("GPU detection failed: %v", err)
+	}
+	if len(gpus) == 0 {
+		return nil, validationError("no GPUs detected; deployment requires at least one NVIDIA GPU")
+	}
+	return gpus, nil
+}
+
 func GetGPUInfo() ([]GPUInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

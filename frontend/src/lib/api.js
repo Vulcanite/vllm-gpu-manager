@@ -7,16 +7,20 @@ export const getErrorDetail = (error, fallback = 'Request failed') => {
 };
 
 export const fetchOverview = async () => {
-  const [gpuRes, activeRes, downloadedRes] = await Promise.all([
+  const [gpuRes, activeRes, downloadedRes] = await Promise.allSettled([
     axios.get(`${API_BASE}/gpus`),
     axios.get(`${API_BASE}/models/active`),
     axios.get(`${API_BASE}/models/downloaded`),
   ]);
 
+  if (activeRes.status === 'rejected') throw activeRes.reason;
+  if (downloadedRes.status === 'rejected') throw downloadedRes.reason;
+
   return {
-    gpus: gpuRes.data || [],
-    activeModels: activeRes.data || [],
-    downloadedModels: downloadedRes.data || [],
+    gpus: gpuRes.status === 'fulfilled' ? gpuRes.value.data || [] : [],
+    gpuError: gpuRes.status === 'rejected' ? getErrorDetail(gpuRes.reason, 'GPU detection failed') : '',
+    activeModels: activeRes.value.data || [],
+    downloadedModels: downloadedRes.value.data || [],
   };
 };
 

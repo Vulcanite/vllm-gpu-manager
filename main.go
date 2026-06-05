@@ -313,7 +313,11 @@ func main() {
 	}))
 
 	mux.HandleFunc("/api/gpus", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		gpus, _ := api.GetGPUInfo()
+		gpus, err := api.GetGPUInfo()
+		if err != nil {
+			writeJSONError(w, http.StatusServiceUnavailable, fmt.Sprintf("GPU detection failed: %v", err))
+			return
+		}
 		writeJSON(w, gpus)
 	}))
 
@@ -359,16 +363,24 @@ func main() {
 		log.Printf("[API] /api/models/start requested! Model=%s Port=%d GPUs=%d GPUIDs=%s MemUtil=%s MaxLen=%s Parser=%s\n",
 			req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.ToolParser)
 
-		gpuList, _ := api.GetGPUInfo()
-		if len(gpuList) > 0 && req.GPUs > len(gpuList) {
-			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("requested %d GPUs, but only %d are available on this server", req.GPUs, len(gpuList)))
+		gpuList, err := api.RequireDetectedGPUs()
+		if err != nil {
+			status := http.StatusServiceUnavailable
+			if api.IsValidationError(err) {
+				status = http.StatusBadRequest
+			}
+			writeJSONError(w, status, err.Error())
+			return
+		}
+		if req.GPUs > len(gpuList) {
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("Requested %d GPUs, but only %d are available on this server", req.GPUs, len(gpuList)))
 			return
 		}
 
 		active, _ := api.GetActiveModels()
 		for _, m := range active {
 			if m.Port == strconv.Itoa(req.Port) {
-				writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("port %d is already in use by %s", req.Port, m.Model))
+				writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("Requested port %d is already in use by %s", req.Port, m.Model))
 				return
 			}
 		}

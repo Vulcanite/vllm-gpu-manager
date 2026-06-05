@@ -24,7 +24,7 @@ const normalizeGpuPinning = (selectedIds, availableIds, requestedCount, useAll) 
   return next;
 };
 
-export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, notify }) => {
+export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModels, fetchData, notify }) => {
   const [startModelName, setStartModelName] = useState('');
   const [startPort, setStartPort] = useState(8080);
   const [startGpus, setStartGpus] = useState(1);
@@ -61,10 +61,12 @@ export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, n
 
   const navigate = useNavigate();
   const gpuList = useMemo(() => gpus || [], [gpus]);
-  const maxGpus = gpuList.length > 0 ? gpuList.length : 1;
+  const noGpuDetected = gpuList.length === 0;
+  const gpuUnavailableMessage = gpuError || 'No GPUs detected. Deployment is disabled until nvidia-smi reports at least one GPU.';
+  const maxGpus = noGpuDetected ? 0 : gpuList.length;
   const availableGpuIds = useMemo(() => [...gpuList].sort((a, b) => a.id - b.id).map((gpu) => gpu.id), [gpuList]);
-  const requestedGpuCount = Math.min(maxGpus, Math.max(1, Number(startGpus) || 1));
-  const usesAllGpus = requestedGpuCount >= maxGpus;
+  const requestedGpuCount = noGpuDetected ? 0 : Math.min(maxGpus, Math.max(1, Number(startGpus) || 1));
+  const usesAllGpus = !noGpuDetected && requestedGpuCount >= maxGpus;
   const selectedGpuIds = useMemo(
     () => normalizeGpuPinning(startGpuIds, availableGpuIds, requestedGpuCount, usesAllGpus),
     [availableGpuIds, requestedGpuCount, startGpuIds, usesAllGpus],
@@ -108,6 +110,8 @@ export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, n
   };
 
   const vramPreflightError = useMemo(() => {
+    if (noGpuDetected) return '';
+
     const selectedModel = downloadedModels.find((m) => m.name === startModelName);
     const modelBytes = selectedModel?.size_bytes || 0;
     const requestedGpus = Number(startGpus);
@@ -147,9 +151,14 @@ export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, n
       return `${selectedModel.name} needs about ${formatBytes(requiredPerGpu)} per GPU (${formatBytes(modelBytesPerGpu)} model shard plus ${formatBytes(kvCacheBytesPerGpu)} KV cache at max_model_len ${effectiveMaxLen}), but GPU ${limitingGpu.id} only has ${formatBytes(availableBudget)} available within the ${memUtil.toFixed(2)} memory utilization budget.`;
     }
     return `${selectedModel.name} needs about ${formatBytes(requiredPerGpu)} per GPU after margin, but GPU ${limitingGpu.id} only has ${formatBytes(availableBudget)} available within the ${memUtil.toFixed(2)} memory utilization budget.`;
-  }, [startModelName, startGpus, selectedGpuIds, startMem, startMaxLen, gpuList, downloadedModels]);
+  }, [noGpuDetected, startModelName, startGpus, selectedGpuIds, startMem, startMaxLen, gpuList, downloadedModels]);
 
   const handleGpuCountChange = (event) => {
+    if (noGpuDetected) {
+      setStartGpuIds([]);
+      return;
+    }
+
     const rawValue = event.target.value;
     if (rawValue === '') {
       setStartGpus('');
@@ -175,6 +184,7 @@ export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, n
 
   const validateLaunch = () => {
     const gpusToSend = Number(startGpus);
+    if (noGpuDetected) return gpuUnavailableMessage;
     if (!startModelName) return 'Please select a model to launch';
     if (!Number.isInteger(gpusToSend) || gpusToSend < 1) return 'Must request at least 1 GPU.';
     if (gpusToSend > maxGpus) return `Cannot request ${gpusToSend} GPUs. Only ${maxGpus} available.`;
@@ -346,6 +356,7 @@ export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, n
             </h2>
           </div>
           {launchError && <div className="alert alert-danger">{launchError}</div>}
+          {noGpuDetected && !launchError && <div className="alert alert-danger">{gpuUnavailableMessage}</div>}
           {vramPreflightError && !launchError && <div className="alert alert-danger">{vramPreflightError}</div>}
           <form onSubmit={handleStart}>
             <div className="form-group">
@@ -375,8 +386,9 @@ export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, n
                   value={startGpus}
                   onChange={handleGpuCountChange}
                   min="1"
-                  max={maxGpus}
+                  max={noGpuDetected ? 1 : maxGpus}
                   step="1"
+                  disabled={noGpuDetected}
                   required
                 />
               </div>
@@ -386,7 +398,9 @@ export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, n
               <div className="form-group">
                 <label className="form-label">GPU Pinning</label>
                 <div className="pill-container">
-                  {usesAllGpus ? (
+                  {noGpuDetected ? (
+                    <span className="text-secondary text-sm">No GPUs detected</span>
+                  ) : usesAllGpus ? (
                     <button className="pill selected" type="button" onClick={() => setStartGpuIds([])}>
                       All
                     </button>
@@ -421,7 +435,7 @@ export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, n
               </div>
             </div>
 
-            <button type="submit" className="btn btn-primary mt-2 full-width" disabled={launching || Boolean(vramPreflightError)}>
+            <button type="submit" className="btn btn-primary mt-2 full-width" disabled={launching || noGpuDetected || Boolean(vramPreflightError)}>
               {launching ? 'Deploying...' : 'Deploy Server'}
             </button>
           </form>

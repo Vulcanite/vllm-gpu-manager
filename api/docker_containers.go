@@ -20,18 +20,16 @@ import (
 const modelHealthCheckTimeout = 5 * time.Second
 
 func validateGPUSelection(gpus int, gpuIds string) (string, []GPUInfo, error) {
-	gpuList, err := GetGPUInfo()
-	if err == nil && len(gpuList) > 0 && gpus > len(gpuList) {
+	gpuList, err := RequireDetectedGPUs()
+	if err != nil {
+		return "", nil, err
+	}
+	if gpus > len(gpuList) {
 		return "", nil, validationError("requested %d GPUs, but only %d are available on this server", gpus, len(gpuList))
 	}
 
 	gpuIds = strings.TrimSpace(gpuIds)
 	if gpuIds == "" || gpuIds == "all" {
-		if err != nil || len(gpuList) == 0 {
-			// No nvidia-smi data — fall back to "all" and skip VRAM preflight.
-			return "all", nil, nil
-		}
-
 		sort.Slice(gpuList, func(i, j int) bool {
 			return gpuList[i].ID < gpuList[j].ID
 		})
@@ -46,10 +44,6 @@ func validateGPUSelection(gpus int, gpuIds string) (string, []GPUInfo, error) {
 			ids[i] = strconv.Itoa(g.ID)
 		}
 		return fmt.Sprintf("device=%s", strings.Join(ids, ",")), selected, nil
-	}
-
-	if err != nil {
-		return "", nil, fmt.Errorf("cannot validate gpu_ids because nvidia-smi failed: %v", err)
 	}
 
 	available := make(map[int]GPUInfo, len(gpuList))
@@ -94,6 +88,25 @@ func validateGPUSelection(gpus int, gpuIds string) (string, []GPUInfo, error) {
 	return fmt.Sprintf("device=%s", strings.Join(values, ",")), selected, nil
 }
 
+func containerLabels(metadata container.InspectResponse) map[string]string {
+	if metadata.Config == nil {
+		return nil
+	}
+	return metadata.Config.Labels
+}
+
+func isManagedContainer(labels map[string]string) bool {
+	return labels[managedContainerLabel] == "true" || labels["app"] == "vllm-manager"
+}
+
+func isManagedServerContainer(labels map[string]string) bool {
+	if !isManagedContainer(labels) {
+		return false
+	}
+	kind := labels[containerKindLabel]
+	return kind == "" || kind == containerKindServer
+}
+
 func ensureManagedContainer(containerID string) error {
 	containerID = strings.TrimSpace(containerID)
 	if containerID == "" {
@@ -106,12 +119,7 @@ func ensureManagedContainer(containerID string) error {
 			return fmt.Errorf("failed to inspect container %s: %v", containerID, err)
 		}
 
-		name := strings.TrimPrefix(metadata.Name, "/")
-		labels := map[string]string(nil)
-		if metadata.Config != nil {
-			labels = metadata.Config.Labels
-		}
-		if labels["app"] == "vllm-manager" || labels[managedContainerLabel] == "true" || strings.HasPrefix(name, "vllm-") {
+		if isManagedContainer(containerLabels(metadata)) {
 			return nil
 		}
 
@@ -132,12 +140,6 @@ func GetActiveModels() ([]ActiveModel, error) {
 			if name == "" || !strings.HasPrefix(name, "vllm-") {
 				continue
 			}
-			// Download containers (vllm-download-*) hold no GPU allocation and no
-			// vLLM server port — exclude them from the active model list so they
-			// don't poison GPU overlap accounting or the UI model table.
-			if strings.HasPrefix(name, "vllm-download-") {
-				continue
-			}
 
 			// Inspect the container to get args + GPU device assignments.
 			metadata, err := inspectContainer(ctx, cli, item.ID)
@@ -145,10 +147,19 @@ func GetActiveModels() ([]ActiveModel, error) {
 				continue
 			}
 
+			labels := containerLabels(metadata)
+			if !isManagedServerContainer(labels) {
+				continue
+			}
+			// Download containers (vllm-download-*) hold no GPU allocation and no
+			// vLLM server port — exclude them from the active model list so they
+			// don't poison GPU overlap accounting or the UI model table.
+			if strings.HasPrefix(name, "vllm-download-") {
+				continue
+			}
+
 			args := metadata.Args
-			labels := map[string]string(nil)
 			if metadata.Config != nil {
-				labels = metadata.Config.Labels
 				if len(args) == 0 {
 					args = metadata.Config.Cmd
 				}
@@ -273,6 +284,13 @@ func GetVLLMContainerNames() ([]string, error) {
 			if name == "" || !strings.HasPrefix(name, "vllm-") {
 				continue
 			}
+			metadata, err := inspectContainer(ctx, cli, item.ID)
+			if err != nil {
+				continue
+			}
+			if !isManagedContainer(containerLabels(metadata)) {
+				continue
+			}
 			names = append(names, name)
 		}
 		return nil
@@ -348,11 +366,6 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 
 	// Fix #2 / GPT-P1a: reject if combined mem_util on any requested GPU would exceed 1.0
 	totalGPUCount := len(selectedGPUs)
-	if totalGPUCount == 0 {
-		if gpuList, err := GetGPUInfo(); err == nil {
-			totalGPUCount = len(gpuList)
-		}
-	}
 	var requestedGPUIDs []int
 	if gpuIds != "" && gpuIds != "all" {
 		for _, part := range strings.Split(gpuIds, ",") {
@@ -473,8 +486,15 @@ func StopModel(port int) error {
 		for _, item := range containers {
 			name := dockerContainerName(item)
 			if strings.HasPrefix(name, "vllm-") && strings.HasSuffix(name, suffix) {
+				metadata, err := inspectContainer(ctx, cli, item.ID)
+				if err != nil {
+					return fmt.Errorf("failed to inspect container %s: %v", item.ID, err)
+				}
+				if !isManagedServerContainer(containerLabels(metadata)) {
+					continue
+				}
 				logDockerAPI("container stop", name)
-				if _, err := cli.ContainerStop(ctx, name, dockerclient.ContainerStopOptions{}); err != nil {
+				if _, err := cli.ContainerStop(ctx, item.ID, dockerclient.ContainerStopOptions{}); err != nil {
 					return err
 				}
 				stopped = true
