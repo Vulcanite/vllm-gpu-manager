@@ -19,3 +19,7 @@ frontend/.vite/
 .DS_Store
 .idea/
 .vscode/
+
+graphify-out/
+.agents/
+.codex/

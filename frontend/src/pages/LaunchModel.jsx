@@ -12,6 +12,18 @@ const MODEL_VRAM_SAFETY_MARGIN = 1.08;
 const DEFAULT_GPU_MEMORY_UTILIZATION = 0.9;
 const ACTIVE_DOWNLOAD_STORAGE_KEY = 'vllm-manager-active-download';
 
+const normalizeGpuPinning = (selectedIds, availableIds, requestedCount, useAll) => {
+  if (useAll) return [];
+
+  const validSelected = selectedIds.filter((id) => availableIds.includes(id));
+  let next = validSelected.slice(0, requestedCount);
+  if (next.length < requestedCount) {
+    const remainingIds = availableIds.filter((id) => !next.includes(id));
+    next = [...next, ...remainingIds.slice(0, requestedCount - next.length)];
+  }
+  return next;
+};
+
 export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, notify }) => {
   const [startModelName, setStartModelName] = useState('');
   const [startPort, setStartPort] = useState(8080);
@@ -48,7 +60,15 @@ export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, n
   const [deletingCache, setDeletingCache] = useState(false);
 
   const navigate = useNavigate();
-  const maxGpus = gpus && gpus.length > 0 ? gpus.length : 1;
+  const gpuList = useMemo(() => gpus || [], [gpus]);
+  const maxGpus = gpuList.length > 0 ? gpuList.length : 1;
+  const availableGpuIds = useMemo(() => [...gpuList].sort((a, b) => a.id - b.id).map((gpu) => gpu.id), [gpuList]);
+  const requestedGpuCount = Math.min(maxGpus, Math.max(1, Number(startGpus) || 1));
+  const usesAllGpus = requestedGpuCount >= maxGpus;
+  const selectedGpuIds = useMemo(
+    () => normalizeGpuPinning(startGpuIds, availableGpuIds, requestedGpuCount, usesAllGpus),
+    [availableGpuIds, requestedGpuCount, startGpuIds, usesAllGpus],
+  );
 
   useAutoDismiss(launchError, setLaunchError);
   useAutoDismiss(restartError, setRestartError);
@@ -97,10 +117,10 @@ export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, n
     if (Number.isNaN(memUtil) || memUtil <= 0 || memUtil > 1.0) return '';
 
     const selectedGpus = (() => {
-      if (startGpuIds.length > 0) {
-        return gpus.filter((gpu) => startGpuIds.includes(gpu.id)).sort((a, b) => a.id - b.id);
+      if (selectedGpuIds.length > 0) {
+        return gpuList.filter((gpu) => selectedGpuIds.includes(gpu.id)).sort((a, b) => a.id - b.id);
       }
-      return [...gpus].sort((a, b) => a.id - b.id).slice(0, requestedGpus);
+      return [...gpuList].sort((a, b) => a.id - b.id).slice(0, requestedGpus);
     })();
     if (selectedGpus.length !== requestedGpus) return '';
 
@@ -127,24 +147,36 @@ export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, n
       return `${selectedModel.name} needs about ${formatBytes(requiredPerGpu)} per GPU (${formatBytes(modelBytesPerGpu)} model shard plus ${formatBytes(kvCacheBytesPerGpu)} KV cache at max_model_len ${effectiveMaxLen}), but GPU ${limitingGpu.id} only has ${formatBytes(availableBudget)} available within the ${memUtil.toFixed(2)} memory utilization budget.`;
     }
     return `${selectedModel.name} needs about ${formatBytes(requiredPerGpu)} per GPU after margin, but GPU ${limitingGpu.id} only has ${formatBytes(availableBudget)} available within the ${memUtil.toFixed(2)} memory utilization budget.`;
-  }, [startModelName, startGpus, startGpuIds, startMem, startMaxLen, gpus, downloadedModels]);
+  }, [startModelName, startGpus, selectedGpuIds, startMem, startMaxLen, gpuList, downloadedModels]);
+
+  const handleGpuCountChange = (event) => {
+    const rawValue = event.target.value;
+    if (rawValue === '') {
+      setStartGpus('');
+      setStartGpuIds([]);
+      return;
+    }
+
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed)) return;
+
+    const nextCount = Math.min(maxGpus, Math.max(1, Math.trunc(parsed)));
+    const nextUsesAll = nextCount >= maxGpus;
+    setStartGpus(nextCount);
+    setStartGpuIds((current) => normalizeGpuPinning(current, availableGpuIds, nextCount, nextUsesAll));
+  };
 
   const toggleGpu = (id) => {
-    let newIds;
-    if (startGpuIds.includes(id)) {
-      newIds = startGpuIds.filter((gpuId) => gpuId !== id);
-    } else {
-      newIds = [...startGpuIds, id];
-    }
-    setStartGpuIds(newIds);
-    if (newIds.length > 0) {
-      setStartGpus(newIds.length);
-    }
+    if (usesAllGpus) return;
+    if (selectedGpuIds.includes(id)) return;
+
+    setStartGpuIds([...selectedGpuIds.slice(0, requestedGpuCount - 1), id]);
   };
 
   const validateLaunch = () => {
     const gpusToSend = Number(startGpus);
     if (!startModelName) return 'Please select a model to launch';
+    if (!Number.isInteger(gpusToSend) || gpusToSend < 1) return 'Must request at least 1 GPU.';
     if (gpusToSend > maxGpus) return `Cannot request ${gpusToSend} GPUs. Only ${maxGpus} available.`;
 
     const portNum = Number(startPort);
@@ -161,7 +193,7 @@ export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, n
     }
 
     if (startParser && !/^[a-zA-Z0-9-]+$/.test(startParser)) return 'Tool parser must contain only letters, numbers, and hyphens';
-    if (gpusToSend < 1) return 'Must request at least 1 GPU.';
+    if (!usesAllGpus && selectedGpuIds.length !== gpusToSend) return `Select exactly ${gpusToSend} GPU${gpusToSend === 1 ? '' : 's'} for pinning.`;
     if (vramPreflightError) return vramPreflightError;
     return '';
   };
@@ -176,7 +208,7 @@ export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, n
       return;
     }
 
-    const gpuIdsParam = startGpuIds.length > 0 ? [...startGpuIds].sort().join(',') : 'all';
+    const gpuIdsParam = usesAllGpus ? 'all' : [...selectedGpuIds].sort((a, b) => a - b).join(',');
     const payload = {
       model: startModelName,
       port: Number(startPort),
@@ -337,7 +369,16 @@ export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, n
               </div>
               <div className="form-group">
                 <label className="form-label">GPUs</label>
-                <input type="number" className="form-control" value={startGpus} onChange={(event) => setStartGpus(event.target.value)} min="1" max={maxGpus} required />
+                <input
+                  type="number"
+                  className="form-control"
+                  value={startGpus}
+                  onChange={handleGpuCountChange}
+                  min="1"
+                  max={maxGpus}
+                  step="1"
+                  required
+                />
               </div>
             </div>
 
@@ -345,14 +386,17 @@ export const LaunchModel = ({ gpus, downloadedModels, activeModels, fetchData, n
               <div className="form-group">
                 <label className="form-label">GPU Pinning</label>
                 <div className="pill-container">
-                  <button className={`pill ${startGpuIds.length === 0 ? 'selected' : ''}`} type="button" onClick={() => setStartGpuIds([])}>
-                    All
-                  </button>
-                  {gpus.map((gpu) => (
-                    <button key={gpu.id} className={`pill ${startGpuIds.includes(gpu.id) ? 'selected' : ''}`} type="button" onClick={() => toggleGpu(gpu.id)}>
-                      GPU {gpu.id}
+                  {usesAllGpus ? (
+                    <button className="pill selected" type="button" onClick={() => setStartGpuIds([])}>
+                      All
                     </button>
-                  ))}
+                  ) : (
+                    gpuList.map((gpu) => (
+                      <button key={gpu.id} className={`pill ${selectedGpuIds.includes(gpu.id) ? 'selected' : ''}`} type="button" onClick={() => toggleGpu(gpu.id)}>
+                        GPU {gpu.id}
+                      </button>
+                    ))
+                  )}
                 </div>
               </div>
               <div className="form-group">

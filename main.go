@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -30,35 +31,77 @@ type Settings struct {
 	HFToken string `json:"hf_token"`
 }
 
-func getSettings() Settings {
+var (
+	settingsCacheMu     sync.RWMutex
+	settingsCache       Settings
+	settingsCacheLoaded bool
+)
+
+func defaultSettings() Settings {
 	home, err := os.UserHomeDir()
 	defaultCache := "/root/.cache/huggingface"
 	if err == nil {
 		defaultCache = home + "/.cache/huggingface"
 	}
-	s := Settings{HFCache: defaultCache}
+	return Settings{HFCache: defaultCache}
+}
+
+func normalizeSettings(s Settings) Settings {
+	defaults := defaultSettings()
+	if strings.TrimSpace(s.HFCache) == "" {
+		s.HFCache = defaults.HFCache
+	}
+	s.HFCache = api.NormalizeHFHome(s.HFCache)
+	return s
+}
+
+func loadSettingsFromDisk() Settings {
+	s := defaultSettings()
 	data, err := os.ReadFile(settingsFile)
 	if err == nil {
 		if err := json.Unmarshal(data, &s); err != nil {
 			log.Printf("[SETTINGS] warning: failed to parse %s: %v", settingsFile, err)
 		}
 	}
-	if strings.TrimSpace(s.HFCache) == "" {
-		s.HFCache = defaultCache
+	return normalizeSettings(s)
+}
+
+func getSettings() Settings {
+	settingsCacheMu.RLock()
+	if settingsCacheLoaded {
+		s := settingsCache
+		settingsCacheMu.RUnlock()
+		return s
 	}
-	s.HFCache = api.NormalizeHFHome(s.HFCache)
-	return s
+	settingsCacheMu.RUnlock()
+
+	settingsCacheMu.Lock()
+	defer settingsCacheMu.Unlock()
+	if !settingsCacheLoaded {
+		settingsCache = loadSettingsFromDisk()
+		settingsCacheLoaded = true
+	}
+	return settingsCache
 }
 
 func saveSettings(s Settings) error {
+	s = normalizeSettings(s)
 	data, err := json.Marshal(s)
 	if err != nil {
 		return err
 	}
+
+	settingsCacheMu.Lock()
+	defer settingsCacheMu.Unlock()
 	if err := os.WriteFile(settingsFile, data, 0600); err != nil {
 		return err
 	}
-	return os.Chmod(settingsFile, 0600)
+	if err := os.Chmod(settingsFile, 0600); err != nil {
+		return err
+	}
+	settingsCache = s
+	settingsCacheLoaded = true
+	return nil
 }
 
 func getSystemRAM() (total uint64, used uint64, free uint64) {
@@ -93,6 +136,10 @@ func getSystemRAM() (total uint64, used uint64, free uint64) {
 		case "Cached:":
 			cached = val
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("[SYSTEM] warning: failed to scan /proc/meminfo: %v", err)
+		return 0, 0, 0
 	}
 
 	total = memTotal
