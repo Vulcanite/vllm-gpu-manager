@@ -10,18 +10,19 @@ import (
 )
 
 type ActiveModel struct {
-	ContainerID string `json:"container_id"`
-	Model       string `json:"model"`
-	Port        string `json:"port"`
-	GPUs        string `json:"gpus"`
-	GPUIDs      string `json:"gpu_ids"`
-	MemUtil     string `json:"mem_util"`
-	MaxLen      string `json:"max_len"`
-	ToolParser  string `json:"tool_parser"`
-	APIUrl      string `json:"api_url"`
-	IsReady     bool   `json:"is_ready"`
-	Arch        string `json:"arch"`
-	State       string `json:"state"`
+	ContainerID  string `json:"container_id"`
+	Model        string `json:"model"`
+	Port         string `json:"port"`
+	GPUs         string `json:"gpus"`
+	GPUIDs       string `json:"gpu_ids"`
+	MemUtil      string `json:"mem_util"`
+	MaxLen       string `json:"max_len"`
+	KVCacheDType string `json:"kv_cache_dtype"`
+	ToolParser   string `json:"tool_parser"`
+	APIUrl       string `json:"api_url"`
+	IsReady      bool   `json:"is_ready"`
+	Arch         string `json:"arch"`
+	State        string `json:"state"`
 }
 
 type DownloadedModel struct {

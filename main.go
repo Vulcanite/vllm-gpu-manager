@@ -348,20 +348,21 @@ func main() {
 			return
 		}
 		var req struct {
-			Model      string `json:"model"`
-			Port       int    `json:"port"`
-			GPUs       int    `json:"gpus"`
-			GPUIDs     string `json:"gpu_ids"`
-			MemUtil    string `json:"mem_util"`
-			MaxLen     string `json:"max_len"`
-			ToolParser string `json:"tool_parser"`
+			Model        string `json:"model"`
+			Port         int    `json:"port"`
+			GPUs         int    `json:"gpus"`
+			GPUIDs       string `json:"gpu_ids"`
+			MemUtil      string `json:"mem_util"`
+			MaxLen       string `json:"max_len"`
+			KVCacheDType string `json:"kv_cache_dtype"`
+			ToolParser   string `json:"tool_parser"`
 		}
 		if !decodeJSONBody(w, r, &req) {
 			return
 		}
 
-		log.Printf("[API] /api/models/start requested! Model=%s Port=%d GPUs=%d GPUIDs=%s MemUtil=%s MaxLen=%s Parser=%s\n",
-			req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.ToolParser)
+		log.Printf("[API] /api/models/start requested! Model=%s Port=%d GPUs=%d GPUIDs=%s MemUtil=%s MaxLen=%s KVCacheDType=%s Parser=%s\n",
+			req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.KVCacheDType, req.ToolParser)
 
 		gpuList, err := api.RequireDetectedGPUs()
 		if err != nil {
@@ -386,7 +387,7 @@ func main() {
 		}
 
 		settings := getSettings()
-		if err := api.StartModel(req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.ToolParser, settings.HFCache, settings.HFToken); err != nil {
+		if err := api.StartModel(req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.KVCacheDType, req.ToolParser, settings.HFCache, settings.HFToken); err != nil {
 			writeAPIError(w, err)
 			return
 		}

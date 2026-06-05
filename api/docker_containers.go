@@ -170,17 +170,18 @@ func GetActiveModels() ([]ActiveModel, error) {
 			}
 
 			model := ActiveModel{
-				ContainerID: item.ID,
-				Model:       name, // fallback
-				Port:        "unknown",
-				GPUs:        "unknown",
-				GPUIDs:      "all",
-				MemUtil:     "unknown",
-				MaxLen:      "default",
-				ToolParser:  "disabled",
-				APIUrl:      "unknown",
-				IsReady:     false,
-				State:       string(item.State),
+				ContainerID:  item.ID,
+				Model:        name, // fallback
+				Port:         "unknown",
+				GPUs:         "unknown",
+				GPUIDs:       "all",
+				MemUtil:      "unknown",
+				MaxLen:       "default",
+				KVCacheDType: "auto",
+				ToolParser:   "disabled",
+				APIUrl:       "unknown",
+				IsReady:      false,
+				State:        string(item.State),
 			}
 
 			if labels[containerModelLabel] != "" {
@@ -202,6 +203,9 @@ func GetActiveModels() ([]ActiveModel, error) {
 				}
 				if args[i] == "--max-model-len" && i+1 < len(args) {
 					model.MaxLen = args[i+1]
+				}
+				if args[i] == "--kv-cache-dtype" && i+1 < len(args) {
+					model.KVCacheDType = args[i+1]
 				}
 				if args[i] == "--tool-call-parser" && i+1 < len(args) {
 					model.ToolParser = args[i+1]
@@ -302,7 +306,7 @@ func GetVLLMContainerNames() ([]string, error) {
 	return names, nil
 }
 
-func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, toolParser string, hfCache string, hfToken string) error {
+func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, kvCacheDType string, toolParser string, hfCache string, hfToken string) error {
 	hfCache = NormalizeHFHome(hfCache)
 	if hfCache == "" {
 		return validationError("hugging face cache directory is required")
@@ -335,6 +339,11 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	memUtil = strconv.FormatFloat(utilization, 'f', -1, 64)
 
 	if _, err := parseMaxModelLen(maxLen); err != nil {
+		return err
+	}
+
+	kvCacheDType, err = normalizeKVCacheDType(kvCacheDType)
+	if err != nil {
 		return err
 	}
 
@@ -385,7 +394,7 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 		return err
 	}
 
-	if err := CheckModelFitsInVRAM(model, hfCache, selectedGPUs, gpus, memUtil, maxLen); err != nil {
+	if err := CheckModelFitsInVRAM(model, hfCache, selectedGPUs, gpus, memUtil, maxLen, kvCacheDType); err != nil {
 		return err
 	}
 
@@ -424,6 +433,9 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 
 	if maxLen != "" {
 		cmd = append(cmd, "--max-model-len", maxLen)
+	}
+	if kvCacheDType != "auto" {
+		cmd = append(cmd, "--kv-cache-dtype", kvCacheDType)
 	}
 	if toolParser != "" {
 		cmd = append(cmd, "--tool-call-parser", toolParser, "--enable-auto-tool-choice")

@@ -44,19 +44,51 @@ func (estimate modelKVCacheEstimate) fullBytesPerToken() uint64 {
 	if !estimate.isComplete() {
 		return 0
 	}
-	return uint64(2 * estimate.Layers * estimate.KeyValueHeads * estimate.HeadDim * estimate.DTypeBytes)
+	value, ok := checkedMulUint64(
+		2,
+		uint64(estimate.Layers),
+		uint64(estimate.KeyValueHeads),
+		uint64(estimate.HeadDim),
+		uint64(estimate.DTypeBytes),
+	)
+	if !ok {
+		return 0
+	}
+	return value
 }
 
-func (estimate modelKVCacheEstimate) bytesPerTokenPerGPU(tensorParallelSize int) uint64 {
+func (estimate modelKVCacheEstimate) bytesPerTokenPerGPU(tensorParallelSize int) (uint64, error) {
 	if !estimate.isComplete() || tensorParallelSize <= 0 {
-		return 0
+		return 0, nil
 	}
 
 	kvHeadsPerGPU := ceilDiv(estimate.KeyValueHeads, tensorParallelSize)
 	if kvHeadsPerGPU < 1 {
 		kvHeadsPerGPU = 1
 	}
-	return uint64(2 * estimate.Layers * kvHeadsPerGPU * estimate.HeadDim * estimate.DTypeBytes)
+	value, ok := checkedMulUint64(
+		2,
+		uint64(estimate.Layers),
+		uint64(kvHeadsPerGPU),
+		uint64(estimate.HeadDim),
+		uint64(estimate.DTypeBytes),
+	)
+	if !ok {
+		return 0, validationError("KV cache size estimate overflows uint64 before applying max_model_len; increase tensor_parallel_size or use a smaller model")
+	}
+	return value, nil
+}
+
+func checkedMulUint64(values ...uint64) (uint64, bool) {
+	result := uint64(1)
+	maxUint64 := ^uint64(0)
+	for _, value := range values {
+		if value != 0 && result > maxUint64/value {
+			return 0, false
+		}
+		result *= value
+	}
+	return result, true
 }
 
 func findModelConfigPath(hfCache string, model string) (string, error) {
@@ -330,6 +362,27 @@ func parseMaxModelLen(maxLen string) (int, error) {
 	return maxLenNum, nil
 }
 
+func normalizeKVCacheDType(kvCacheDType string) (string, error) {
+	kvCacheDType = strings.ToLower(strings.TrimSpace(kvCacheDType))
+	if kvCacheDType == "" {
+		return "auto", nil
+	}
+
+	switch kvCacheDType {
+	case "auto", "fp8", "fp8_e5m2", "fp8_e4m3":
+		return kvCacheDType, nil
+	default:
+		return "", validationError("kv_cache_dtype must be one of auto, fp8, fp8_e5m2, fp8_e4m3")
+	}
+}
+
+func kvCacheDTypeElementBytes(kvCacheDType string, modelDTypeBytes int) int {
+	if kvCacheDType == "auto" {
+		return modelDTypeBytes
+	}
+	return 1
+}
+
 // minKVCacheBytesPerGPU is the floor we require after weights are loaded.
 // vLLM crashes at startup with "No available memory for cache blocks" below ~1 GiB.
 const minKVCacheBytesPerGPU = 1 * 1024 * 1024 * 1024 // 1 GiB
@@ -425,7 +478,7 @@ func checkGPUOverlap(requestedIDs []int, totalGPUs int, requestedMemUtil float64
 	return nil
 }
 
-func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, gpus int, memUtil string, maxLen string) error {
+func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, gpus int, memUtil string, maxLen string, kvCacheDType string) error {
 	if len(selectedGPUs) == 0 {
 		return nil
 	}
@@ -443,6 +496,11 @@ func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, 
 		return err
 	}
 
+	kvCacheDType, err = normalizeKVCacheDType(kvCacheDType)
+	if err != nil {
+		return err
+	}
+
 	requestedMaxLen, err := parseMaxModelLen(maxLen)
 	if err != nil {
 		return err
@@ -452,6 +510,9 @@ func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, 
 
 	estimate, kvErr := GetModelKVCacheEstimate(hfCache, model)
 	kvEstimateOK := kvErr == nil && estimate.isComplete()
+	if kvEstimateOK {
+		estimate.DTypeBytes = kvCacheDTypeElementBytes(kvCacheDType, estimate.DTypeBytes)
+	}
 
 	// Fix #5: reject max-model-len that exceeds the model's rope/positional limit
 	if kvEstimateOK && requestedMaxLen > 0 && estimate.DefaultMaxModelLen > 0 && requestedMaxLen > estimate.DefaultMaxModelLen {
@@ -481,8 +542,15 @@ func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, 
 			effectiveMaxLen = estimate.DefaultMaxModelLen
 		}
 		if effectiveMaxLen > 0 {
-			kvBytesPerTokenPerGPU = estimate.bytesPerTokenPerGPU(gpus)
-			kvCacheBytesPerGPU = kvBytesPerTokenPerGPU * uint64(effectiveMaxLen)
+			kvBytesPerTokenPerGPU, err = estimate.bytesPerTokenPerGPU(gpus)
+			if err != nil {
+				return err
+			}
+			var ok bool
+			kvCacheBytesPerGPU, ok = checkedMulUint64(kvBytesPerTokenPerGPU, uint64(effectiveMaxLen))
+			if !ok {
+				return validationError("KV cache size estimate overflows uint64 for max_model_len=%d; reduce max_model_len, increase tensor_parallel_size, or use a smaller model", effectiveMaxLen)
+			}
 		}
 	} else if kvErr != nil {
 		log.Printf("[VRAM] KV cache estimate unavailable for %s: %v", model, kvErr)
@@ -505,6 +573,20 @@ func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, 
 
 		// Total (weights + KV) must fit within the utilization budget
 		requiredPerGPU := modelBytesPerGPU + kvCacheBytesPerGPU
+		if requiredPerGPU < modelBytesPerGPU {
+			return validationError("combined model weights plus KV cache estimate overflows uint64; reduce max_model_len, increase tensor_parallel_size, or use a smaller model")
+		}
+		if requiredPerGPU > gpu.MemoryFree {
+			return validationError(
+				"model weights ~%s plus KV cache ~%s for max_model_len=%d needs ~%s per GPU, but GPU %d only has %s currently free — stop other workloads first",
+				formatBytes(modelBytesPerGPU),
+				formatBytes(kvCacheBytesPerGPU),
+				effectiveMaxLen,
+				formatBytes(requiredPerGPU),
+				gpu.ID,
+				formatBytes(gpu.MemoryFree),
+			)
+		}
 		if requiredPerGPU > utilizationBudget {
 			if kvCacheBytesPerGPU > 0 {
 				return validationError(
@@ -543,12 +625,13 @@ func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, 
 	}
 
 	if kvCacheBytesPerGPU > 0 {
-		log.Printf("[VRAM] %s: ~%s/GPU total (%s weights + %s KV cache at max_model_len=%d, %s/token/GPU)",
+		log.Printf("[VRAM] %s: ~%s/GPU total (%s weights + %s KV cache at max_model_len=%d, kv_cache_dtype=%s, %s/token/GPU)",
 			model,
 			formatBytes(modelBytesPerGPU+kvCacheBytesPerGPU),
 			formatBytes(modelBytesPerGPU),
 			formatBytes(kvCacheBytesPerGPU),
 			effectiveMaxLen,
+			kvCacheDType,
 			formatBytes(kvBytesPerTokenPerGPU),
 		)
 	}

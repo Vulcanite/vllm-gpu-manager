@@ -81,6 +81,7 @@ export const Dashboard = ({
                 </div>
                 <div className="model-meta mt-1">
                   <span>CTX {model.max_len}</span>
+                  <span>KV {model.kv_cache_dtype || 'auto'}</span>
                   <span>PARSER {model.tool_parser || 'none'}</span>
                 </div>
                 <div className="model-meta model-url mt-2">{model.api_url}</div>

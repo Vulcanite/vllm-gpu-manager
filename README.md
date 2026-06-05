@@ -186,6 +186,7 @@ docker run -d \
 Optional launch parameters currently exposed by the UI/API:
 
 - `--max-model-len`
+- `--kv-cache-dtype`
 - `--tool-call-parser`
 - `--enable-auto-tool-choice`
 

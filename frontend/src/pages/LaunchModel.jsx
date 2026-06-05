@@ -11,6 +11,7 @@ import { formatBytes } from '../lib/format.js';
 const MODEL_VRAM_SAFETY_MARGIN = 1.08;
 const DEFAULT_GPU_MEMORY_UTILIZATION = 0.9;
 const ACTIVE_DOWNLOAD_STORAGE_KEY = 'vllm-manager-active-download';
+const KV_CACHE_DTYPE_OPTIONS = ['auto', 'fp8', 'fp8_e5m2', 'fp8_e4m3'];
 
 const normalizeGpuPinning = (selectedIds, availableIds, requestedCount, useAll) => {
   if (useAll) return [];
@@ -24,6 +25,11 @@ const normalizeGpuPinning = (selectedIds, availableIds, requestedCount, useAll) 
   return next;
 };
 
+const getKVCacheDTypeBytes = (kvCacheDType, modelDTypeBytes) => {
+  if (kvCacheDType === 'auto') return modelDTypeBytes;
+  return 1;
+};
+
 export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModels, fetchData, notify }) => {
   const [startModelName, setStartModelName] = useState('');
   const [startPort, setStartPort] = useState(8080);
@@ -31,6 +37,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const [startGpuIds, setStartGpuIds] = useState([]);
   const [startMem, setStartMem] = useState(0.9);
   const [startMaxLen, setStartMaxLen] = useState('');
+  const [startKvCacheDType, setStartKvCacheDType] = useState('auto');
   const [startParser, setStartParser] = useState('');
   const [launchError, setLaunchError] = useState('');
   const [launching, setLaunching] = useState(false);
@@ -91,13 +98,14 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     }
   }, [activeDownload]);
 
-  const getKVCacheBytesPerGpu = (selectedModel, requestedGpus, maxModelLen) => {
+  const getKVCacheBytesPerGpu = (selectedModel, requestedGpus, maxModelLen, kvCacheDType) => {
     if (!selectedModel || !requestedGpus || !maxModelLen) return 0;
 
     const layers = selectedModel.kv_cache_layers || 0;
     const keyValueHeads = selectedModel.kv_cache_key_value_heads || 0;
     const headDim = selectedModel.kv_cache_head_dim || 0;
-    const dtypeBytes = selectedModel.kv_cache_dtype_bytes || 0;
+    const modelDTypeBytes = selectedModel.kv_cache_dtype_bytes || 0;
+    const dtypeBytes = getKVCacheDTypeBytes(kvCacheDType, modelDTypeBytes);
 
     if (layers > 0 && keyValueHeads > 0 && headDim > 0 && dtypeBytes > 0) {
       const keyValueHeadsPerGpu = Math.max(1, Math.ceil(keyValueHeads / requestedGpus));
@@ -105,8 +113,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       return bytesPerTokenPerGpu * maxModelLen;
     }
 
-    const bytesPerToken = selectedModel.kv_cache_bytes_per_token || 0;
-    return bytesPerToken > 0 ? (bytesPerToken / requestedGpus) * maxModelLen : 0;
+    return 0;
   };
 
   const vramPreflightError = useMemo(() => {
@@ -136,7 +143,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       }
       return selectedModel?.default_max_model_len || 0;
     })();
-    const kvCacheBytesPerGpu = getKVCacheBytesPerGpu(selectedModel, requestedGpus, effectiveMaxLen);
+    const kvCacheBytesPerGpu = getKVCacheBytesPerGpu(selectedModel, requestedGpus, effectiveMaxLen, startKvCacheDType);
     const requiredPerGpu = modelBytesPerGpu + kvCacheBytesPerGpu;
     const limitingGpu = selectedGpus.find((gpu) => {
       const utilizationBudget = gpu.memory_total * memUtil;
@@ -151,7 +158,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       return `${selectedModel.name} needs about ${formatBytes(requiredPerGpu)} per GPU (${formatBytes(modelBytesPerGpu)} model shard plus ${formatBytes(kvCacheBytesPerGpu)} KV cache at max_model_len ${effectiveMaxLen}), but GPU ${limitingGpu.id} only has ${formatBytes(availableBudget)} available within the ${memUtil.toFixed(2)} memory utilization budget.`;
     }
     return `${selectedModel.name} needs about ${formatBytes(requiredPerGpu)} per GPU after margin, but GPU ${limitingGpu.id} only has ${formatBytes(availableBudget)} available within the ${memUtil.toFixed(2)} memory utilization budget.`;
-  }, [noGpuDetected, startModelName, startGpus, selectedGpuIds, startMem, startMaxLen, gpuList, downloadedModels]);
+  }, [noGpuDetected, startModelName, startGpus, selectedGpuIds, startMem, startMaxLen, startKvCacheDType, gpuList, downloadedModels]);
 
   const handleGpuCountChange = (event) => {
     if (noGpuDetected) {
@@ -203,6 +210,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     }
 
     if (startParser && !/^[a-zA-Z0-9-]+$/.test(startParser)) return 'Tool parser must contain only letters, numbers, and hyphens';
+    if (!KV_CACHE_DTYPE_OPTIONS.includes(startKvCacheDType)) return 'KV cache dtype must be auto, fp8, fp8_e5m2, or fp8_e4m3';
     if (!usesAllGpus && selectedGpuIds.length !== gpusToSend) return `Select exactly ${gpusToSend} GPU${gpusToSend === 1 ? '' : 's'} for pinning.`;
     if (vramPreflightError) return vramPreflightError;
     return '';
@@ -226,6 +234,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       gpu_ids: gpuIdsParam,
       mem_util: startMem !== null && startMem !== undefined ? startMem.toString() : '',
       max_len: startMaxLen ? startMaxLen.toString() : '',
+      kv_cache_dtype: startKvCacheDType,
       tool_parser: startParser || '',
     };
 
@@ -425,14 +434,24 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
                 <input type="number" className="form-control" value={startMaxLen} onChange={(event) => setStartMaxLen(event.target.value)} placeholder="Model default" />
               </div>
               <div className="form-group">
-                <label className="form-label">Tool Call Parser</label>
-                <select className="form-control" value={startParser} onChange={(event) => setStartParser(event.target.value)}>
-                  <option value="">Disabled</option>
-                  <option value="hermes">hermes</option>
-                  <option value="llama3_json">llama3_json</option>
-                  <option value="mistral">mistral</option>
+                <label className="form-label">KV Cache DType</label>
+                <select className="form-control" value={startKvCacheDType} onChange={(event) => setStartKvCacheDType(event.target.value)}>
+                  <option value="auto">auto</option>
+                  <option value="fp8">fp8</option>
+                  <option value="fp8_e5m2">fp8_e5m2</option>
+                  <option value="fp8_e4m3">fp8_e4m3</option>
                 </select>
               </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Tool Call Parser</label>
+              <select className="form-control" value={startParser} onChange={(event) => setStartParser(event.target.value)}>
+                <option value="">Disabled</option>
+                <option value="hermes">hermes</option>
+                <option value="llama3_json">llama3_json</option>
+                <option value="mistral">mistral</option>
+              </select>
             </div>
 
             <button type="submit" className="btn btn-primary mt-2 full-width" disabled={launching || noGpuDetected || Boolean(vramPreflightError)}>
@@ -457,7 +476,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
                   <span className="badge badge-active">Port {model.port}</span>
                 </div>
                 <div className="text-secondary text-sm">
-                  GPUs: {model.gpus} | Mem: {model.mem_util} | MaxLen: {model.max_len} | Parser: {model.tool_parser}
+                  GPUs: {model.gpus} | Mem: {model.mem_util} | MaxLen: {model.max_len} | KV: {model.kv_cache_dtype || 'auto'} | Parser: {model.tool_parser}
                 </div>
                 <div className="model-actions-row">
                   {model.state !== 'running' && (
