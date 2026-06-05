@@ -123,25 +123,29 @@ func waitForContainerExit(ctx context.Context, cli *dockerclient.Client, contain
 }
 
 func dockerDeviceRequest(gpuFlag string) container.DeviceRequest {
-	request := container.DeviceRequest{
-		Driver:       "nvidia",
-		Capabilities: [][]string{{"gpu"}},
-	}
-	if strings.TrimSpace(gpuFlag) == "all" {
-		request.Count = -1
-		return request
-	}
+	capabilities := [][]string{{"gpu"}}
 	if devices, ok := strings.CutPrefix(gpuFlag, "device="); ok {
+		var deviceIDs []string
 		for _, id := range strings.Split(devices, ",") {
 			id = strings.TrimSpace(id)
 			if id != "" {
-				request.DeviceIDs = append(request.DeviceIDs, id)
+				deviceIDs = append(deviceIDs, id)
 			}
 		}
-		return request
+		if len(deviceIDs) > 0 {
+			return container.DeviceRequest{
+				Driver:       "nvidia",
+				DeviceIDs:    deviceIDs,
+				Capabilities: capabilities,
+			}
+		}
 	}
-	request.Count = -1
-	return request
+
+	return container.DeviceRequest{
+		Driver:       "nvidia",
+		Count:        -1,
+		Capabilities: capabilities,
+	}
 }
 
 func logDockerAPI(operation string, args ...string) {
