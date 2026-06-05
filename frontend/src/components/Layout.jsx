@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Activity, Moon, Play, Settings, Sun, X } from 'lucide-react';
+import { Activity, LogOut, Moon, Play, Settings, Sun, X } from 'lucide-react';
 
 const NavItem = ({ to, icon, label }) => {
   const location = useLocation();
@@ -14,7 +14,7 @@ const NavItem = ({ to, icon, label }) => {
   );
 };
 
-export const Layout = ({ children, notice, systemError, onDismissNotice, onRetry }) => {
+export const Layout = ({ authRequired = false, children, notice, systemError, onDismissNotice, onLogout, onRetry }) => {
   const [theme, setTheme] = useState(localStorage.getItem('vllm-theme') || 'dark');
 
   useEffect(() => {
@@ -40,6 +40,12 @@ export const Layout = ({ children, notice, systemError, onDismissNotice, onRetry
         </div>
 
         <div className="sidebar-footer">
+          {authRequired && (
+            <button onClick={onLogout} className="btn btn-outline theme-toggle" type="button">
+              <LogOut size={18} />
+              <span>Sign Out</span>
+            </button>
+          )}
           <button onClick={toggleTheme} className="btn btn-outline theme-toggle">
             {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
             <span>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>

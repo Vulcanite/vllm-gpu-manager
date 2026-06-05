@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/moby/moby/api/types/container"
 	dockerclient "github.com/moby/moby/client"
@@ -170,18 +171,19 @@ func GetActiveModels() ([]ActiveModel, error) {
 			}
 
 			model := ActiveModel{
-				ContainerID:  item.ID,
-				Model:        name, // fallback
-				Port:         "unknown",
-				GPUs:         "unknown",
-				GPUIDs:       "all",
-				MemUtil:      "unknown",
-				MaxLen:       "default",
-				KVCacheDType: "auto",
-				ToolParser:   "disabled",
-				APIUrl:       "unknown",
-				IsReady:      false,
-				State:        string(item.State),
+				ContainerID:   item.ID,
+				ContainerName: name,
+				Model:         name, // fallback
+				Port:          "unknown",
+				GPUs:          "unknown",
+				GPUIDs:        "all",
+				MemUtil:       "unknown",
+				MaxLen:        "default",
+				KVCacheDType:  "auto",
+				ToolParser:    "disabled",
+				APIUrl:        "unknown",
+				IsReady:       false,
+				State:         string(item.State),
 			}
 
 			if labels[containerModelLabel] != "" {
@@ -306,10 +308,14 @@ func GetVLLMContainerNames() ([]string, error) {
 	return names, nil
 }
 
-func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, kvCacheDType string, toolParser string, hfCache string, hfToken string) error {
+func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, kvCacheDType string, toolParser string, hfCache string, hfToken string, vllmAPIKey string) error {
 	hfCache = NormalizeHFHome(hfCache)
 	if hfCache == "" {
 		return validationError("hugging face cache directory is required")
+	}
+	vllmAPIKey = strings.TrimSpace(vllmAPIKey)
+	if strings.IndexFunc(vllmAPIKey, unicode.IsSpace) >= 0 {
+		return validationError("vLLM API key cannot contain whitespace")
 	}
 	model = strings.TrimSpace(model)
 	if model == "" {
@@ -439,6 +445,9 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	}
 	if toolParser != "" {
 		cmd = append(cmd, "--tool-call-parser", toolParser, "--enable-auto-tool-choice")
+	}
+	if vllmAPIKey != "" {
+		cmd = append(cmd, "--api-key", vllmAPIKey)
 	}
 
 	return withDockerClient(0, func(ctx context.Context, cli *dockerclient.Client) error {

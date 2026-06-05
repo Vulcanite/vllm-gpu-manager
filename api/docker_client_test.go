@@ -37,3 +37,48 @@ func TestDockerDeviceRequestEmptyDeviceListFallsBackToAll(t *testing.T) {
 		t.Fatalf("DeviceIDs=%v, want empty", request.DeviceIDs)
 	}
 }
+
+func TestRedactDockerArgsRedactsHFToken(t *testing.T) {
+	got := redactDockerArgs([]string{"-e", "HF_TOKEN=secret", "image=vllm"})
+	want := "-e HF_TOKEN=<redacted> image=vllm"
+
+	if got != want {
+		t.Fatalf("redactDockerArgs()=%q, want %q", got, want)
+	}
+}
+
+func TestRedactDockerArgsRedactsVLLMAPIKeyInCommand(t *testing.T) {
+	got := redactDockerArgs([]string{"cmd=--model Qwen/Qwen2 --api-key token-secret --port 8000"})
+	want := "cmd=--model Qwen/Qwen2 --api-key <redacted> --port 8000"
+
+	if got != want {
+		t.Fatalf("redactDockerArgs()=%q, want %q", got, want)
+	}
+}
+
+func TestRedactDockerArgsRedactsVLLMAPIKeyEqualsForm(t *testing.T) {
+	got := redactDockerArgs([]string{"cmd=--model Qwen/Qwen2 --api-key=token-secret --port 8000"})
+	want := "cmd=--model Qwen/Qwen2 --api-key=<redacted> --port 8000"
+
+	if got != want {
+		t.Fatalf("redactDockerArgs()=%q, want %q", got, want)
+	}
+}
+
+func TestRedactDockerArgsRedactsVLLMAPIKeyWhenFirstCommandArg(t *testing.T) {
+	got := redactDockerArgs([]string{"cmd=--api-key token-secret --model Qwen/Qwen2"})
+	want := "cmd=--api-key <redacted> --model Qwen/Qwen2"
+
+	if got != want {
+		t.Fatalf("redactDockerArgs()=%q, want %q", got, want)
+	}
+}
+
+func TestRedactDockerArgsRedactsVLLMAPIKeySeparateArgs(t *testing.T) {
+	got := redactDockerArgs([]string{"container create", "--api-key", "token-secret"})
+	want := "container create --api-key <redacted>"
+
+	if got != want {
+		t.Fatalf("redactDockerArgs()=%q, want %q", got, want)
+	}
+}

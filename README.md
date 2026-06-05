@@ -1,12 +1,13 @@
 # vLLM GPU Manager
 
-A lightweight, single-binary web console for running [vLLM](https://github.com/vllm-project/vllm) OpenAI-compatible servers as Docker containers on NVIDIA GPU Linux hosts.
+A lightweight, single-binary CLI and web console for running [vLLM](https://github.com/vllm-project/vllm) OpenAI-compatible servers as Docker containers on NVIDIA GPU Linux hosts.
 
 This project is intentionally small. It is not a cluster scheduler, model platform, or desktop AI studio. It is an internal operations tool for a GPU server where you want a clear UI over Docker, `nvidia-smi`, Hugging Face cache management, and vLLM launch parameters.
 
 ## Features
 
 - **NVIDIA GPU monitoring:** Reads GPU memory and utilization from `nvidia-smi`.
+- **CLI operations:** Manage GPUs, models, cache, and settings directly over SSH without starting the dashboard.
 - **vLLM container lifecycle:** Start, stop, and restart managed vLLM Docker containers.
 - **GPU placement controls:** Select GPU count, pin exact GPU IDs, and tune `--gpu-memory-utilization`.
 - **VRAM launch checks:** Blocks launches when model weights plus estimated KV cache will not fit inside the requested GPU memory utilization budget.
@@ -14,6 +15,8 @@ This project is intentionally small. It is not a cluster scheduler, model platfo
 - **Hugging Face cache management:** Configure the host Hugging Face home directory, list cached models, download models, and delete cached model directories.
 - **Download progress:** Starts model downloads in background Docker containers and estimates progress from cached bytes on disk.
 - **HF token handling:** Stores an optional Hugging Face token in `settings.json` with file mode `0600`.
+- **vLLM API key handling:** Stores one optional global vLLM API key and applies it to newly created serving containers.
+- **Optional dashboard authentication:** Protect the web UI and JSON APIs with a simple password-backed session cookie.
 - **Single binary deployment:** The React frontend is embedded into the Go binary using `go:embed`.
 
 ## Scope
@@ -28,11 +31,13 @@ The manager currently targets:
 - Hugging Face Hub model cache layout
 - internal/private network usage
 
-It does not provide authentication, HTTPS termination, multi-user authorization, Kubernetes orchestration, cluster scheduling, or a full OpenAI proxy gateway.
+It does not provide HTTPS termination, multi-user authorization, Kubernetes orchestration, cluster scheduling, or a full OpenAI proxy gateway.
 
 ## How It Works
 
-The backend is a Go `net/http` server. It serves the embedded React app and exposes internal JSON APIs under `/api`.
+The binary runs as either a local CLI or an optional Go `net/http` dashboard server. CLI commands call the same local Docker/GPU/cache code directly, so the dashboard does not need to be running for command-line use.
+
+When dashboard mode is enabled, the backend serves the embedded React app and exposes internal JSON APIs under `/api`.
 
 Runtime operations are performed through host integrations:
 
@@ -94,10 +99,40 @@ vllm-manager-<tag>-linux-arm64
 vllm-manager-<tag>-linux-arm64.sha256
 ```
 
-## Run
+## CLI
 
 ```bash
-./vllm-manager -port 9090
+./vllm-manager
+```
+
+Running with no arguments prints CLI help. Add `--json` to commands for machine-readable output.
+
+Examples:
+
+```bash
+./vllm-manager gpu list
+./vllm-manager model active
+./vllm-manager model cached
+./vllm-manager model download Qwen/Qwen2.5-Coder-7B-Instruct
+./vllm-manager model progress Qwen/Qwen2.5-Coder-7B-Instruct
+./vllm-manager model start Qwen/Qwen2.5-Coder-7B-Instruct --port 8000 --gpus 1 --gpu-ids 0 --mem-util 0.85 --kv-cache-dtype auto
+./vllm-manager model stop --port 8000
+./vllm-manager cache delete Qwen/Qwen2.5-Coder-7B-Instruct --yes
+./vllm-manager settings get --json
+```
+
+Destructive CLI commands prompt by default. Use `--yes` for non-interactive automation.
+
+## Dashboard
+
+```bash
+./vllm-manager --dashboard --port 9090
+```
+
+Set `VLLM_MANAGER_PASSWORD` to require browser login before the dashboard can call `/api` endpoints:
+
+```bash
+VLLM_MANAGER_PASSWORD='change-me' ./vllm-manager --dashboard --port 9090
 ```
 
 Then open:
@@ -125,11 +160,14 @@ Settings are stored in `settings.json` beside the binary.
 ```json
 {
   "hf_cache": "/mnt/data/models",
-  "hf_token": "hf_..."
+  "hf_token": "hf_...",
+  "vllm_api_key": "token-..."
 }
 ```
 
 `hf_cache` is the Hugging Face home directory, not the `hub` directory itself. If a user enters a path ending in `/hub`, the backend normalizes it to the parent directory.
+
+`vllm_api_key` is optional. When set, the manager passes it to newly created serving containers as `--api-key <value>`, so OpenAI-compatible clients must send `Authorization: Bearer <value>`. Existing containers keep the command they were created with; recreate a container to apply a changed key.
 
 Example:
 
@@ -189,6 +227,7 @@ Optional launch parameters currently exposed by the UI/API:
 - `--kv-cache-dtype`
 - `--tool-call-parser`
 - `--enable-auto-tool-choice`
+- `--api-key` when a global vLLM API key is configured
 
 Before launching, the backend validates:
 
@@ -216,8 +255,11 @@ All APIs are under `/api`.
 
 | Method | Path                                   | Description                                                               |
 |--------|----------------------------------------|---------------------------------------------------------------------------|
-| `GET`  | `/settings`                            | Read HF cache path, token status, cache disk usage, and system RAM usage. |
-| `POST` | `/settings`                            | Save HF cache path and optionally update or clear the HF token.           |
+| `GET`  | `/auth/status`                         | Return whether dashboard authentication is required and satisfied.        |
+| `POST` | `/auth/login`                          | Create a browser session when `VLLM_MANAGER_PASSWORD` is configured.      |
+| `POST` | `/auth/logout`                         | Clear the browser session cookie.                                         |
+| `GET`  | `/settings`                            | Read HF cache path, secret status, cache disk usage, and system RAM usage. |
+| `POST` | `/settings`                            | Save HF cache path and optionally update or clear stored secrets.          |
 | `GET`  | `/gpus`                                | Return parsed NVIDIA GPU status from `nvidia-smi`.                        |
 | `GET`  | `/models/active`                       | List managed vLLM serving containers.                                     |
 | `GET`  | `/models/downloaded`                   | List cached Hugging Face models and local size/KV metadata.               |
@@ -234,8 +276,8 @@ The frontend currently hides container removal from the active model UI, but the
 
 ## Security
 
-This is an internal utility. It does not include authentication, authorization, or HTTPS.
+This is an internal utility. It includes optional single-password dashboard authentication, but it does not provide multi-user authorization or HTTPS.
 
-Anyone who can access the web interface can inspect GPU state, start and stop model containers, trigger model downloads, delete cached models, and use the configured Hugging Face token indirectly.
+Anyone who can access the web interface can inspect GPU state, start and stop model containers, trigger model downloads, delete cached models, and use configured Hugging Face or vLLM API keys indirectly.
 
-Do not expose the app directly to the public internet. Put it behind a private network, VPN, SSH tunnel, or a reverse proxy that provides authentication and TLS.
+Do not expose the app directly to the public internet. Put it behind a private network, VPN, SSH tunnel, or a reverse proxy that provides TLS and any stronger identity controls you need.

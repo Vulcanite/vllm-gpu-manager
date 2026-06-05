@@ -2,9 +2,17 @@ import axios from 'axios';
 
 const API_BASE = '/api';
 
+axios.defaults.withCredentials = true;
+
 export const getErrorDetail = (error, fallback = 'Request failed') => {
   return error.response?.data?.detail || error.message || fallback;
 };
+
+export const getAuthStatus = () => axios.get(`${API_BASE}/auth/status`);
+
+export const login = (password) => axios.post(`${API_BASE}/auth/login`, { password });
+
+export const logout = () => axios.post(`${API_BASE}/auth/logout`);
 
 export const fetchOverview = async () => {
   const [gpuRes, activeRes, downloadedRes] = await Promise.allSettled([

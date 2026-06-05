@@ -5,9 +5,10 @@ import { Loader2 } from 'lucide-react';
 import { Layout } from './components/Layout.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
 import { LaunchModel } from './pages/LaunchModel.jsx';
+import { LoginPage } from './pages/LoginPage.jsx';
 import { SettingsPage } from './pages/SettingsPage.jsx';
 import { useAutoDismiss } from './hooks/useAutoDismiss.js';
-import { fetchOverview, getErrorDetail, stopModel } from './lib/api.js';
+import { fetchOverview, getAuthStatus, getErrorDetail, login, logout, stopModel } from './lib/api.js';
 
 const App = () => {
   const [gpus, setGpus] = useState([]);
@@ -20,12 +21,46 @@ const App = () => {
   const [stopConfirmPort, setStopConfirmPort] = useState(null);
   const [stopError, setStopError] = useState('');
   const [stopping, setStopping] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authRequired, setAuthRequired] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
 
   const notify = useCallback((message, type = 'success') => {
     setNotice({ message, type });
   }, []);
 
   useAutoDismiss(stopError, setStopError);
+
+  const clearDashboardData = useCallback(() => {
+    setGpus([]);
+    setActiveModels([]);
+    setDownloadedModels([]);
+    setGpuError('');
+    setFetchError('');
+  }, []);
+
+  const checkAuth = useCallback(async () => {
+    try {
+      const response = await getAuthStatus();
+      const required = Boolean(response.data?.required);
+      const isAuthenticated = Boolean(response.data?.authenticated);
+      setAuthRequired(required);
+      setAuthenticated(!required || isAuthenticated);
+      setAuthError('');
+      if (required && !isAuthenticated) {
+        setLoading(false);
+      }
+    } catch (error) {
+      setAuthRequired(true);
+      setAuthenticated(false);
+      setAuthError(getErrorDetail(error, 'Unable to check authentication'));
+      setLoading(false);
+    } finally {
+      setAuthChecked(true);
+    }
+  }, []);
 
   const fetchData = useCallback(async () => {
     try {
@@ -36,14 +71,35 @@ const App = () => {
       setGpuError(overview.gpuError || '');
       setFetchError(overview.gpuError || '');
     } catch (error) {
+      if (error.response?.status === 401) {
+        clearDashboardData();
+        setAuthRequired(true);
+        setAuthenticated(false);
+        setAuthError('Session expired. Sign in again.');
+        return;
+      }
       setGpuError('');
       setFetchError(getErrorDetail(error, 'Unable to refresh vLLM manager data'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [clearDashboardData]);
 
   useEffect(() => {
+    const initialAuthCheck = setTimeout(() => {
+      checkAuth();
+    }, 0);
+
+    return () => {
+      clearTimeout(initialAuthCheck);
+    };
+  }, [checkAuth]);
+
+  useEffect(() => {
+    if (!authChecked || (authRequired && !authenticated)) {
+      return undefined;
+    }
+
     const initialLoad = setTimeout(() => {
       fetchData();
     }, 0);
@@ -55,7 +111,7 @@ const App = () => {
       clearTimeout(initialLoad);
       clearInterval(interval);
     };
-  }, [fetchData]);
+  }, [authChecked, authRequired, authenticated, fetchData]);
 
   useEffect(() => {
     if (!notice) return undefined;
@@ -94,6 +150,47 @@ const App = () => {
     }
   };
 
+  const handleLogin = async (password) => {
+    setAuthLoading(true);
+    setAuthError('');
+    try {
+      const response = await login(password);
+      const required = Boolean(response.data?.required);
+      setAuthRequired(required);
+      setAuthenticated(true);
+      setLoading(true);
+      await fetchData();
+    } catch (error) {
+      setAuthError(getErrorDetail(error, 'Sign in failed'));
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } finally {
+      clearDashboardData();
+      setAuthenticated(false);
+      setAuthRequired(true);
+      setLoading(false);
+      setNotice(null);
+    }
+  };
+
+  if (!authChecked) {
+    return (
+      <div className="loading-screen">
+        <Loader2 className="loader" size={48} />
+      </div>
+    );
+  }
+
+  if (authRequired && !authenticated) {
+    return <LoginPage error={authError} loading={authLoading} onLogin={handleLogin} />;
+  }
+
   if (loading && gpus.length === 0 && !fetchError) {
     return (
       <div className="loading-screen">
@@ -104,7 +201,7 @@ const App = () => {
 
   return (
     <BrowserRouter>
-      <Layout notice={notice} systemError={fetchError} onDismissNotice={() => setNotice(null)} onRetry={fetchData}>
+      <Layout authRequired={authRequired} notice={notice} systemError={fetchError} onDismissNotice={() => setNotice(null)} onLogout={handleLogout} onRetry={fetchData}>
         <Routes>
           <Route
             path="/"

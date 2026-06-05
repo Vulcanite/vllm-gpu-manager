@@ -48,6 +48,10 @@ export const SettingsPage = ({ fetchData }) => {
   const [hfToken, setHfToken] = useState('');
   const [hfTokenSet, setHfTokenSet] = useState(false);
   const [updateHfToken, setUpdateHfToken] = useState(false);
+  const [vllmAPIKey, setVllmAPIKey] = useState('');
+  const [vllmAPIKeySet, setVllmAPIKeySet] = useState(false);
+  const [updateVllmAPIKey, setUpdateVllmAPIKey] = useState(false);
+  const [clearVllmAPIKey, setClearVllmAPIKey] = useState(false);
   const [diskStats, setDiskStats] = useState(null);
   const [ramStats, setRamStats] = useState(null);
   const [message, setMessage] = useState('');
@@ -63,6 +67,10 @@ export const SettingsPage = ({ fetchData }) => {
     setHfToken('');
     setHfTokenSet(Boolean(data.hf_token_set));
     setUpdateHfToken(false);
+    setVllmAPIKey('');
+    setVllmAPIKeySet(Boolean(data.vllm_api_key_set));
+    setUpdateVllmAPIKey(false);
+    setClearVllmAPIKey(false);
     setDiskStats(getStats(data, 'disk'));
     setRamStats(getStats(data, 'ram'));
   };
@@ -103,6 +111,16 @@ export const SettingsPage = ({ fetchData }) => {
       return;
     }
 
+    if (updateVllmAPIKey && !vllmAPIKey.trim()) {
+      setError('Enter a vLLM API key or disable the API key update switch.');
+      return;
+    }
+
+    if (updateVllmAPIKey && /\s/.test(vllmAPIKey.trim())) {
+      setError('vLLM API key cannot contain whitespace.');
+      return;
+    }
+
     setSaving(true);
 
     try {
@@ -110,6 +128,8 @@ export const SettingsPage = ({ fetchData }) => {
         hf_cache: requestedHFCache,
         hf_token: updateHfToken ? hfToken.trim() : '',
         clear_hf_token: false,
+        vllm_api_key: updateVllmAPIKey ? vllmAPIKey.trim() : '',
+        clear_vllm_api_key: clearVllmAPIKey,
       });
 
       const response = await getSettings();
@@ -184,6 +204,69 @@ export const SettingsPage = ({ fetchData }) => {
                 />
                 <p className="text-secondary text-sm mt-1">Used to access gated models and avoid Hugging Face rate limits.</p>
               </div>
+            )}
+          </div>
+
+          <div className="form-group">
+            <div className="setting-row">
+              <div>
+                <label className="form-label">vLLM API Key</label>
+                <p className="text-secondary text-sm">
+                  {vllmAPIKeySet ? 'A key is stored. Enable the switch to replace it.' : 'No key stored. Enable the switch to add one.'}
+                </p>
+              </div>
+              <label className="toggle-control" aria-label="Enable vLLM API key update">
+                <input
+                  type="checkbox"
+                  checked={updateVllmAPIKey}
+                  disabled={saving || loading || clearVllmAPIKey}
+                  onChange={(event) => {
+                    setUpdateVllmAPIKey(event.target.checked);
+                    if (event.target.checked) {
+                      setClearVllmAPIKey(false);
+                    } else {
+                      setVllmAPIKey('');
+                    }
+                  }}
+                />
+                <span className="toggle-track" aria-hidden="true">
+                  <span className="toggle-thumb" />
+                </span>
+              </label>
+            </div>
+
+            {updateVllmAPIKey && (
+              <div className="token-update-field">
+                <label className="form-label">New vLLM API Key</label>
+                <input
+                  type="password"
+                  className="form-control"
+                  value={vllmAPIKey}
+                  onChange={(event) => setVllmAPIKey(event.target.value)}
+                  placeholder="token-..."
+                  autoComplete="off"
+                  disabled={saving || loading}
+                />
+                <p className="text-secondary text-sm mt-1">Passed to new serving containers as --api-key.</p>
+              </div>
+            )}
+
+            {vllmAPIKeySet && (
+              <label className="checkbox-control">
+                <input
+                  type="checkbox"
+                  checked={clearVllmAPIKey}
+                  disabled={saving || loading}
+                  onChange={(event) => {
+                    setClearVllmAPIKey(event.target.checked);
+                    if (event.target.checked) {
+                      setUpdateVllmAPIKey(false);
+                      setVllmAPIKey('');
+                    }
+                  }}
+                />
+                Clear stored vLLM API key
+              </label>
             )}
           </div>
 

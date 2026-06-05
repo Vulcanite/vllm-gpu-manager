@@ -9,7 +9,7 @@ case "$1" in
             exit 1
         fi
         echo "Starting vllm-manager on port $PORT in the background..."
-        nohup ./vllm-manager -port "$PORT" > vllm-manager.log 2>&1 &
+        nohup ./vllm-manager --dashboard --port "$PORT" > vllm-manager.log 2>&1 &
         echo "Done! Server is running. Logs: tail -f vllm-manager.log"
         ;;
     stop)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -78,7 +79,7 @@ func ensureDockerImage(ctx context.Context, cli *dockerclient.Client, imageName 
 		return err
 	}
 
-	log.Printf("[DOCKER] Image %s not found locally; pulling through Docker API\n", imageName)
+	logDockerMessage("Image %s not found locally; pulling through Docker API", imageName)
 	logDockerAPI("image pull", imageName)
 	pull, err := cli.ImagePull(ctx, imageName, dockerclient.ImagePullOptions{})
 	if err != nil {
@@ -150,23 +151,72 @@ func dockerDeviceRequest(gpuFlag string) container.DeviceRequest {
 
 func logDockerAPI(operation string, args ...string) {
 	if len(args) == 0 {
-		log.Printf("[DOCKER] API: %s\n", operation)
+		logDockerMessage("API: %s", operation)
 		return
 	}
-	log.Printf("[DOCKER] API: %s %s\n", operation, redactDockerArgs(args))
+	logDockerMessage("API: %s %s", operation, redactDockerArgs(args))
+}
+
+func logDockerMessage(format string, args ...interface{}) {
+	if !dockerAPILoggingEnabled() {
+		return
+	}
+	log.Printf("[DOCKER] "+format, args...)
+}
+
+func dockerAPILoggingEnabled() bool {
+	value := strings.TrimSpace(os.Getenv("VLLM_MANAGER_DOCKER_LOG"))
+	return value == "1" || strings.EqualFold(value, "true")
 }
 
 func redactDockerArgs(args []string) string {
 	redacted := append([]string(nil), args...)
 	for i := range redacted {
-		if strings.HasPrefix(redacted[i], "HF_TOKEN=") {
-			redacted[i] = "HF_TOKEN=<redacted>"
-		}
+		redacted[i] = redactDockerSecret(redacted[i])
 		if redacted[i] == "-e" && i+1 < len(redacted) && strings.HasPrefix(redacted[i+1], "HF_TOKEN=") {
 			redacted[i+1] = "HF_TOKEN=<redacted>"
 		}
+		if redacted[i] == "--api-key" && i+1 < len(redacted) {
+			redacted[i+1] = "<redacted>"
+		}
 	}
 	return strings.Join(redacted, " ")
+}
+
+func redactDockerSecret(value string) string {
+	if strings.HasPrefix(value, "HF_TOKEN=") {
+		return "HF_TOKEN=<redacted>"
+	}
+	return redactFlagValue(value, "--api-key")
+}
+
+func redactFlagValue(value string, flag string) string {
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return value
+	}
+	changed := false
+	for i := range fields {
+		prefix := ""
+		token := fields[i]
+		if trimmed, ok := strings.CutPrefix(token, "cmd="); ok {
+			prefix = "cmd="
+			token = trimmed
+		}
+		if token == flag && i+1 < len(fields) {
+			fields[i+1] = "<redacted>"
+			changed = true
+			continue
+		}
+		if strings.HasPrefix(token, flag+"=") {
+			fields[i] = prefix + flag + "=<redacted>"
+			changed = true
+		}
+	}
+	if !changed {
+		return value
+	}
+	return strings.Join(fields, " ")
 }
 
 // checkVLLMImageExists verifies the configured vLLM image is present locally.
@@ -176,7 +226,7 @@ func checkVLLMImageExists() {
 	_ = withDockerClient(execTimeoutShort, func(ctx context.Context, cli *dockerclient.Client) error {
 		logDockerAPI("image inspect", vllmImage)
 		if _, err := cli.ImageInspect(ctx, vllmImage); err != nil {
-			log.Printf("[DOCKER] WARNING: image %s not found locally — Docker API will attempt to pull it, which may take several minutes", vllmImage)
+			logDockerMessage("WARNING: image %s not found locally — Docker API will attempt to pull it, which may take several minutes", vllmImage)
 		}
 		return nil
 	})

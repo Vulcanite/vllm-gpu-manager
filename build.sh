@@ -7,11 +7,14 @@ npm run build
 cd ..
 
 echo "Building Golang Backend Binary..."
-CGO_ENABLED=0 go build -o vllm-manager main.go
+CGO_ENABLED=0 go build -o vllm-manager .
 
 echo ""
-echo "✅ Build complete! You can now run the standalone server:"
+echo "✅ Build complete! You can now run the CLI:"
 echo "   ./vllm-manager"
 echo ""
+echo "Or start the dashboard:"
+echo "   ./vllm-manager --dashboard --port 9090"
+echo ""
 echo "To run it in the background:"
-echo "   nohup ./vllm-manager > vllm-manager.log 2>&1 &"
+echo "   nohup ./vllm-manager --dashboard --port 9090 > vllm-manager.log 2>&1 &"
