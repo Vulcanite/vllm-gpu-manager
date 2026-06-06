@@ -107,7 +107,7 @@ func GetDownloadedModelSize(hfCache string, model string) (uint64, string, error
 		return 0, "", fmt.Errorf("failed to calculate model size: %v", err)
 	}
 
-	display := formatBytes(bytes)
+	display := FormatBytes(bytes)
 	modelSizeCacheMu.Lock()
 	modelSizeCache[cacheKey] = modelSizeInfo{
 		Display:  display,
@@ -125,70 +125,48 @@ func clearDownloadedModelSizeCache(path string) {
 	modelSizeCacheMu.Unlock()
 }
 
-func getDownloadContainerModel(name string) (string, error) {
-	var model string
-	err := withDockerClient(execTimeoutShort, func(ctx context.Context, cli *dockerclient.Client) error {
-		metadata, err := inspectContainer(ctx, cli, name)
-		if err != nil {
-			return fmt.Errorf("failed to inspect download container %s: %v", name, err)
-		}
-
-		if metadata.Config != nil {
-			if model = metadata.Config.Labels[containerModelLabel]; model != "" {
-				return nil
-			}
-		}
-
-		args := metadata.Args
-		if len(args) == 0 && metadata.Config != nil {
-			args = metadata.Config.Cmd
-		}
-		for i := 0; i < len(args)-1; i++ {
-			if args[i] == "download" {
-				model = args[i+1]
-				return nil
-			}
-		}
-
-		return nil
-	})
-	if err != nil {
-		return "", err
+// downloadContainerModelName extracts the model a download container is fetching
+// from its labels or `hf download <model>` args, using metadata already captured
+// in the shared snapshot (no extra docker inspect).
+func downloadContainerModelName(vc managedVLLMContainer) string {
+	if model := vc.labels[containerModelLabel]; model != "" {
+		return model
 	}
 
-	return model, nil
+	args := vc.metadata.Args
+	if len(args) == 0 && vc.metadata.Config != nil {
+		args = vc.metadata.Config.Cmd
+	}
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "download" {
+			return args[i+1]
+		}
+	}
+	return ""
 }
 
-func findDownloadContainerForModel(model string) (string, error) {
-	names, err := GetVLLMContainerNames()
-	if err != nil {
-		return "", err
-	}
-
-	for _, name := range names {
-		if !strings.HasPrefix(name, "vllm-download-") {
+// downloadContainerForModel returns the name of an in-progress download
+// container for the given model, or "" if none, scanning a snapshot taken by
+// the caller.
+func downloadContainerForModel(containers []managedVLLMContainer, model string) string {
+	for _, vc := range containers {
+		if !strings.HasPrefix(vc.name, "vllm-download-") {
 			continue
 		}
-
-		downloadModel, err := getDownloadContainerModel(name)
-		if err != nil {
-			return "", err
-		}
-		if downloadModel == model {
-			return name, nil
+		if downloadContainerModelName(vc) == model {
+			return vc.name
 		}
 	}
-
-	return "", nil
+	return ""
 }
 
 func ensureModelCacheCanBeDeleted(model string) error {
-	active, err := GetActiveModels()
+	containers, err := snapshotManagedVLLMContainers()
 	if err != nil {
-		return fmt.Errorf("failed to verify active model containers before deleting cache: %v", err)
+		return fmt.Errorf("failed to verify containers before deleting cache: %v", err)
 	}
 
-	for _, activeModel := range active {
+	for _, activeModel := range activeModelsFromContainers(containers) {
 		if activeModel.Model == model {
 			return validationError(
 				"cannot delete %s because container %s still references it; remove the container first",
@@ -198,11 +176,7 @@ func ensureModelCacheCanBeDeleted(model string) error {
 		}
 	}
 
-	containerName, err := findDownloadContainerForModel(model)
-	if err != nil {
-		return fmt.Errorf("failed to verify download containers before deleting cache: %v", err)
-	}
-	if containerName != "" {
+	if containerName := downloadContainerForModel(containers, model); containerName != "" {
 		return validationError("cannot delete %s because it is currently being downloaded by %s", model, containerName)
 	}
 
@@ -355,9 +329,11 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 	lock.Lock()
 	defer lock.Unlock()
 
-	if containerName, err := findDownloadContainerForModel(model); err != nil {
+	containers, err := snapshotManagedVLLMContainers()
+	if err != nil {
 		return "", fmt.Errorf("failed to verify download containers before downloading model: %v", err)
-	} else if containerName != "" {
+	}
+	if containerName := downloadContainerForModel(containers, model); containerName != "" {
 		return "", validationError("%s is already being downloaded by %s", model, containerName)
 	}
 
@@ -380,7 +356,7 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 	}
 
 	var containerID string
-	err := withDockerClient(0, func(ctx context.Context, cli *dockerclient.Client) error {
+	err = withDockerClient(0, func(ctx context.Context, cli *dockerclient.Client) error {
 		if err := ensureDockerImage(ctx, cli, vllmImage); err != nil {
 			return fmt.Errorf("failed to ensure vLLM image: %v", err)
 		}

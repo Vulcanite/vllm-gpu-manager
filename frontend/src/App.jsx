@@ -8,12 +8,13 @@ import { LaunchModel } from './pages/LaunchModel.jsx';
 import { LoginPage } from './pages/LoginPage.jsx';
 import { SettingsPage } from './pages/SettingsPage.jsx';
 import { useAutoDismiss } from './hooks/useAutoDismiss.js';
-import { fetchOverview, getAuthStatus, getErrorDetail, login, logout, stopModel } from './lib/api.js';
+import { fetchOverview, getAuthStatus, getConfig, getErrorDetail, login, logout, stopModel } from './lib/api.js';
 
 const App = () => {
   const [gpus, setGpus] = useState([]);
   const [activeModels, setActiveModels] = useState([]);
   const [downloadedModels, setDownloadedModels] = useState([]);
+  const [launchConfig, setLaunchConfig] = useState(null);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState('');
   const [gpuError, setGpuError] = useState('');
@@ -104,14 +105,43 @@ const App = () => {
       fetchData();
     }, 0);
     const interval = setInterval(() => {
-      fetchData();
+      if (document.visibilityState === 'visible') {
+        fetchData();
+      }
     }, 5000);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchData();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       clearTimeout(initialLoad);
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [authChecked, authRequired, authenticated, fetchData]);
+
+  useEffect(() => {
+    if (!authChecked || (authRequired && !authenticated)) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    getConfig()
+      .then((res) => {
+        if (!cancelled && res.data) setLaunchConfig(res.data);
+      })
+      .catch(() => {
+        // Static tuning config; LaunchModel falls back to built-in defaults.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authChecked, authRequired, authenticated]);
 
   useEffect(() => {
     if (!notice) return undefined;
@@ -179,28 +209,28 @@ const App = () => {
     }
   };
 
-  if (!authChecked) {
+  const renderContent = () => {
+    if (!authChecked) {
+      return (
+        <div className="loading-screen">
+          <Loader2 className="loader" size={48} />
+        </div>
+      );
+    }
+
+    if (authRequired && !authenticated) {
+      return <LoginPage error={authError} loading={authLoading} onLogin={handleLogin} />;
+    }
+
+    if (loading && gpus.length === 0 && !fetchError) {
+      return (
+        <div className="loading-screen">
+          <Loader2 className="loader" size={48} />
+        </div>
+      );
+    }
+
     return (
-      <div className="loading-screen">
-        <Loader2 className="loader" size={48} />
-      </div>
-    );
-  }
-
-  if (authRequired && !authenticated) {
-    return <LoginPage error={authError} loading={authLoading} onLogin={handleLogin} />;
-  }
-
-  if (loading && gpus.length === 0 && !fetchError) {
-    return (
-      <div className="loading-screen">
-        <Loader2 className="loader" size={48} />
-      </div>
-    );
-  }
-
-  return (
-    <BrowserRouter>
       <Layout authRequired={authRequired} notice={notice} systemError={fetchError} onDismissNotice={() => setNotice(null)} onLogout={handleLogout} onRetry={fetchData}>
         <Routes>
           <Route
@@ -220,13 +250,15 @@ const App = () => {
           />
           <Route
             path="/launch"
-            element={<LaunchModel gpus={gpus} gpuError={gpuError} downloadedModels={downloadedModels} activeModels={activeModels} fetchData={fetchData} notify={notify} />}
+            element={<LaunchModel gpus={gpus} gpuError={gpuError} downloadedModels={downloadedModels} activeModels={activeModels} launchConfig={launchConfig} fetchData={fetchData} notify={notify} />}
           />
           <Route path="/settings" element={<SettingsPage fetchData={fetchData} />} />
         </Routes>
       </Layout>
-    </BrowserRouter>
-  );
+    );
+  };
+
+  return <BrowserRouter>{renderContent()}</BrowserRouter>;
 };
 
 export default App;

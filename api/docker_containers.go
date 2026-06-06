@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 
@@ -18,7 +17,10 @@ import (
 	dockerclient "github.com/moby/moby/client"
 )
 
-const modelHealthCheckTimeout = 5 * time.Second
+const (
+	modelHealthCheckTimeout        = 5 * time.Second
+	modelHealthCheckOverallTimeout = 5 * time.Second
+)
 
 func validateGPUSelection(gpus int, gpuIds string) (string, []GPUInfo, error) {
 	gpuList, err := RequireDetectedGPUs()
@@ -128,184 +130,256 @@ func ensureManagedContainer(containerID string) error {
 	})
 }
 
-func GetActiveModels() ([]ActiveModel, error) {
-	var models []ActiveModel
-	err := withDockerClient(execTimeoutShort, func(ctx context.Context, cli *dockerclient.Client) error {
-		containers, err := listContainers(ctx, cli)
-		if err != nil {
-			return fmt.Errorf("docker container list failed: %v", err)
+type managedVLLMContainer struct {
+	id       string
+	name     string
+	state    string
+	metadata container.InspectResponse
+	labels   map[string]string
+}
+
+// listManagedVLLMContainers enumerates all vllm-manager-owned containers with a
+// single docker list followed by one inspect per container. Callers derive
+// active models, managed container names, and download lookups from this one
+// snapshot instead of repeatedly re-listing and re-inspecting the daemon.
+func listManagedVLLMContainers(ctx context.Context, cli *dockerclient.Client) ([]managedVLLMContainer, error) {
+	containers, err := listContainers(ctx, cli)
+	if err != nil {
+		return nil, fmt.Errorf("docker container list failed: %v", err)
+	}
+
+	var result []managedVLLMContainer
+	for _, item := range containers {
+		name := dockerContainerName(item)
+		if name == "" || !strings.HasPrefix(name, "vllm-") {
+			continue
 		}
+		metadata, err := inspectContainer(ctx, cli, item.ID)
+		if err != nil {
+			continue
+		}
+		labels := containerLabels(metadata)
+		if !isManagedContainer(labels) {
+			continue
+		}
+		result = append(result, managedVLLMContainer{
+			id:       item.ID,
+			name:     name,
+			state:    string(item.State),
+			metadata: metadata,
+			labels:   labels,
+		})
+	}
+	return result, nil
+}
 
-		for _, item := range containers {
-			name := dockerContainerName(item)
-			if name == "" || !strings.HasPrefix(name, "vllm-") {
-				continue
-			}
+// snapshotManagedVLLMContainers takes a single docker snapshot of all managed
+// vLLM containers.
+func snapshotManagedVLLMContainers() ([]managedVLLMContainer, error) {
+	var containers []managedVLLMContainer
+	err := withDockerClient(execTimeoutShort, func(ctx context.Context, cli *dockerclient.Client) error {
+		result, err := listManagedVLLMContainers(ctx, cli)
+		containers = result
+		return err
+	})
+	return containers, err
+}
 
-			// Inspect the container to get args + GPU device assignments.
-			metadata, err := inspectContainer(ctx, cli, item.ID)
-			if err != nil {
-				continue
-			}
+func managedContainerNames(containers []managedVLLMContainer) []string {
+	names := make([]string, 0, len(containers))
+	for _, vc := range containers {
+		names = append(names, vc.name)
+	}
+	sort.Strings(names)
+	return names
+}
 
-			labels := containerLabels(metadata)
-			if !isManagedServerContainer(labels) {
-				continue
-			}
-			// Download containers (vllm-download-*) hold no GPU allocation and no
-			// vLLM server port — exclude them from the active model list so they
-			// don't poison GPU overlap accounting or the UI model table.
-			if strings.HasPrefix(name, "vllm-download-") {
-				continue
-			}
+// buildActiveModel converts an inspected container into an ActiveModel. It
+// returns false for anything that is not a managed vLLM server container
+// (download containers hold no GPU allocation or server port and must not
+// poison GPU overlap accounting or the UI model table).
+func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
+	if !isManagedServerContainer(vc.labels) || strings.HasPrefix(vc.name, "vllm-download-") {
+		return ActiveModel{}, false
+	}
 
-			args := metadata.Args
-			if metadata.Config != nil {
-				if len(args) == 0 {
-					args = metadata.Config.Cmd
-				}
-			}
-			var deviceRequests []container.DeviceRequest
-			if metadata.HostConfig != nil {
-				deviceRequests = metadata.HostConfig.DeviceRequests
-			}
+	metadata := vc.metadata
+	args := metadata.Args
+	if metadata.Config != nil && len(args) == 0 {
+		args = metadata.Config.Cmd
+	}
+	var deviceRequests []container.DeviceRequest
+	if metadata.HostConfig != nil {
+		deviceRequests = metadata.HostConfig.DeviceRequests
+	}
 
-			model := ActiveModel{
-				ContainerID:   item.ID,
-				ContainerName: name,
-				Model:         name, // fallback
-				Port:          "unknown",
-				GPUs:          "unknown",
-				GPUIDs:        "all",
-				MemUtil:       "unknown",
-				MaxLen:        "default",
-				KVCacheDType:  "auto",
-				ToolParser:    "disabled",
-				APIUrl:        "unknown",
-				IsReady:       false,
-				State:         string(item.State),
-			}
+	model := ActiveModel{
+		ContainerID:   vc.id,
+		ContainerName: vc.name,
+		Model:         vc.name, // fallback
+		Port:          "unknown",
+		GPUs:          "unknown",
+		GPUIDs:        "all",
+		MemUtil:       "unknown",
+		MaxLen:        "default",
+		KVCacheDType:  "auto",
+		ToolParser:    "disabled",
+		APIUrl:        "unknown",
+		IsReady:       false,
+		State:         vc.state,
+	}
 
-			if labels[containerModelLabel] != "" {
-				model.Model = labels[containerModelLabel]
-			}
+	if vc.labels[containerModelLabel] != "" {
+		model.Model = vc.labels[containerModelLabel]
+	}
 
-			for i := 0; i < len(args); i++ {
-				if args[i] == "--model" && i+1 < len(args) && labels[containerModelLabel] == "" {
-					model.Model = args[i+1]
-				}
-				if args[i] == "--port" && i+1 < len(args) {
-					model.Port = args[i+1]
-				}
-				if args[i] == "--tensor-parallel-size" && i+1 < len(args) {
-					model.GPUs = args[i+1]
-				}
-				if args[i] == "--gpu-memory-utilization" && i+1 < len(args) {
-					model.MemUtil = args[i+1]
-				}
-				if args[i] == "--max-model-len" && i+1 < len(args) {
-					model.MaxLen = args[i+1]
-				}
-				if args[i] == "--kv-cache-dtype" && i+1 < len(args) {
-					model.KVCacheDType = args[i+1]
-				}
-				if args[i] == "--tool-call-parser" && i+1 < len(args) {
-					model.ToolParser = args[i+1]
-				}
-			}
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--model" && i+1 < len(args) && vc.labels[containerModelLabel] == "" {
+			model.Model = args[i+1]
+		}
+		if args[i] == "--port" && i+1 < len(args) {
+			model.Port = args[i+1]
+		}
+		if args[i] == "--tensor-parallel-size" && i+1 < len(args) {
+			model.GPUs = args[i+1]
+		}
+		if args[i] == "--gpu-memory-utilization" && i+1 < len(args) {
+			model.MemUtil = args[i+1]
+		}
+		if args[i] == "--max-model-len" && i+1 < len(args) {
+			model.MaxLen = args[i+1]
+		}
+		if args[i] == "--kv-cache-dtype" && i+1 < len(args) {
+			model.KVCacheDType = args[i+1]
+		}
+		if args[i] == "--tool-call-parser" && i+1 < len(args) {
+			model.ToolParser = args[i+1]
+		}
+	}
 
-			// Parse actual GPU IDs from DeviceRequests (--gpus device=0,1 → DeviceIDs: ["0","1"]).
-			// If DeviceIDs is empty, the container was launched with --gpus all.
-			for _, dr := range deviceRequests {
-				if len(dr.DeviceIDs) > 0 {
-					model.GPUIDs = strings.Join(dr.DeviceIDs, ",")
-				}
-				// else: GPUIDs stays "all"
-			}
+	// Parse actual GPU IDs from DeviceRequests (--gpus device=0,1 → DeviceIDs: ["0","1"]).
+	// If DeviceIDs is empty, the container was launched with --gpus all.
+	for _, dr := range deviceRequests {
+		if len(dr.DeviceIDs) > 0 {
+			model.GPUIDs = strings.Join(dr.DeviceIDs, ",")
+		}
+		// else: GPUIDs stays "all"
+	}
 
-			if model.Port != "unknown" {
-				model.APIUrl = fmt.Sprintf("http://localhost:%s/v1", model.Port)
+	if model.Port != "unknown" {
+		model.APIUrl = fmt.Sprintf("http://localhost:%s/v1", model.Port)
 
-				// Vision Heuristics.
-				lower := strings.ToLower(model.Model)
-				if strings.Contains(lower, "vl") || strings.Contains(lower, "vision") || strings.Contains(lower, "llava") || strings.Contains(lower, "pixtral") {
-					model.Arch = "Vision + Text"
-				} else {
-					model.Arch = "Text-Only"
-				}
-			}
+		// Vision Heuristics.
+		lower := strings.ToLower(model.Model)
+		if strings.Contains(lower, "vl") || strings.Contains(lower, "vision") || strings.Contains(lower, "llava") || strings.Contains(lower, "pixtral") {
+			model.Arch = "Vision + Text"
+		} else {
+			model.Arch = "Text-Only"
+		}
+	}
 
+	return model, true
+}
+
+func activeModelsFromContainers(containers []managedVLLMContainer) []ActiveModel {
+	var models []ActiveModel
+	for _, vc := range containers {
+		if model, ok := buildActiveModel(vc); ok {
 			models = append(models, model)
 		}
-		return nil
-	})
+	}
+	return models
+}
+
+// activeModelsNoHealth returns active server models without the per-container
+// HTTP readiness probes. Internal callers that only need GPU assignments (GPU
+// overlap and cache-deletion checks) use this to avoid the health-check
+// round-trips that GetActiveModels performs for the UI.
+func activeModelsNoHealth() ([]ActiveModel, error) {
+	containers, err := snapshotManagedVLLMContainers()
 	if err != nil {
 		return nil, err
 	}
+	return activeModelsFromContainers(containers), nil
+}
 
-	// Health checks: run in parallel to avoid sequential timeouts stacking up.
-	var wg sync.WaitGroup
+func GetActiveModels() ([]ActiveModel, error) {
+	models, err := activeModelsNoHealth()
+	if err != nil {
+		return nil, err
+	}
+	healthCheckActiveModels(models)
+	return models, nil
+}
+
+type activeModelHealthResult struct {
+	index  int
+	ready  bool
+	maxLen string
+}
+
+func healthCheckActiveModels(models []ActiveModel) {
+	ctx, cancel := context.WithTimeout(context.Background(), modelHealthCheckOverallTimeout)
+	defer cancel()
+
+	targets := 0
+	results := make(chan activeModelHealthResult, len(models))
 	for i := range models {
 		if models[i].Port == "unknown" || models[i].State != "running" {
 			continue
 		}
-		wg.Add(1)
-		go func(m *ActiveModel) {
-			defer wg.Done()
+		targets++
+		go func(index int, port string, currentMaxLen string) {
 			client := http.Client{Timeout: modelHealthCheckTimeout}
-			resp, err := client.Get(fmt.Sprintf("http://localhost:%s/v1/models", m.Port))
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://localhost:%s/v1/models", port), nil)
+			if err != nil {
+				return
+			}
+			resp, err := client.Do(req)
 			if err != nil {
 				return
 			}
 			defer resp.Body.Close()
-			m.IsReady = (resp.StatusCode == http.StatusOK)
-			if m.IsReady {
+			result := activeModelHealthResult{
+				index: index,
+				ready: resp.StatusCode == http.StatusOK,
+			}
+			if result.ready && currentMaxLen == "default" {
 				var modelResp struct {
 					Data []struct {
 						MaxModelLen int `json:"max_model_len"`
 					} `json:"data"`
 				}
 				if err := json.NewDecoder(resp.Body).Decode(&modelResp); err == nil && len(modelResp.Data) > 0 {
-					if m.MaxLen == "default" {
-						m.MaxLen = strconv.Itoa(modelResp.Data[0].MaxModelLen)
-					}
+					result.maxLen = strconv.Itoa(modelResp.Data[0].MaxModelLen)
 				}
 			}
-		}(&models[i])
+			select {
+			case results <- result:
+			case <-ctx.Done():
+			}
+		}(i, models[i].Port, models[i].MaxLen)
 	}
-	wg.Wait()
 
-	return models, nil
+	for i := 0; i < targets; i++ {
+		select {
+		case result := <-results:
+			models[result.index].IsReady = result.ready
+			if result.maxLen != "" {
+				models[result.index].MaxLen = result.maxLen
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func GetVLLMContainerNames() ([]string, error) {
-	var names []string
-	err := withDockerClient(execTimeoutShort, func(ctx context.Context, cli *dockerclient.Client) error {
-		containers, err := listContainers(ctx, cli)
-		if err != nil {
-			return fmt.Errorf("docker container list failed: %v", err)
-		}
-		for _, item := range containers {
-			name := dockerContainerName(item)
-			if name == "" || !strings.HasPrefix(name, "vllm-") {
-				continue
-			}
-			metadata, err := inspectContainer(ctx, cli, item.ID)
-			if err != nil {
-				continue
-			}
-			if !isManagedContainer(containerLabels(metadata)) {
-				continue
-			}
-			names = append(names, name)
-		}
-		return nil
-	})
+	containers, err := snapshotManagedVLLMContainers()
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(names)
-	return names, nil
+	return managedContainerNames(containers), nil
 }
 
 func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, kvCacheDType string, toolParser string, hfCache string, hfToken string, vllmAPIKey string) error {
@@ -332,10 +406,15 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	lock.Lock()
 	defer lock.Unlock()
 
-	if containerName, err := findDownloadContainerForModel(model); err != nil {
-		return fmt.Errorf("failed to verify download containers before starting model: %v", err)
-	} else if containerName != "" {
-		return validationError("cannot start %s because it is currently being downloaded by %s", model, containerName)
+	// Single docker snapshot reused for the download-in-progress, GPU overlap,
+	// and name-conflict checks below instead of three separate enumerations.
+	snapshot, err := snapshotManagedVLLMContainers()
+	if err != nil {
+		return fmt.Errorf("failed to inspect existing containers before starting model: %v", err)
+	}
+
+	if downloadName := downloadContainerForModel(snapshot, model); downloadName != "" {
+		return validationError("cannot start %s because it is currently being downloaded by %s", model, downloadName)
 	}
 
 	utilization, err := parseGPUMemoryUtilization(memUtil)
@@ -396,7 +475,7 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 			requestedGPUIDs = append(requestedGPUIDs, g.ID)
 		}
 	}
-	if err := checkGPUOverlap(requestedGPUIDs, totalGPUCount, utilization); err != nil {
+	if err := checkGPUOverlap(activeModelsFromContainers(snapshot), requestedGPUIDs, totalGPUCount, utilization); err != nil {
 		return err
 	}
 
@@ -407,11 +486,9 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	// Deploy should create a fresh container only. Existing containers keep their
 	// original GPU devices, env, image, and volume mounts, so restarting them here
 	// can silently run a different configuration than the user requested.
-	if names, err := GetVLLMContainerNames(); err == nil {
-		for _, name := range names {
-			if name == containerName {
-				return validationError("container %q already exists; remove it before deploying a new model with this name and port", containerName)
-			}
+	for _, vc := range snapshot {
+		if vc.name == containerName {
+			return validationError("container %q already exists; remove it before deploying a new model with this name and port", containerName)
 		}
 	}
 
@@ -550,10 +627,23 @@ func RestartModel(containerID string) error {
 	if err := ensureManagedContainer(containerID); err != nil {
 		return err
 	}
-	return withDockerClient(execTimeoutShort, func(ctx context.Context, cli *dockerclient.Client) error {
+	return withDockerClient(execTimeoutLong, func(ctx context.Context, cli *dockerclient.Client) error {
+		metadata, err := inspectContainer(ctx, cli, containerID)
+		if err != nil {
+			return fmt.Errorf("failed to inspect container %s: %v", containerID, err)
+		}
+		if metadata.State != nil && metadata.State.Running {
+			timeout := int(execTimeoutLong.Seconds())
+			logDockerAPI("container restart", containerID)
+			if _, err := cli.ContainerRestart(ctx, containerID, dockerclient.ContainerRestartOptions{Timeout: &timeout}); err != nil {
+				return fmt.Errorf("failed to restart container %s: %v", containerID, err)
+			}
+			return nil
+		}
+
 		logDockerAPI("container start", containerID)
 		if _, err := cli.ContainerStart(ctx, containerID, dockerclient.ContainerStartOptions{}); err != nil {
-			return fmt.Errorf("failed to restart container %s: %v", containerID, err)
+			return fmt.Errorf("failed to start container %s: %v", containerID, err)
 		}
 		return nil
 	})

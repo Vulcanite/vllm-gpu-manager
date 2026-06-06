@@ -105,7 +105,7 @@ func sanitizeDockerNamePart(value string) string {
 	return cleaned
 }
 
-func formatBytes(bytes uint64) string {
+func FormatBytes(bytes uint64) string {
 	if bytes == 0 {
 		return "0 B"
 	}

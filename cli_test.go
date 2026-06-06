@@ -74,3 +74,26 @@ func TestGroupCommandsShowScopedHelp(t *testing.T) {
 		})
 	}
 }
+
+func TestRootHelpIncludesDashboardMode(t *testing.T) {
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	cmd := newCLICommand(&out, &errOut)
+	cmd.SetArgs([]string{"--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("help returned error: %v", err)
+	}
+	rendered := out.String()
+	for _, want := range []string{"--dashboard", "--port", "gpu", "model", "settings"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("help output missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestCLIFormatBytesUsesSharedFormatter(t *testing.T) {
+	if got, want := formatBytes(1024), api.FormatBytes(1024); got != want {
+		t.Fatalf("formatBytes=%q, want shared formatter %q", got, want)
+	}
+}

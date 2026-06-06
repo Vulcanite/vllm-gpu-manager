@@ -3,10 +3,13 @@ import axios from 'axios';
 const API_BASE = '/api';
 
 axios.defaults.withCredentials = true;
+axios.defaults.headers.common['X-Requested-With'] = 'XMLHttpRequest';
 
 export const getErrorDetail = (error, fallback = 'Request failed') => {
   return error.response?.data?.detail || error.message || fallback;
 };
+
+export const getConfig = () => axios.get(`${API_BASE}/config`);
 
 export const getAuthStatus = () => axios.get(`${API_BASE}/auth/status`);
 
@@ -20,6 +23,13 @@ export const fetchOverview = async () => {
     axios.get(`${API_BASE}/models/active`),
     axios.get(`${API_BASE}/models/downloaded`),
   ]);
+
+  const results = [gpuRes, activeRes, downloadedRes];
+  for (const res of results) {
+    if (res.status === 'rejected' && res.reason?.response?.status === 401) {
+      throw res.reason;
+    }
+  }
 
   if (activeRes.status === 'rejected') throw activeRes.reason;
   if (downloadedRes.status === 'rejected') throw downloadedRes.reason;

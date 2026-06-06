@@ -46,7 +46,7 @@ export const Layout = ({ authRequired = false, children, notice, systemError, on
               <span>Sign Out</span>
             </button>
           )}
-          <button onClick={toggleTheme} className="btn btn-outline theme-toggle">
+          <button onClick={toggleTheme} className="btn btn-outline theme-toggle" type="button">
             {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
             <span>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
           </button>

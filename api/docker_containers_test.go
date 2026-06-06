@@ -2,6 +2,9 @@ package api
 
 import (
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -201,5 +204,38 @@ func TestCheckedMulUint64RejectsOverflow(t *testing.T) {
 	}
 	if got != 30 {
 		t.Fatalf("checkedMulUint64=%d, want 30", got)
+	}
+}
+
+func TestHealthCheckActiveModelsUpdatesReadyAndDefaultMaxLen(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("local listener unavailable: %v", err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"max_model_len":4096}]}`))
+	}))
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split test server URL: %v", err)
+	}
+	models := []ActiveModel{{
+		Port:   port,
+		State:  "running",
+		MaxLen: "default",
+	}}
+
+	healthCheckActiveModels(models)
+
+	if !models[0].IsReady {
+		t.Fatal("model was not marked ready")
+	}
+	if models[0].MaxLen != "4096" {
+		t.Fatalf("MaxLen=%q, want 4096", models[0].MaxLen)
 	}
 }

@@ -39,7 +39,10 @@ func GetGPUInfo() ([]GPUInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("nvidia-smi failed: %v", err)
 	}
+	return parseNvidiaSMICSV(out), nil
+}
 
+func parseNvidiaSMICSV(out []byte) []GPUInfo {
 	var gpus []GPUInfo
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 
@@ -81,5 +84,5 @@ func GetGPUInfo() ([]GPUInfo, error) {
 		})
 	}
 
-	return gpus, nil
+	return gpus
 }

@@ -159,8 +159,8 @@ export const SettingsPage = ({ fetchData }) => {
         {error && <div className="alert alert-danger">{error}</div>}
         <form onSubmit={handleSave}>
           <div className="form-group">
-            <label className="form-label">Hugging Face Home Directory</label>
-            <input type="text" className="form-control" value={hfCache} onChange={(event) => setHfCache(event.target.value)} required disabled={saving || loading} />
+            <label className="form-label" htmlFor="hfCache">Hugging Face Home Directory</label>
+            <input id="hfCache" type="text" className="form-control" value={hfCache} onChange={(event) => setHfCache(event.target.value)} required disabled={saving || loading} />
             <p className="text-secondary text-sm mt-1">Absolute path containing the Hugging Face hub directory.</p>
           </div>
 
@@ -192,8 +192,9 @@ export const SettingsPage = ({ fetchData }) => {
 
             {updateHfToken && (
               <div className="token-update-field">
-                <label className="form-label">New Hugging Face Token</label>
+                <label className="form-label" htmlFor="hfToken">New Hugging Face Token</label>
                 <input
+                  id="hfToken"
                   type="password"
                   className="form-control"
                   value={hfToken}
@@ -237,8 +238,9 @@ export const SettingsPage = ({ fetchData }) => {
 
             {updateVllmAPIKey && (
               <div className="token-update-field">
-                <label className="form-label">New vLLM API Key</label>
+                <label className="form-label" htmlFor="vllmAPIKey">New vLLM API Key</label>
                 <input
+                  id="vllmAPIKey"
                   type="password"
                   className="form-control"
                   value={vllmAPIKey}
@@ -252,8 +254,9 @@ export const SettingsPage = ({ fetchData }) => {
             )}
 
             {vllmAPIKeySet && (
-              <label className="checkbox-control">
+              <label className="checkbox-control" htmlFor="clearVllmAPIKey">
                 <input
+                  id="clearVllmAPIKey"
                   type="checkbox"
                   checked={clearVllmAPIKey}
                   disabled={saving || loading}

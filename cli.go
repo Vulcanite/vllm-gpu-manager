@@ -675,17 +675,7 @@ func escapeCells(cells []string) []string {
 }
 
 func formatBytes(bytes uint64) string {
-	units := []string{"B", "KiB", "MiB", "GiB", "TiB", "PiB"}
-	value := float64(bytes)
-	unit := 0
-	for value >= 1024 && unit < len(units)-1 {
-		value /= 1024
-		unit++
-	}
-	if unit == 0 {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	return fmt.Sprintf("%.2f %s", value, units[unit])
+	return api.FormatBytes(bytes)
 }
 
 func zeroAsDash(value int) string {

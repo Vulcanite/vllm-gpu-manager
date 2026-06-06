@@ -153,6 +153,8 @@ You can also use the helper script:
 
 Logs are written to `vllm-manager.log` when started through `manager.sh`.
 
+Dashboard mode handles `SIGINT` and `SIGTERM` with a graceful HTTP shutdown timeout, so in-flight API requests get a short window to finish during restarts.
+
 ## Settings
 
 Settings are stored in `settings.json` beside the binary.
@@ -229,6 +231,8 @@ Optional launch parameters currently exposed by the UI/API:
 - `--enable-auto-tool-choice`
 - `--api-key` when a global vLLM API key is configured
 
+Managed container restart works for both running and stopped containers. Running containers are restarted through Docker; stopped containers are started with their original image, command, environment, GPU devices, and volume mounts.
+
 Before launching, the backend validates:
 
 - requested port is available
@@ -268,7 +272,7 @@ All APIs are under `/api`.
 | `GET`  | `/models/download/progress?model=<id>` | Return current cached byte count for a model.                             |
 | `POST` | `/models/start`                        | Start a vLLM serving container.                                           |
 | `POST` | `/models/stop`                         | Stop a serving container by port.                                         |
-| `POST` | `/models/restart`                      | Restart a managed serving container by container ID.                      |
+| `POST` | `/models/restart`                      | Restart a running managed container or start a stopped one by container ID. |
 | `POST` | `/models/remove`                       | Remove a managed stopped container by container ID.                       |
 | `POST` | `/models/downloaded/delete`            | Delete a cached model directory.                                          |
 

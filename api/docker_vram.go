@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,6 +24,43 @@ type modelKVCacheEstimate struct {
 const (
 	defaultGPUMemoryUtilization = 0.9
 	modelVRAMSafetyMargin       = 1.08
+)
+
+// kvCacheDTypeOptions is the single source of truth for accepted KV cache
+// dtypes. It is consumed by normalizeKVCacheDType and surfaced to the frontend
+// via LaunchDefaults so the UI and backend cannot drift.
+var kvCacheDTypeOptions = []string{"auto", "fp8", "fp8_e5m2", "fp8_e4m3"}
+
+// LaunchConfig exposes the tuning constants the dashboard needs to reproduce the
+// backend's VRAM preflight preview. Serving these from one place keeps the
+// frontend estimate in sync with CheckModelFitsInVRAM.
+type LaunchConfig struct {
+	ModelVRAMSafetyMargin       float64  `json:"model_vram_safety_margin"`
+	DefaultGPUMemoryUtilization float64  `json:"default_gpu_memory_utilization"`
+	KVCacheDTypeOptions         []string `json:"kv_cache_dtype_options"`
+}
+
+// LaunchDefaults returns the launch tuning constants shared with the frontend.
+func LaunchDefaults() LaunchConfig {
+	return LaunchConfig{
+		ModelVRAMSafetyMargin:       modelVRAMSafetyMargin,
+		DefaultGPUMemoryUtilization: defaultGPUMemoryUtilization,
+		KVCacheDTypeOptions:         append([]string(nil), kvCacheDTypeOptions...),
+	}
+}
+
+// kvCacheEstimateCache memoizes parsed config.json estimates keyed by config
+// path. Entries are invalidated when the file's mtime changes (e.g. the model is
+// re-downloaded), so a poll of /api/models/downloaded no longer re-reads and
+// re-decodes every model config on every request.
+type kvCacheEstimateEntry struct {
+	estimate modelKVCacheEstimate
+	modTime  time.Time
+}
+
+var (
+	kvCacheEstimateCache   = make(map[string]kvCacheEstimateEntry)
+	kvCacheEstimateCacheMu sync.RWMutex
 )
 
 func modelCacheDir(hfCache string, model string) string {
@@ -267,6 +305,17 @@ func GetModelKVCacheEstimate(hfCache string, model string) (modelKVCacheEstimate
 		return modelKVCacheEstimate{}, err
 	}
 
+	var modTime time.Time
+	if info, statErr := os.Stat(configPath); statErr == nil {
+		modTime = info.ModTime()
+		kvCacheEstimateCacheMu.RLock()
+		cached, ok := kvCacheEstimateCache[configPath]
+		kvCacheEstimateCacheMu.RUnlock()
+		if ok && cached.modTime.Equal(modTime) {
+			return cached.estimate, nil
+		}
+	}
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return modelKVCacheEstimate{}, err
@@ -327,13 +376,21 @@ func GetModelKVCacheEstimate(hfCache string, model string) (modelKVCacheEstimate
 		"sliding_window",
 	)
 
-	return modelKVCacheEstimate{
+	estimate := modelKVCacheEstimate{
 		Layers:             layers,
 		KeyValueHeads:      keyValueHeads,
 		HeadDim:            headDim,
 		DTypeBytes:         kvElementBytes(dtype),
 		DefaultMaxModelLen: maxModelLen,
-	}, nil
+	}
+
+	if !modTime.IsZero() {
+		kvCacheEstimateCacheMu.Lock()
+		kvCacheEstimateCache[configPath] = kvCacheEstimateEntry{estimate: estimate, modTime: modTime}
+		kvCacheEstimateCacheMu.Unlock()
+	}
+
+	return estimate, nil
 }
 
 func parseGPUMemoryUtilization(memUtil string) (float64, error) {
@@ -368,12 +425,12 @@ func normalizeKVCacheDType(kvCacheDType string) (string, error) {
 		return "auto", nil
 	}
 
-	switch kvCacheDType {
-	case "auto", "fp8", "fp8_e5m2", "fp8_e4m3":
-		return kvCacheDType, nil
-	default:
-		return "", validationError("kv_cache_dtype must be one of auto, fp8, fp8_e5m2, fp8_e4m3")
+	for _, option := range kvCacheDTypeOptions {
+		if kvCacheDType == option {
+			return kvCacheDType, nil
+		}
 	}
+	return "", validationError("kv_cache_dtype must be one of %s", strings.Join(kvCacheDTypeOptions, ", "))
 }
 
 func kvCacheDTypeElementBytes(kvCacheDType string, modelDTypeBytes int) int {
@@ -397,14 +454,9 @@ const minKVCacheBytesPerGPU = 1 * 1024 * 1024 * 1024 // 1 GiB
 //
 // requestedIDs is empty when gpu_ids="all"; totalGPUs is used to expand it.
 // requestedMemUtil is the new container's parsed mem_util (0.0–1.0).
-func checkGPUOverlap(requestedIDs []int, totalGPUs int, requestedMemUtil float64) error {
-	active, err := GetActiveModels()
-	if err != nil {
-		// Can't verify — log and allow rather than hard-block
-		log.Printf("[GPU] could not fetch active models for overlap check: %v", err)
-		return nil
-	}
-
+// active is the caller's snapshot of running models; passing it in avoids a
+// redundant docker enumeration (and the readiness probes) on the launch path.
+func checkGPUOverlap(active []ActiveModel, requestedIDs []int, totalGPUs int, requestedMemUtil float64) error {
 	// Expand "all" to explicit IDs
 	requested := make(map[int]bool, len(requestedIDs))
 	for _, id := range requestedIDs {
@@ -565,9 +617,9 @@ func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, 
 		if modelBytesPerGPU > gpu.MemoryFree {
 			return validationError(
 				"model weights need ~%s per GPU but GPU %d only has %s currently free — stop other workloads first",
-				formatBytes(modelBytesPerGPU),
+				FormatBytes(modelBytesPerGPU),
 				gpu.ID,
-				formatBytes(gpu.MemoryFree),
+				FormatBytes(gpu.MemoryFree),
 			)
 		}
 
@@ -579,33 +631,33 @@ func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, 
 		if requiredPerGPU > gpu.MemoryFree {
 			return validationError(
 				"model weights ~%s plus KV cache ~%s for max_model_len=%d needs ~%s per GPU, but GPU %d only has %s currently free — stop other workloads first",
-				formatBytes(modelBytesPerGPU),
-				formatBytes(kvCacheBytesPerGPU),
+				FormatBytes(modelBytesPerGPU),
+				FormatBytes(kvCacheBytesPerGPU),
 				effectiveMaxLen,
-				formatBytes(requiredPerGPU),
+				FormatBytes(requiredPerGPU),
 				gpu.ID,
-				formatBytes(gpu.MemoryFree),
+				FormatBytes(gpu.MemoryFree),
 			)
 		}
 		if requiredPerGPU > utilizationBudget {
 			if kvCacheBytesPerGPU > 0 {
 				return validationError(
 					"model weights ~%s plus KV cache ~%s for max_model_len=%d needs ~%s per GPU, but the %.2f utilization budget on GPU %d is only %s — reduce max_model_len or increase mem_util",
-					formatBytes(modelBytesPerGPU),
-					formatBytes(kvCacheBytesPerGPU),
+					FormatBytes(modelBytesPerGPU),
+					FormatBytes(kvCacheBytesPerGPU),
 					effectiveMaxLen,
-					formatBytes(requiredPerGPU),
+					FormatBytes(requiredPerGPU),
 					utilization,
 					gpu.ID,
-					formatBytes(utilizationBudget),
+					FormatBytes(utilizationBudget),
 				)
 			}
 			return validationError(
 				"model weights ~%s per GPU (with %.0f%% safety margin) exceeds the %.2f utilization budget of %s on GPU %d",
-				formatBytes(modelBytesPerGPU),
+				FormatBytes(modelBytesPerGPU),
 				(modelVRAMSafetyMargin-1)*100,
 				utilization,
-				formatBytes(utilizationBudget),
+				FormatBytes(utilizationBudget),
 				gpu.ID,
 			)
 		}
@@ -615,11 +667,11 @@ func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, 
 		if remainingForKV < minKVCacheBytesPerGPU {
 			return validationError(
 				"only ~%s remains for KV cache on GPU %d after loading model weights (budget: %s, weights: ~%s) — vLLM requires at least %s; increase mem_util or use fewer GPUs",
-				formatBytes(remainingForKV),
+				FormatBytes(remainingForKV),
 				gpu.ID,
-				formatBytes(utilizationBudget),
-				formatBytes(modelBytesPerGPU),
-				formatBytes(minKVCacheBytesPerGPU),
+				FormatBytes(utilizationBudget),
+				FormatBytes(modelBytesPerGPU),
+				FormatBytes(minKVCacheBytesPerGPU),
 			)
 		}
 	}
@@ -627,12 +679,12 @@ func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, 
 	if kvCacheBytesPerGPU > 0 {
 		log.Printf("[VRAM] %s: ~%s/GPU total (%s weights + %s KV cache at max_model_len=%d, kv_cache_dtype=%s, %s/token/GPU)",
 			model,
-			formatBytes(modelBytesPerGPU+kvCacheBytesPerGPU),
-			formatBytes(modelBytesPerGPU),
-			formatBytes(kvCacheBytesPerGPU),
+			FormatBytes(modelBytesPerGPU+kvCacheBytesPerGPU),
+			FormatBytes(modelBytesPerGPU),
+			FormatBytes(kvCacheBytesPerGPU),
 			effectiveMaxLen,
 			kvCacheDType,
-			formatBytes(kvBytesPerTokenPerGPU),
+			FormatBytes(kvBytesPerTokenPerGPU),
 		)
 	}
 	return nil
