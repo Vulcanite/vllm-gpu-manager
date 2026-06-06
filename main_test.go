@@ -25,6 +25,43 @@ func resetSettingsCache(t *testing.T, settings Settings, loaded bool) {
 	})
 }
 
+func TestShouldRunDashboard(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{
+			name: "explicit dashboard flag",
+			args: []string{"--dashboard"},
+			want: true,
+		},
+		{
+			name: "dashboard flag with port",
+			args: []string{"--dashboard", "--port", "9090"},
+			want: true,
+		},
+		{
+			name: "model start port does not imply dashboard",
+			args: []string{"model", "start", "Qwen/Qwen2.5-7B-Instruct", "--port", "8000", "--gpus", "1"},
+			want: false,
+		},
+		{
+			name: "root port alone does not imply dashboard",
+			args: []string{"--port", "9090"},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldRunDashboard(tt.args); got != tt.want {
+				t.Fatalf("shouldRunDashboard(%v)=%v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDashboardAuthDisabledAllowsRequests(t *testing.T) {
 	auth := dashboardAuth{}
 

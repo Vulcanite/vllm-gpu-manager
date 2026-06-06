@@ -567,7 +567,11 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 
 		logDockerAPI("container start", created.ID)
 		if _, err := cli.ContainerStart(ctx, created.ID, dockerclient.ContainerStartOptions{}); err != nil {
-			return err
+			logDockerAPI("container remove", created.ID, "force=true")
+			if _, removeErr := cli.ContainerRemove(context.Background(), created.ID, dockerclient.ContainerRemoveOptions{Force: true}); removeErr != nil {
+				return fmt.Errorf("failed to start container %s: %v (cleanup failed: %v)", created.ID, err, removeErr)
+			}
+			return fmt.Errorf("failed to start container %s: %v", created.ID, err)
 		}
 		return nil
 	})
