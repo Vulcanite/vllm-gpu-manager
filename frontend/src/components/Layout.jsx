@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Activity, LogOut, Moon, Play, Settings, Sun, X } from 'lucide-react';
+import { Activity, LogOut, Moon, Play, Settings, Sparkles, Sun, X, Network } from 'lucide-react';
 
 const NavItem = ({ to, icon, label }) => {
   const location = useLocation();
@@ -14,7 +14,7 @@ const NavItem = ({ to, icon, label }) => {
   );
 };
 
-export const Layout = ({ authRequired = false, children, notice, systemError, onDismissNotice, onLogout, onRetry }) => {
+export const Layout = ({ authRequired = false, children, notice, systemError, onDismissNotice, onLogout, onRetry, proxyEnabled = false }) => {
   const [theme, setTheme] = useState(localStorage.getItem('vllm-theme') || 'dark');
 
   useEffect(() => {
@@ -34,7 +34,9 @@ export const Layout = ({ authRequired = false, children, notice, systemError, on
           </div>
           <nav className="nav-menu">
             <NavItem to="/" icon={<Activity size={20} />} label="Dashboard" />
+            <NavItem to="/recommendations" icon={<Sparkles size={20} />} label="Recommended" />
             <NavItem to="/launch" icon={<Play size={20} />} label="Models" />
+            {proxyEnabled && <NavItem to="/routing" icon={<Network size={20} />} label="Routing" />}
             <NavItem to="/settings" icon={<Settings size={20} />} label="Settings" />
           </nav>
         </div>

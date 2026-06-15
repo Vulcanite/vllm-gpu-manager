@@ -18,29 +18,45 @@ import (
 const settingsFile = "settings.json"
 
 type Settings struct {
-	HFCache    string `json:"hf_cache"`
-	HFToken    string `json:"hf_token"`
-	VLLMAPIKey string `json:"vllm_api_key"`
+	HFCache                 string         `json:"hf_cache"`
+	HFToken                 string         `json:"hf_token"`
+	VLLMAPIKey              string         `json:"vllm_api_key"`
+	InferenceAPIKey         string         `json:"inference_api_key"`
+	EnableCUDACompatibility bool           `json:"enable_cuda_compatibility"`
+	HFHubOffline            bool           `json:"hf_hub_offline"`
+	RoutingTable            map[string]int `json:"routing_table"`
 }
 
 type SettingsStatus struct {
-	HFCache       string `json:"hf_cache"`
-	HFTokenSet    bool   `json:"hf_token_set"`
-	VLLMAPIKeySet bool   `json:"vllm_api_key_set"`
-	DiskTotal     uint64 `json:"disk_total"`
-	DiskUsed      uint64 `json:"disk_used"`
-	DiskFree      uint64 `json:"disk_free"`
-	RAMTotal      uint64 `json:"ram_total"`
-	RAMUsed       uint64 `json:"ram_used"`
-	RAMFree       uint64 `json:"ram_free"`
+	HFCache                 string `json:"hf_cache"`
+	HFTokenSet              bool   `json:"hf_token_set"`
+	HFTokenSuffix           string `json:"hf_token_suffix,omitempty"`
+	VLLMAPIKeySet           bool   `json:"vllm_api_key_set"`
+	VLLMAPIKeySuffix        string `json:"vllm_api_key_suffix,omitempty"`
+	InferenceAPIKeySet      bool   `json:"inference_api_key_set"`
+	ProxyEnabled            bool   `json:"proxy_enabled"`
+	EnableCUDACompatibility bool   `json:"enable_cuda_compatibility"`
+	HFHubOffline            bool   `json:"hf_hub_offline"`
+	DiskTotal               uint64 `json:"disk_total"`
+	DiskUsed                uint64 `json:"disk_used"`
+	DiskFree                uint64 `json:"disk_free"`
+	RAMTotal                uint64 `json:"ram_total"`
+	RAMUsed                 uint64 `json:"ram_used"`
+	RAMFree                 uint64 `json:"ram_free"`
 }
 
 type SettingsUpdate struct {
-	HFCache         string
-	HFToken         string
-	ClearHFToken    bool
-	VLLMAPIKey      string
-	ClearVLLMAPIKey bool
+	HFCache                 string
+	HFToken                 string
+	ClearHFToken            bool
+	VLLMAPIKey              string
+	ClearVLLMAPIKey         bool
+	InferenceAPIKey         string
+	ClearInferenceAPIKey    bool
+	EnableCUDACompatibility bool
+	SetCUDACompatibility    bool
+	HFHubOffline            bool
+	SetHFHubOffline         bool
 }
 
 var (
@@ -55,7 +71,23 @@ func defaultSettings() Settings {
 	if err == nil {
 		defaultCache = home + "/.cache/huggingface"
 	}
-	return Settings{HFCache: defaultCache}
+	return Settings{HFCache: defaultCache, RoutingTable: make(map[string]int)}
+}
+
+func cloneRoutingTable(table map[string]int) map[string]int {
+	if table == nil {
+		return make(map[string]int)
+	}
+	clone := make(map[string]int, len(table))
+	for model, port := range table {
+		clone[model] = port
+	}
+	return clone
+}
+
+func cloneSettings(s Settings) Settings {
+	s.RoutingTable = cloneRoutingTable(s.RoutingTable)
+	return s
 }
 
 func normalizeSettings(s Settings) Settings {
@@ -64,6 +96,7 @@ func normalizeSettings(s Settings) Settings {
 		s.HFCache = defaults.HFCache
 	}
 	s.HFCache = api.NormalizeHFHome(s.HFCache)
+	s.RoutingTable = cloneRoutingTable(s.RoutingTable)
 	return s
 }
 
@@ -78,25 +111,34 @@ func loadSettingsFromDisk() Settings {
 	return normalizeSettings(s)
 }
 
+func loadAndCacheSettings() {
+	settingsCache = loadSettingsFromDisk()
+	settingsCacheLoaded = true
+}
+
 func getSettings() Settings {
 	settingsCacheMu.Lock()
 	defer settingsCacheMu.Unlock()
 	if !settingsCacheLoaded {
-		settingsCache = loadSettingsFromDisk()
-		settingsCacheLoaded = true
+		loadAndCacheSettings()
 	}
-	return settingsCache
+	return cloneSettings(settingsCache)
 }
 
 func saveSettings(s Settings) error {
+	settingsCacheMu.Lock()
+	defer settingsCacheMu.Unlock()
+	return saveSettingsLocked(s)
+}
+
+// saveSettingsLocked writes settings to disk and updates the cache. The caller
+// must hold settingsCacheMu.
+func saveSettingsLocked(s Settings) error {
 	s = normalizeSettings(s)
 	data, err := json.Marshal(s)
 	if err != nil {
 		return err
 	}
-
-	settingsCacheMu.Lock()
-	defer settingsCacheMu.Unlock()
 	if err := os.WriteFile(settingsFile, data, 0600); err != nil {
 		return err
 	}
@@ -119,16 +161,37 @@ func getSettingsStatus() SettingsStatus {
 	}
 	ramTotal, ramUsed, ramFree := getSystemRAM()
 	return SettingsStatus{
-		HFCache:       s.HFCache,
-		HFTokenSet:    s.HFToken != "",
-		VLLMAPIKeySet: s.VLLMAPIKey != "",
-		DiskTotal:     total,
-		DiskUsed:      used,
-		DiskFree:      free,
-		RAMTotal:      ramTotal,
-		RAMUsed:       ramUsed,
-		RAMFree:       ramFree,
+		HFCache:                 s.HFCache,
+		HFTokenSet:              s.HFToken != "",
+		HFTokenSuffix:           secretSuffix(s.HFToken),
+		VLLMAPIKeySet:           s.VLLMAPIKey != "",
+		VLLMAPIKeySuffix:        secretSuffix(s.VLLMAPIKey),
+		InferenceAPIKeySet:      s.InferenceAPIKey != "",
+		EnableCUDACompatibility: s.EnableCUDACompatibility,
+		HFHubOffline:            s.HFHubOffline,
+		DiskTotal:               total,
+		DiskUsed:                used,
+		DiskFree:                free,
+		RAMTotal:                ramTotal,
+		RAMUsed:                 ramUsed,
+		RAMFree:                 ramFree,
 	}
+}
+
+func secretSuffix(value string) string {
+	if value == "" {
+		return ""
+	}
+	if len(value) <= 4 {
+		return value
+	}
+	return value[len(value)-4:]
+}
+
+func getSettingsStatusWithProxy(proxyEnabled bool) SettingsStatus {
+	status := getSettingsStatus()
+	status.ProxyEnabled = proxyEnabled
+	return status
 }
 
 func updateSettings(req SettingsUpdate) (Settings, error) {
@@ -143,6 +206,14 @@ func updateSettings(req SettingsUpdate) (Settings, error) {
 	}
 	if req.ClearVLLMAPIKey && vllmAPIKey != "" {
 		return Settings{}, newAppError(http.StatusBadRequest, "Cannot set and clear the vLLM API key in the same request")
+	}
+
+	inferenceAPIKey, err := normalizeVLLMAPIKey(req.InferenceAPIKey)
+	if err != nil {
+		return Settings{}, err
+	}
+	if req.ClearInferenceAPIKey && inferenceAPIKey != "" {
+		return Settings{}, newAppError(http.StatusBadRequest, "Cannot set and clear the Inference API key in the same request")
 	}
 
 	stat, err := os.Stat(hfCache)
@@ -161,9 +232,13 @@ func updateSettings(req SettingsUpdate) (Settings, error) {
 	}
 
 	s := Settings{
-		HFCache:    hfCache,
-		HFToken:    current.HFToken,
-		VLLMAPIKey: current.VLLMAPIKey,
+		HFCache:                 hfCache,
+		HFToken:                 current.HFToken,
+		VLLMAPIKey:              current.VLLMAPIKey,
+		InferenceAPIKey:         current.InferenceAPIKey,
+		EnableCUDACompatibility: current.EnableCUDACompatibility,
+		HFHubOffline:            current.HFHubOffline,
+		RoutingTable:            current.RoutingTable,
 	}
 	if req.ClearHFToken {
 		s.HFToken = ""
@@ -174,6 +249,17 @@ func updateSettings(req SettingsUpdate) (Settings, error) {
 		s.VLLMAPIKey = ""
 	} else if vllmAPIKey != "" {
 		s.VLLMAPIKey = vllmAPIKey
+	}
+	if req.ClearInferenceAPIKey {
+		s.InferenceAPIKey = ""
+	} else if inferenceAPIKey != "" {
+		s.InferenceAPIKey = inferenceAPIKey
+	}
+	if req.SetCUDACompatibility {
+		s.EnableCUDACompatibility = req.EnableCUDACompatibility
+	}
+	if req.SetHFHubOffline {
+		s.HFHubOffline = req.HFHubOffline
 	}
 
 	if err := saveSettings(s); err != nil {
@@ -188,6 +274,51 @@ func normalizeVLLMAPIKey(value string) (string, error) {
 		return "", newAppError(http.StatusBadRequest, "vLLM API key cannot contain whitespace")
 	}
 	return key, nil
+}
+
+// upsertRoute adds or updates model→port in the persisted routing table.
+func upsertRoute(model string, port int) {
+	settingsCacheMu.Lock()
+	defer settingsCacheMu.Unlock()
+	if !settingsCacheLoaded {
+		loadAndCacheSettings()
+	}
+	settingsCache.RoutingTable[model] = port
+	_ = saveSettingsLocked(settingsCache)
+}
+
+// removeRouteByPort removes any routing entry whose value equals port.
+func removeRouteByPort(port int) {
+	settingsCacheMu.Lock()
+	defer settingsCacheMu.Unlock()
+	if !settingsCacheLoaded {
+		loadAndCacheSettings()
+	}
+	for model, p := range settingsCache.RoutingTable {
+		if p == port {
+			delete(settingsCache.RoutingTable, model)
+		}
+	}
+	_ = saveSettingsLocked(settingsCache)
+}
+
+// reconcileRoutingTable queries Docker for running vLLM containers and ensures
+// they are present in the routing table. This allows the manager to pick up
+// already-running models after a restart.
+func reconcileRoutingTable() {
+	settings := getSettings()
+	models, err := api.GetActiveModels(settings.VLLMAPIKey)
+	if err != nil {
+		log.Printf("[SETTINGS] failed to reconcile routing table: %v", err)
+		return
+	}
+	for _, m := range models {
+		if m.State == "running" && m.Port != "unknown" {
+			if port, err := strconv.Atoi(m.Port); err == nil {
+				upsertRoute(m.Model, port)
+			}
+		}
+	}
 }
 
 func getSystemRAM() (total uint64, used uint64, free uint64) {

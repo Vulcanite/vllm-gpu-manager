@@ -12,9 +12,11 @@ export const DeployServerCard = ({
   maxGpus,
   noGpuDetected,
   onClearGpuPinning,
+  scaleMaxLen,
   selectedGpuIds,
   setStartKvCacheDType,
   setStartMaxLen,
+  setStartMaxNumSeqs,
   setStartMem,
   setStartModelName,
   setStartParser,
@@ -22,6 +24,7 @@ export const DeployServerCard = ({
   startGpus,
   startKvCacheDType,
   startMaxLen,
+  startMaxNumSeqs,
   startMem,
   startModelName,
   startParser,
@@ -103,7 +106,15 @@ export const DeployServerCard = ({
         <div className="form-grid">
           <div className="form-group">
             <label className="form-label" htmlFor="startMaxLen">Max Context Length</label>
-            <input id="startMaxLen" type="number" className="form-control" value={startMaxLen} onChange={(event) => setStartMaxLen(event.target.value)} placeholder="Model default" />
+            <div className="inline-control max-len-control">
+              <button className="btn btn-outline btn-compact" type="button" onClick={() => scaleMaxLen(0.5)}>
+                /2
+              </button>
+              <input id="startMaxLen" type="number" className="form-control" value={startMaxLen} onChange={(event) => setStartMaxLen(event.target.value)} min="1" />
+              <button className="btn btn-outline btn-compact" type="button" onClick={() => scaleMaxLen(2)}>
+                x2
+              </button>
+            </div>
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor="startKvCacheDType">KV Cache DType</label>
@@ -118,12 +129,26 @@ export const DeployServerCard = ({
         </div>
 
         <div className="form-group">
+          <label className="form-label" htmlFor="startMaxNumSeqs">Max Num Seqs</label>
+          <input
+            id="startMaxNumSeqs"
+            type="number"
+            className="form-control"
+            value={startMaxNumSeqs}
+            onChange={(event) => setStartMaxNumSeqs(event.target.value)}
+            min="1"
+            placeholder="vLLM default"
+          />
+        </div>
+
+        <div className="form-group">
           <label className="form-label" htmlFor="startParser">Tool Call Parser</label>
           <select id="startParser" className="form-control" value={startParser} onChange={(event) => setStartParser(event.target.value)}>
             <option value="">Disabled</option>
             <option value="hermes">hermes</option>
             <option value="llama3_json">llama3_json</option>
             <option value="mistral">mistral</option>
+            <option value="qwen3_coder">qwen3_coder</option>
           </select>
         </div>
 

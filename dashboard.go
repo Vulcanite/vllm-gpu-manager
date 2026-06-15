@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -19,7 +20,7 @@ import (
 
 const dashboardShutdownTimeout = 10 * time.Second
 
-func newDashboardMux() (*http.ServeMux, dashboardAuth) {
+func newDashboardMux(proxyEnabled bool) (*http.ServeMux, dashboardAuth) {
 	mux := http.NewServeMux()
 	auth := newDashboardAuth()
 	apiHandler := func(next http.HandlerFunc) http.HandlerFunc {
@@ -32,35 +33,51 @@ func newDashboardMux() (*http.ServeMux, dashboardAuth) {
 	mux.HandleFunc("/api/auth/status", authHandler(auth.statusHandler))
 	mux.HandleFunc("/api/auth/login", authHandler(auth.loginHandler))
 	mux.HandleFunc("/api/auth/logout", authHandler(auth.logoutHandler))
-	registerAPIRoutes(mux, apiHandler)
+	registerAPIRoutes(mux, apiHandler, proxyEnabled)
 	registerStaticRoutes(mux)
+
+	// Proxy routes
+	if proxyEnabled {
+		mux.HandleFunc("/v1/", inferenceProxyHandler())
+	}
+
 	return mux, auth
 }
 
-func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) http.HandlerFunc) {
+func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) http.HandlerFunc, proxyEnabled bool) {
 	mux.HandleFunc("/api/settings", apiHandler(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			writeJSON(w, getSettingsStatus())
+			writeJSON(w, getSettingsStatusWithProxy(proxyEnabled))
 			return
 		}
 		if r.Method == http.MethodPost {
 			var req struct {
-				HFCache         string `json:"hf_cache"`
-				HFToken         string `json:"hf_token"`
-				ClearHFToken    bool   `json:"clear_hf_token"`
-				VLLMAPIKey      string `json:"vllm_api_key"`
-				ClearVLLMAPIKey bool   `json:"clear_vllm_api_key"`
+				HFCache                 string `json:"hf_cache"`
+				HFToken                 string `json:"hf_token"`
+				ClearHFToken            bool   `json:"clear_hf_token"`
+				VLLMAPIKey              string `json:"vllm_api_key"`
+				ClearVLLMAPIKey         bool   `json:"clear_vllm_api_key"`
+				InferenceAPIKey         string `json:"inference_api_key"`
+				ClearInferenceAPIKey    bool   `json:"clear_inference_api_key"`
+				EnableCUDACompatibility bool   `json:"enable_cuda_compatibility"`
+				HFHubOffline            bool   `json:"hf_hub_offline"`
 			}
 			if !decodeJSONBody(w, r, &req) {
 				return
 			}
 
 			if _, err := updateSettings(SettingsUpdate{
-				HFCache:         req.HFCache,
-				HFToken:         req.HFToken,
-				ClearHFToken:    req.ClearHFToken,
-				VLLMAPIKey:      req.VLLMAPIKey,
-				ClearVLLMAPIKey: req.ClearVLLMAPIKey,
+				HFCache:                 req.HFCache,
+				HFToken:                 req.HFToken,
+				ClearHFToken:            req.ClearHFToken,
+				VLLMAPIKey:              req.VLLMAPIKey,
+				ClearVLLMAPIKey:         req.ClearVLLMAPIKey,
+				InferenceAPIKey:         req.InferenceAPIKey,
+				ClearInferenceAPIKey:    req.ClearInferenceAPIKey,
+				EnableCUDACompatibility: req.EnableCUDACompatibility,
+				SetCUDACompatibility:    true,
+				HFHubOffline:            req.HFHubOffline,
+				SetHFHubOffline:         true,
 			}); err != nil {
 				writeAPIError(w, err)
 				return
@@ -71,8 +88,67 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}))
 
+	if proxyEnabled {
+		mux.HandleFunc("/api/routing", apiHandler(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				table := getSettings().RoutingTable
+				if table == nil {
+					table = make(map[string]int)
+				}
+				writeJSON(w, table)
+				return
+			}
+			if r.Method == http.MethodPost {
+				var table map[string]int
+				if !decodeJSONBody(w, r, &table) {
+					return
+				}
+				s := getSettings()
+				s.RoutingTable = table
+				if err := saveSettings(s); err != nil {
+					writeAPIError(w, err)
+					return
+				}
+				writeJSON(w, map[string]string{"status": "success"})
+				return
+			}
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}))
+	} else {
+		mux.HandleFunc("/api/routing", apiHandler(func(w http.ResponseWriter, r *http.Request) {
+			writeJSONError(w, http.StatusNotFound, "proxy gateway is disabled")
+		}))
+	}
+
 	mux.HandleFunc("/api/config", apiHandler(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, api.LaunchDefaults())
+	}))
+
+	mux.HandleFunc("/api/recommendations", apiHandler(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		limit := 50
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed < 1 {
+				writeJSONError(w, http.StatusBadRequest, "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+		fitOnly := strings.EqualFold(r.URL.Query().Get("fit_only"), "true") || r.URL.Query().Get("fit_only") == "1"
+		recommendations, err := api.RecommendModels(api.RecommendationOptions{
+			UseCase: r.URL.Query().Get("use_case"),
+			FitOnly: fitOnly,
+			Limit:   limit,
+		})
+		if err != nil {
+			writeAPIError(w, err)
+			return
+		}
+		writeJSON(w, recommendations)
 	}))
 
 	mux.HandleFunc("/api/gpus", apiHandler(func(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +161,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 	}))
 
 	mux.HandleFunc("/api/models/active", apiHandler(func(w http.ResponseWriter, r *http.Request) {
-		models, err := api.GetActiveModels()
+		models, err := api.GetActiveModels(getSettings().VLLMAPIKey)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -117,6 +193,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			GPUIDs       string `json:"gpu_ids"`
 			MemUtil      string `json:"mem_util"`
 			MaxLen       string `json:"max_len"`
+			MaxNumSeqs   string `json:"max_num_seqs"`
 			KVCacheDType string `json:"kv_cache_dtype"`
 			ToolParser   string `json:"tool_parser"`
 		}
@@ -124,8 +201,8 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			return
 		}
 
-		log.Printf("[API] /api/models/start requested! Model=%s Port=%d GPUs=%d GPUIDs=%s MemUtil=%s MaxLen=%s KVCacheDType=%s Parser=%s\n",
-			req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.KVCacheDType, req.ToolParser)
+		log.Printf("[API] /api/models/start requested! Model=%s Port=%d GPUs=%d GPUIDs=%s MemUtil=%s MaxLen=%s MaxNumSeqs=%s KVCacheDType=%s Parser=%s\n",
+			req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser)
 
 		_, err := api.RequireDetectedGPUs()
 		if err != nil {
@@ -138,10 +215,15 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		}
 
 		settings := getSettings()
-		if err := api.StartModel(req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.KVCacheDType, req.ToolParser, settings.HFCache, settings.HFToken, settings.VLLMAPIKey); err != nil {
+		hostBindIP := "0.0.0.0"
+		if proxyEnabled {
+			hostBindIP = "127.0.0.1"
+		}
+		if err := api.StartModel(req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP); err != nil {
 			writeAPIError(w, err)
 			return
 		}
+		upsertRoute(req.Model, req.Port)
 		writeJSON(w, map[string]string{"status": "success"})
 	}))
 
@@ -165,6 +247,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			writeAPIError(w, err)
 			return
 		}
+		removeRouteByPort(req.Port)
 		writeJSON(w, map[string]string{"status": "stopped"})
 	}))
 
@@ -326,8 +409,8 @@ func registerStaticRoutes(mux *http.ServeMux) {
 	})
 }
 
-func runDashboard(port string) {
-	mux, auth := newDashboardMux()
+func runDashboard(port string, proxyEnabled bool) {
+	mux, auth := newDashboardMux(proxyEnabled)
 	server := &http.Server{
 		Addr:              ":" + port,
 		Handler:           mux,
@@ -339,11 +422,18 @@ func runDashboard(port string) {
 	if auth.required() {
 		fmt.Println("Dashboard authentication enabled via VLLM_MANAGER_PASSWORD")
 	}
-	fmt.Printf("Starting vllm-manager server on :%s\n", port)
+
+	if err := ensureCerts("server.crt", "server.key"); err != nil {
+		log.Fatalf("failed to generate TLS certificates: %v", err)
+	}
+
+	fmt.Printf("Starting vllm-manager server on :%s (HTTPS)\n", port)
+
+	reconcileRoutingTable()
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- server.ListenAndServe()
+		errCh <- server.ListenAndServeTLS("server.crt", "server.key")
 	}()
 
 	signals := make(chan os.Signal, 1)

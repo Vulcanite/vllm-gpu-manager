@@ -6,9 +6,11 @@ import { Layout } from './components/Layout.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
 import { LaunchModel } from './pages/LaunchModel.jsx';
 import { LoginPage } from './pages/LoginPage.jsx';
+import { RecommendedModels } from './pages/RecommendedModels.jsx';
 import { SettingsPage } from './pages/SettingsPage.jsx';
+import { TrafficRouting } from './pages/TrafficRouting.jsx';
 import { useAutoDismiss } from './hooks/useAutoDismiss.js';
-import { fetchOverview, getAuthStatus, getConfig, getErrorDetail, login, logout, stopModel } from './lib/api.js';
+import { fetchOverview, getAuthStatus, getConfig, getErrorDetail, getSettings, login, logout, stopModel } from './lib/api.js';
 
 const App = () => {
   const [gpus, setGpus] = useState([]);
@@ -27,6 +29,7 @@ const App = () => {
   const [authenticated, setAuthenticated] = useState(false);
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+  const [proxyEnabled, setProxyEnabled] = useState(false);
 
   const notify = useCallback((message, type = 'success') => {
     setNotice({ message, type });
@@ -138,6 +141,14 @@ const App = () => {
         // Static tuning config; LaunchModel falls back to built-in defaults.
       });
 
+    getSettings()
+      .then((res) => {
+        if (!cancelled) setProxyEnabled(!!res.data?.proxy_enabled);
+      })
+      .catch(() => {
+        // If settings fetch fails, keep the default (proxy enabled).
+      });
+
     return () => {
       cancelled = true;
     };
@@ -231,7 +242,7 @@ const App = () => {
     }
 
     return (
-      <Layout authRequired={authRequired} notice={notice} systemError={fetchError} onDismissNotice={() => setNotice(null)} onLogout={handleLogout} onRetry={fetchData}>
+      <Layout authRequired={authRequired} notice={notice} systemError={fetchError} onDismissNotice={() => setNotice(null)} onLogout={handleLogout} onRetry={fetchData} proxyEnabled={proxyEnabled}>
         <Routes>
           <Route
             path="/"
@@ -252,7 +263,9 @@ const App = () => {
             path="/launch"
             element={<LaunchModel gpus={gpus} gpuError={gpuError} downloadedModels={downloadedModels} activeModels={activeModels} launchConfig={launchConfig} fetchData={fetchData} notify={notify} />}
           />
-          <Route path="/settings" element={<SettingsPage fetchData={fetchData} />} />
+          <Route path="/recommendations" element={<RecommendedModels downloadedModels={downloadedModels} />} />
+          {proxyEnabled && <Route path="/routing" element={<TrafficRouting />} />}
+          <Route path="/settings" element={<SettingsPage fetchData={fetchData} proxyEnabled={proxyEnabled} />} />
         </Routes>
       </Layout>
     );

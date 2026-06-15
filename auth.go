@@ -90,7 +90,7 @@ func (a dashboardAuth) loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(req.Password), []byte(a.password)) != 1 {
-		writeJSONError(w, http.StatusUnauthorized, "invalid password")
+		writeJSONError(w, http.StatusUnauthorized, "Invalid Password")
 		return
 	}
 

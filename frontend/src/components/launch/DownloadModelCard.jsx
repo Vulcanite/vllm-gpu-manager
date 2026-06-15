@@ -3,14 +3,14 @@ import { Download } from 'lucide-react';
 import { DownloadProgressPanel } from '../DownloadProgressPanel.jsx';
 
 export const DownloadModelCard = ({
-  activeDownload,
+  activeDownloads,
   checkingInfo,
   downloadError,
   downloading,
   downloadMessage,
   downloadName,
   handleDownload,
-  setActiveDownload,
+  setActiveDownloads,
   setDownloadName,
 }) => {
   return (
@@ -43,14 +43,14 @@ export const DownloadModelCard = ({
           </div>
         </div>
       </form>
-      {activeDownload && (
+      {activeDownloads.map((activeDownload) => (
         <DownloadProgressPanel
           key={activeDownload.name}
           modelName={activeDownload.name}
           expectedSize={activeDownload.expectedSize}
-          onDismiss={() => setActiveDownload(null)}
+          onDismiss={() => setActiveDownloads((prev) => prev.filter((item) => item.name !== activeDownload.name))}
         />
-      )}
+      ))}
     </div>
   );
 };

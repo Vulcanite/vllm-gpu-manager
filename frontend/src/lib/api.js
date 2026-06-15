@@ -11,6 +11,11 @@ export const getErrorDetail = (error, fallback = 'Request failed') => {
 
 export const getConfig = () => axios.get(`${API_BASE}/config`);
 
+export const getRecommendations = ({ useCase = 'general', fitOnly = false, limit = 50 } = {}) => {
+  const params = new URLSearchParams({ use_case: useCase, fit_only: fitOnly ? 'true' : 'false', limit: String(limit) });
+  return axios.get(`${API_BASE}/recommendations?${params.toString()}`);
+};
+
 export const getAuthStatus = () => axios.get(`${API_BASE}/auth/status`);
 
 export const login = (password) => axios.post(`${API_BASE}/auth/login`, { password });
@@ -65,3 +70,7 @@ export const deleteDownloadedModel = (model) => axios.post(`${API_BASE}/models/d
 export const getSettings = () => axios.get(`${API_BASE}/settings`);
 
 export const saveSettings = (payload) => axios.post(`${API_BASE}/settings`, payload);
+
+export const getRoutingTable = () => axios.get(`${API_BASE}/routing`);
+
+export const saveRoutingTable = (payload) => axios.post(`${API_BASE}/routing`, payload);

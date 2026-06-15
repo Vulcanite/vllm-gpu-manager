@@ -55,7 +55,8 @@ func dockerContainerName(summary container.Summary) string {
 
 func listContainers(ctx context.Context, cli *dockerclient.Client) ([]container.Summary, error) {
 	logDockerAPI("container list", "all=true")
-	result, err := cli.ContainerList(ctx, dockerclient.ContainerListOptions{All: true})
+	opts := dockerclient.ContainerListOptions{All: true}
+	result, err := cli.ContainerList(ctx, opts)
 	if err != nil {
 		return nil, err
 	}

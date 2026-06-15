@@ -1,11 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
-	"net/http"
+	"net/netip"
 	"regexp"
 	"sort"
 	"strconv"
@@ -13,7 +15,9 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	dockerclient "github.com/moby/moby/client"
 )
 
@@ -222,6 +226,7 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 		GPUIDs:        "all",
 		MemUtil:       "unknown",
 		MaxLen:        "default",
+		MaxNumSeqs:    "default",
 		KVCacheDType:  "auto",
 		ToolParser:    "disabled",
 		APIUrl:        "unknown",
@@ -249,11 +254,17 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 		if args[i] == "--max-model-len" && i+1 < len(args) {
 			model.MaxLen = args[i+1]
 		}
+		if args[i] == "--max-num-seqs" && i+1 < len(args) {
+			model.MaxNumSeqs = args[i+1]
+		}
 		if args[i] == "--kv-cache-dtype" && i+1 < len(args) {
 			model.KVCacheDType = args[i+1]
 		}
 		if args[i] == "--tool-call-parser" && i+1 < len(args) {
 			model.ToolParser = args[i+1]
+		}
+		if args[i] == "--api-key" && i+1 < len(args) {
+			model.APIKey = args[i+1]
 		}
 	}
 
@@ -303,12 +314,12 @@ func activeModelsNoHealth() ([]ActiveModel, error) {
 	return activeModelsFromContainers(containers), nil
 }
 
-func GetActiveModels() ([]ActiveModel, error) {
+func GetActiveModels(vllmAPIKey string) ([]ActiveModel, error) {
 	models, err := activeModelsNoHealth()
 	if err != nil {
 		return nil, err
 	}
-	healthCheckActiveModels(models)
+	healthCheckActiveModels(models, vllmAPIKey)
 	return models, nil
 }
 
@@ -318,47 +329,31 @@ type activeModelHealthResult struct {
 	maxLen string
 }
 
-func healthCheckActiveModels(models []ActiveModel) {
+var activeModelHealthProbe = dockerActiveModelHealthProbe
+
+func healthCheckActiveModels(models []ActiveModel, fallbackAPIKey string) {
 	ctx, cancel := context.WithTimeout(context.Background(), modelHealthCheckOverallTimeout)
 	defer cancel()
 
 	targets := 0
 	results := make(chan activeModelHealthResult, len(models))
 	for i := range models {
-		if models[i].Port == "unknown" || models[i].State != "running" {
+		if models[i].Port == "unknown" || models[i].State != "running" || models[i].ContainerID == "" {
 			continue
 		}
 		targets++
-		go func(index int, port string, currentMaxLen string) {
-			client := http.Client{Timeout: modelHealthCheckTimeout}
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://localhost:%s/v1/models", port), nil)
-			if err != nil {
-				return
-			}
-			resp, err := client.Do(req)
-			if err != nil {
-				return
-			}
-			defer resp.Body.Close()
-			result := activeModelHealthResult{
-				index: index,
-				ready: resp.StatusCode == http.StatusOK,
-			}
-			if result.ready && currentMaxLen == "default" {
-				var modelResp struct {
-					Data []struct {
-						MaxModelLen int `json:"max_model_len"`
-					} `json:"data"`
-				}
-				if err := json.NewDecoder(resp.Body).Decode(&modelResp); err == nil && len(modelResp.Data) > 0 {
-					result.maxLen = strconv.Itoa(modelResp.Data[0].MaxModelLen)
-				}
-			}
+		effectiveKey := models[i].APIKey
+		if effectiveKey == "" {
+			effectiveKey = fallbackAPIKey
+		}
+		go func(index int, containerID string, port string, currentMaxLen string, apiKey string) {
+			result := activeModelHealthResult{index: index}
+			result.ready, result.maxLen = activeModelHealthProbe(containerID, port, currentMaxLen, apiKey)
 			select {
 			case results <- result:
 			case <-ctx.Done():
 			}
-		}(i, models[i].Port, models[i].MaxLen)
+		}(i, models[i].ContainerID, models[i].Port, models[i].MaxLen, effectiveKey)
 	}
 
 	for i := 0; i < targets; i++ {
@@ -374,6 +369,85 @@ func healthCheckActiveModels(models []ActiveModel) {
 	}
 }
 
+func dockerActiveModelHealthProbe(containerID string, port string, currentMaxLen string, apiKey string) (bool, string) {
+	ready := false
+	maxLen := ""
+	_ = withDockerClient(modelHealthCheckTimeout, func(dCtx context.Context, cli *dockerclient.Client) error {
+		curlArgs := []string{
+			"curl", "-sf",
+			"--max-time", "4",
+			"-o", "/dev/null",
+			"-w", "%{http_code}",
+		}
+		if apiKey != "" {
+			curlArgs = append(curlArgs, "-H", "Authorization: Bearer "+apiKey)
+		}
+		curlArgs = append(curlArgs, fmt.Sprintf("http://127.0.0.1:%s/v1/models", port))
+
+		execCreate, err := cli.ExecCreate(dCtx, containerID, dockerclient.ExecCreateOptions{
+			Cmd:          curlArgs,
+			AttachStdout: true,
+			AttachStderr: false,
+		})
+		if err != nil {
+			return err
+		}
+
+		attach, err := cli.ExecAttach(dCtx, execCreate.ID, dockerclient.ExecAttachOptions{})
+		if err != nil {
+			return err
+		}
+		defer attach.Close()
+
+		var stdoutBuf bytes.Buffer
+		if _, err := stdcopy.StdCopy(&stdoutBuf, io.Discard, attach.Reader); err != nil {
+			return err
+		}
+		attach.Close()
+
+		statusCode := strings.TrimSpace(stdoutBuf.String())
+		ready = statusCode == "200"
+
+		if ready && currentMaxLen == "default" {
+			var bodyBuf bytes.Buffer
+			curlFull := append([]string{
+				"curl", "-sf",
+				"--max-time", "4",
+			}, func() []string {
+				if apiKey != "" {
+					return []string{"-H", "Authorization: Bearer " + apiKey}
+				}
+				return nil
+			}()...)
+			curlFull = append(curlFull, fmt.Sprintf("http://127.0.0.1:%s/v1/models", port))
+
+			execBody, err := cli.ExecCreate(dCtx, containerID, dockerclient.ExecCreateOptions{
+				Cmd:          curlFull,
+				AttachStdout: true,
+				AttachStderr: false,
+			})
+			if err == nil {
+				attachBody, err := cli.ExecAttach(dCtx, execBody.ID, dockerclient.ExecAttachOptions{})
+				if err == nil {
+					defer attachBody.Close()
+					if _, err := stdcopy.StdCopy(&bodyBuf, io.Discard, attachBody.Reader); err == nil {
+						var modelResp struct {
+							Data []struct {
+								MaxModelLen int `json:"max_model_len"`
+							} `json:"data"`
+						}
+						if err := json.NewDecoder(&bodyBuf).Decode(&modelResp); err == nil && len(modelResp.Data) > 0 {
+							maxLen = strconv.Itoa(modelResp.Data[0].MaxModelLen)
+						}
+					}
+				}
+			}
+		}
+		return nil
+	})
+	return ready, maxLen
+}
+
 func GetVLLMContainerNames() ([]string, error) {
 	containers, err := snapshotManagedVLLMContainers()
 	if err != nil {
@@ -382,7 +456,18 @@ func GetVLLMContainerNames() ([]string, error) {
 	return managedContainerNames(containers), nil
 }
 
-func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, kvCacheDType string, toolParser string, hfCache string, hfToken string, vllmAPIKey string) error {
+func normalizeHostBindIP(hostBindIP string) (netip.Addr, error) {
+	hostBindIP = strings.TrimSpace(hostBindIP)
+	if hostBindIP == "" {
+		hostBindIP = "127.0.0.1"
+	}
+	if hostBindIP != "127.0.0.1" && hostBindIP != "0.0.0.0" {
+		return netip.Addr{}, validationError("host bind IP must be 127.0.0.1 or 0.0.0.0")
+	}
+	return netip.MustParseAddr(hostBindIP), nil
+}
+
+func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, kvCacheDType string, toolParser string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string) error {
 	hfCache = NormalizeHFHome(hfCache)
 	if hfCache == "" {
 		return validationError("hugging face cache directory is required")
@@ -400,6 +485,10 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	}
 	if gpus < 1 {
 		return validationError("must specify at least 1 GPU")
+	}
+	hostBindAddr, err := normalizeHostBindIP(hostBindIP)
+	if err != nil {
+		return err
 	}
 
 	lock := getModelOperationLock(hfCache, model)
@@ -427,13 +516,17 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 		return err
 	}
 
+	if _, err := parseMaxNumSeqs(maxNumSeqs); err != nil {
+		return err
+	}
+
 	kvCacheDType, err = normalizeKVCacheDType(kvCacheDType)
 	if err != nil {
 		return err
 	}
 
 	if toolParser != "" {
-		matched, _ := regexp.MatchString(`^[a-zA-Z0-9\-]+$`, toolParser)
+		matched, _ := regexp.MatchString(`^[a-zA-Z0-9_\-]+$`, toolParser)
 		if !matched {
 			return validationError("invalid tool parser format")
 		}
@@ -503,19 +596,30 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	if hfToken != "" {
 		env = append(env, fmt.Sprintf("HF_TOKEN=%s", hfToken))
 	}
+	if enableCUDACompatibility {
+		env = append(env, "VLLM_ENABLE_CUDA_COMPATIBILITY=1")
+	}
+	if hfHubOffline {
+		env = append(env, "HF_HUB_OFFLINE=1")
+	}
 
 	// Warn if the configured image is not present locally.
 	checkVLLMImageExists()
 
 	cmd := []string{
 		"--model", model,
+		"--host", "0.0.0.0",
 		"--tensor-parallel-size", strconv.Itoa(gpus),
 		"--port", strconv.Itoa(port),
 		"--gpu-memory-utilization", memUtil,
+		"--enable-prefix-caching",
 	}
 
 	if maxLen != "" {
 		cmd = append(cmd, "--max-model-len", maxLen)
+	}
+	if maxNumSeqs != "" {
+		cmd = append(cmd, "--max-num-seqs", maxNumSeqs)
 	}
 	if kvCacheDType != "auto" {
 		cmd = append(cmd, "--kv-cache-dtype", kvCacheDType)
@@ -532,6 +636,7 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 			return fmt.Errorf("failed to ensure vLLM image: %v", err)
 		}
 
+		portStr := strconv.Itoa(port)
 		logDockerAPI(
 			"container create",
 			containerName,
@@ -539,23 +644,37 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 			"ipc=host",
 			"runtime=nvidia",
 			"gpus="+gpuFlag,
-			"network=host",
+			"ports="+hostBindAddr.String()+":"+portStr+":"+portStr,
 			"bind="+fmt.Sprintf("%s:/hf_cache", hfCache),
 			"cmd="+strings.Join(cmd, " "),
 		)
+		p, _ := network.ParsePort(portStr + "/tcp")
+		portBinding := network.PortMap{
+			p: []network.PortBinding{
+				{
+					HostIP:   hostBindAddr,
+					HostPort: portStr,
+				},
+			},
+		}
+		exposedPorts := network.PortSet{
+			p: struct{}{},
+		}
+
 		created, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
 			Name: containerName,
 			Config: &container.Config{
-				Image:  vllmImage,
-				Cmd:    cmd,
-				Env:    env,
-				Labels: labels,
+				Image:        vllmImage,
+				Cmd:          cmd,
+				Env:          env,
+				Labels:       labels,
+				ExposedPorts: exposedPorts,
 			},
 			HostConfig: &container.HostConfig{
-				IpcMode:     container.IPCModeHost,
-				Runtime:     "nvidia",
-				NetworkMode: container.NetworkMode("host"),
-				Binds:       []string{fmt.Sprintf("%s:/hf_cache", hfCache)},
+				IpcMode:      container.IPCModeHost,
+				Runtime:      "nvidia",
+				PortBindings: portBinding,
+				Binds:        []string{fmt.Sprintf("%s:/hf_cache", hfCache)},
 				Resources: container.Resources{
 					DeviceRequests: []container.DeviceRequest{dockerDeviceRequest(gpuFlag)},
 				},
@@ -615,12 +734,29 @@ func StopModel(port int) error {
 }
 
 func RemoveModel(containerID string) error {
-	if err := ensureManagedContainer(containerID); err != nil {
-		return err
+	containerID = strings.TrimSpace(containerID)
+	if containerID == "" {
+		return validationError("container id is required")
 	}
+
 	return withDockerClient(execTimeoutShort, func(ctx context.Context, cli *dockerclient.Client) error {
-		logDockerAPI("container remove", containerID, "force=true")
-		if _, err := cli.ContainerRemove(ctx, containerID, dockerclient.ContainerRemoveOptions{Force: true}); err != nil {
+		metadata, err := inspectContainer(ctx, cli, containerID)
+		if err != nil {
+			return fmt.Errorf("failed to inspect container %s: %v", containerID, err)
+		}
+		if !isManagedContainer(containerLabels(metadata)) {
+			return validationError("container %s is not managed by vllm-manager", containerID)
+		}
+		if metadata.State != nil && (metadata.State.Running || metadata.State.Paused || metadata.State.Restarting) {
+			status := string(metadata.State.Status)
+			if status == "" {
+				status = "active"
+			}
+			return validationError("container %s is %s; stop it before removing", containerID, status)
+		}
+
+		logDockerAPI("container remove", containerID, "force=false")
+		if _, err := cli.ContainerRemove(ctx, containerID, dockerclient.ContainerRemoveOptions{}); err != nil {
 			return fmt.Errorf("failed to remove container %s: %v", containerID, err)
 		}
 		return nil
@@ -632,22 +768,10 @@ func RestartModel(containerID string) error {
 		return err
 	}
 	return withDockerClient(execTimeoutLong, func(ctx context.Context, cli *dockerclient.Client) error {
-		metadata, err := inspectContainer(ctx, cli, containerID)
-		if err != nil {
-			return fmt.Errorf("failed to inspect container %s: %v", containerID, err)
-		}
-		if metadata.State != nil && metadata.State.Running {
-			timeout := int(execTimeoutLong.Seconds())
-			logDockerAPI("container restart", containerID)
-			if _, err := cli.ContainerRestart(ctx, containerID, dockerclient.ContainerRestartOptions{Timeout: &timeout}); err != nil {
-				return fmt.Errorf("failed to restart container %s: %v", containerID, err)
-			}
-			return nil
-		}
-
-		logDockerAPI("container start", containerID)
-		if _, err := cli.ContainerStart(ctx, containerID, dockerclient.ContainerStartOptions{}); err != nil {
-			return fmt.Errorf("failed to start container %s: %v", containerID, err)
+		timeout := int(execTimeoutLong.Seconds())
+		logDockerAPI("container restart", containerID)
+		if _, err := cli.ContainerRestart(ctx, containerID, dockerclient.ContainerRestartOptions{Timeout: &timeout}); err != nil {
+			return fmt.Errorf("failed to restart container %s: %v", containerID, err)
 		}
 		return nil
 	})

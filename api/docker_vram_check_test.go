@@ -70,7 +70,25 @@ func TestCheckModelFitsInVRAMRejectsMaxLenAboveModelLimit(t *testing.T) {
 	if err == nil {
 		t.Fatal("CheckModelFitsInVRAM() error=nil, want max len validation error")
 	}
-	if !strings.Contains(err.Error(), "exceeds model's maximum") {
+	if !strings.Contains(err.Error(), "exceeds the selected model's default maximum context length") {
+		t.Fatalf("error=%q, want max length detail", err.Error())
+	}
+}
+
+func TestCheckModelFitsInVRAMRejectsMaxLenAboveModelLimitWithPartialConfig(t *testing.T) {
+	hfCache := t.TempDir()
+	model := "test/partial-config"
+	writeVRAMTestModel(t, hfCache, model, `{"max_position_embeddings": 128}`, 1024)
+
+	err := CheckModelFitsInVRAM(model, hfCache, []GPUInfo{{
+		ID:          0,
+		MemoryTotal: 16 * 1024 * 1024 * 1024,
+		MemoryFree:  16 * 1024 * 1024 * 1024,
+	}}, 1, "0.9", "256", "auto")
+	if err == nil {
+		t.Fatal("CheckModelFitsInVRAM() error=nil, want max len validation error")
+	}
+	if !strings.Contains(err.Error(), "exceeds the selected model's default maximum context length") {
 		t.Fatalf("error=%q, want max length detail", err.Error())
 	}
 }

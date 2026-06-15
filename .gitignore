@@ -1,10 +1,13 @@
 # Local settings and secrets
 settings.json
+test_qwen.py
 
 # Runtime output
 vllm-manager
 vllm-manager.log
 *.log
+server.crt
+server.key
 
 # Go build/test artifacts
 coverage.out
@@ -23,3 +26,4 @@ frontend/.vite/
 graphify-out/
 .agents/
 .codex/
+.opencode/

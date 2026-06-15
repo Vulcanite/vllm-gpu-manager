@@ -13,7 +13,7 @@ func TestCheckModelFitsInVRAM(t *testing.T) {
 	model := "test-model"
 	modelDir := filepath.Join(hfCache, "hub", "models--test-model")
 	os.MkdirAll(modelDir, 0755)
-    
+
 	// Create a sparse file to mock 10GB model weights
 	dummySizeFile := filepath.Join(modelDir, "dummy.bin")
 	f, err := os.Create(dummySizeFile)
@@ -69,7 +69,7 @@ func TestCheckModelFitsInVRAM(t *testing.T) {
 			memUtil:   "0.9",
 			maxLen:    "16384",
 			kvDType:   "auto",
-			wantErr:   "exceeds model's maximum positional encoding length",
+			wantErr:   "exceeds the selected model's default maximum context length",
 		},
 		{
 			name:      "Fails: KV heads not divisible by tensor parallel size",

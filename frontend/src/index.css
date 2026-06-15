@@ -68,11 +68,13 @@ body {
 /* Layout */
 .app-layout {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .sidebar {
   width: 240px;
+  height: 100vh;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border-subtle);
   padding: 2rem 0;
@@ -133,6 +135,7 @@ body {
   flex: 1;
   padding: 3rem;
   overflow-y: auto;
+  min-width: 0;
 }
 
 .sidebar-footer {
@@ -313,7 +316,7 @@ body {
   padding: 0.15rem 0.4rem;
   border-radius: 4px;
   font-size: 0.7rem;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
 }
 
 .metric-row {
@@ -326,7 +329,7 @@ body {
 
 .metric-value {
   color: var(--text-primary);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
 }
 
 .progress-bar-bg {
@@ -452,6 +455,107 @@ body {
 .model-actions {
   display: flex;
   gap: 0.5rem;
+}
+
+.recommendation-header {
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.recommendation-toolbar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.recommendation-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.recommendation-pill-group {
+  justify-content: flex-end;
+}
+
+.recommendation-pill {
+  border-radius: 999px;
+  padding: 0.42rem 0.8rem;
+  text-transform: capitalize;
+}
+
+.recommendation-table-wrap {
+  overflow-x: auto;
+  margin: 0 -0.25rem;
+  padding: 0 0.25rem 0.25rem;
+}
+
+.recommendation-table {
+  min-width: 1040px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.recommendation-row {
+  display: grid;
+  grid-template-columns: minmax(280px, 2fr) 92px 72px 92px 70px 78px 78px 92px 96px 82px 112px;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8rem 0.95rem;
+  background: var(--bg-main);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.recommendation-row:last-child {
+  border-bottom: none;
+}
+
+.recommendation-row:hover {
+  background: var(--bg-card-hover);
+}
+
+.recommendation-table-head {
+  background: var(--bg-card);
+  color: var(--text-tertiary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.recommendation-table-head:hover {
+  background: var(--bg-card);
+}
+
+.recommendation-model-cell {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-family: var(--font-sans);
+}
+
+.recommendation-model-cell .model-name {
+  overflow-wrap: anywhere;
+}
+
+.recommendation-reason {
+  color: var(--text-tertiary);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.recommendation-actions {
+  justify-content: flex-end;
+  flex-shrink: 0;
 }
 
 .model-item-stacked {
@@ -611,6 +715,11 @@ body {
   flex: 1;
 }
 
+.max-len-control .btn {
+  flex-shrink: 0;
+  min-width: 3rem;
+}
+
 select.form-control {
   appearance: none;
   background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2224%22%20height%3D%2224%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23888888%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E");
@@ -702,6 +811,97 @@ select.form-control {
 
 .token-update-field {
   margin-top: 1rem;
+}
+
+.credential-panel {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.credential-panel.no-top-border {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.credential-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.5rem;
+}
+
+.credential-actions,
+.credential-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.credential-actions {
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.credential-status {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-tertiary);
+  background: var(--bg-main);
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+}
+
+.credential-status.active {
+  color: var(--accent-success);
+  border-color: rgba(16, 185, 129, 0.25);
+  background: rgba(16, 185, 129, 0.05);
+}
+
+.credential-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.credential-danger-zone {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.token-generator-control .btn {
+  flex-shrink: 0;
+}
+
+.generated-token-box {
+  padding: 0.75rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.generated-token-row .generated-token-box {
+  flex: 1;
+}
+
+.generated-token-row .btn {
+  flex-shrink: 0;
 }
 
 /* Alerts */
@@ -810,7 +1010,7 @@ select.form-control {
 
 .pill {
   padding: 0.4rem 0.8rem;
-  border-radius: 6px;
+  border-radius: 999px;
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
   cursor: pointer;
@@ -892,10 +1092,14 @@ select.form-control {
 @media (max-width: 768px) {
   .app-layout {
     flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
   }
 
   .sidebar {
     width: 100%;
+    height: auto;
     padding: 1rem 0;
   }
 
@@ -922,4 +1126,22 @@ select.form-control {
     grid-template-columns: 1fr;
     flex-direction: column;
   }
+
+  .recommendation-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .recommendation-toolbar {
+    align-items: stretch;
+  }
+
+  .recommendation-controls {
+    justify-content: flex-start;
+  }
+
+  .recommendation-pill-group {
+    justify-content: flex-start;
+  }
+
 }

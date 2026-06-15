@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { ActiveContainersCard } from '../components/launch/ActiveContainersCard.jsx';
 import { CachedModelsCard } from '../components/launch/CachedModelsCard.jsx';
@@ -18,6 +18,7 @@ const ACTIVE_DOWNLOAD_STORAGE_KEY = 'vllm-manager-active-download';
 const DEFAULT_LAUNCH_CONFIG = {
   model_vram_safety_margin: 1.08,
   default_gpu_memory_utilization: 0.9,
+  default_max_model_len: 32768,
   kv_cache_dtype_options: ['auto', 'fp8', 'fp8_e5m2', 'fp8_e4m3'],
 };
 
@@ -41,6 +42,7 @@ const getKVCacheDTypeBytes = (kvCacheDType, modelDTypeBytes) => {
 export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModels, launchConfig, fetchData, notify }) => {
   const MODEL_VRAM_SAFETY_MARGIN = launchConfig?.model_vram_safety_margin ?? DEFAULT_LAUNCH_CONFIG.model_vram_safety_margin;
   const DEFAULT_GPU_MEMORY_UTILIZATION = launchConfig?.default_gpu_memory_utilization ?? DEFAULT_LAUNCH_CONFIG.default_gpu_memory_utilization;
+  const DEFAULT_MAX_MODEL_LEN = launchConfig?.default_max_model_len ?? DEFAULT_LAUNCH_CONFIG.default_max_model_len;
   const KV_CACHE_DTYPE_OPTIONS = launchConfig?.kv_cache_dtype_options?.length
     ? launchConfig.kv_cache_dtype_options
     : DEFAULT_LAUNCH_CONFIG.kv_cache_dtype_options;
@@ -51,7 +53,8 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     gpus: 1,
     gpuIds: [],
     mem: '0.9',
-    maxLen: '',
+    maxLen: '32768',
+    maxNumSeqs: '',
     kvCacheDType: 'auto',
     parser: '',
   });
@@ -66,6 +69,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const startGpuIds = deployConfig.gpuIds;
   const startMem = deployConfig.mem;
   const startMaxLen = deployConfig.maxLen;
+  const startMaxNumSeqs = deployConfig.maxNumSeqs;
   const startKvCacheDType = deployConfig.kvCacheDType;
   const startParser = deployConfig.parser;
   const [launchError, setLaunchError] = useState('');
@@ -77,13 +81,16 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const [downloadError, setDownloadError] = useState('');
   const [checkingInfo, setCheckingInfo] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const [activeDownload, setActiveDownload] = useState(() => {
+  const [activeDownloads, setActiveDownloads] = useState(() => {
     try {
       const stored = localStorage.getItem(ACTIVE_DOWNLOAD_STORAGE_KEY);
       const parsed = stored ? JSON.parse(stored) : null;
-      return parsed && typeof parsed.name === 'string' ? parsed : null;
+      if (Array.isArray(parsed)) {
+        return parsed.filter((item) => item && typeof item.name === 'string');
+      }
+      return parsed && typeof parsed.name === 'string' ? [parsed] : [];
     } catch {
-      return null;
+      return [];
     }
   });
   const [restartError, setRestartError] = useState('');
@@ -96,6 +103,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const [deletingCache, setDeletingCache] = useState(false);
 
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const gpuList = useMemo(() => gpus || [], [gpus]);
   const noGpuDetected = gpuList.length === 0;
   const gpuUnavailableMessage = gpuError || 'No GPUs detected. Deployment is disabled until nvidia-smi reports at least one GPU.';
@@ -116,16 +124,42 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   useAutoDismiss(deleteCacheError, setDeleteCacheError);
 
   useEffect(() => {
+    const model = searchParams.get('model');
+    const download = searchParams.get('download');
+    if (download) {
+      setDownloadName(download);
+    }
+    if (!model) return;
+
+    const gpuCount = Number(searchParams.get('gpus')) || 1;
+    const gpuIds = (searchParams.get('gpu_ids') || '')
+      .split(',')
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isInteger(value));
+
+    setDeployConfig((prev) => ({
+      ...prev,
+      modelName: model,
+      gpus: gpuCount,
+      gpuIds,
+      mem: searchParams.get('mem_util') || prev.mem,
+      maxLen: searchParams.get('max_len') || prev.maxLen,
+      maxNumSeqs: searchParams.get('max_num_seqs') || prev.maxNumSeqs,
+      kvCacheDType: searchParams.get('kv_cache_dtype') || prev.kvCacheDType,
+    }));
+  }, [searchParams]);
+
+  useEffect(() => {
     try {
-      if (activeDownload) {
-        localStorage.setItem(ACTIVE_DOWNLOAD_STORAGE_KEY, JSON.stringify(activeDownload));
+      if (activeDownloads.length > 0) {
+        localStorage.setItem(ACTIVE_DOWNLOAD_STORAGE_KEY, JSON.stringify(activeDownloads));
       } else {
         localStorage.removeItem(ACTIVE_DOWNLOAD_STORAGE_KEY);
       }
     } catch {
       // Progress persistence is best-effort; polling still works without storage.
     }
-  }, [activeDownload]);
+  }, [activeDownloads]);
 
   const getKVCacheBytesPerGpu = (selectedModel, requestedGpus, maxModelLen, kvCacheDType) => {
     if (!selectedModel || !requestedGpus || !maxModelLen) return 0;
@@ -176,6 +210,12 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     updateDeployConfig('gpuIds', [...selectedGpuIds.slice(0, requestedGpuCount - 1), id]);
   };
 
+  const scaleMaxLen = (factor) => {
+    const current = Number(startMaxLen) || DEFAULT_MAX_MODEL_LEN;
+    const next = Math.max(1, Math.round(current * factor));
+    updateDeployConfig('maxLen', String(next));
+  };
+
   const validateLaunch = () => {
     const gpusToSend = Number(startGpus);
     if (noGpuDetected) return gpuUnavailableMessage;
@@ -196,7 +236,14 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       }
     }
 
-    if (startParser && !/^[a-zA-Z0-9-]+$/.test(startParser)) return 'Tool parser must contain only letters, numbers, and hyphens';
+    if (startMaxNumSeqs) {
+      const maxNumSeqsNum = Number(startMaxNumSeqs);
+      if (Number.isNaN(maxNumSeqsNum) || maxNumSeqsNum <= 0 || !Number.isInteger(maxNumSeqsNum)) {
+        return 'Max num seqs must be a positive integer';
+      }
+    }
+
+    if (startParser && !/^[a-zA-Z0-9_-]+$/.test(startParser)) return 'Tool parser must contain only letters, numbers, underscores, and hyphens';
     if (!KV_CACHE_DTYPE_OPTIONS.includes(startKvCacheDType)) return 'KV cache dtype must be auto, fp8, fp8_e5m2, or fp8_e4m3';
     if (!usesAllGpus && selectedGpuIds.length !== gpusToSend) return `Select exactly ${gpusToSend} GPU${gpusToSend === 1 ? '' : 's'} for pinning.`;
     return '';
@@ -220,6 +267,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       gpu_ids: gpuIdsParam,
       mem_util: startMem !== null && startMem !== undefined ? startMem.toString() : '',
       max_len: startMaxLen ? startMaxLen.toString() : '',
+      max_num_seqs: startMaxNumSeqs ? startMaxNumSeqs.toString() : '',
       kv_cache_dtype: startKvCacheDType,
       tool_parser: startParser || '',
     };
@@ -282,9 +330,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     try {
       await deleteDownloadedModel(modelName);
       setDeleteCacheConfirmModel(null);
-      if (activeDownload?.name === modelName) {
-        setActiveDownload(null);
-      }
+      setActiveDownloads((prev) => prev.filter((item) => item.name !== modelName));
       notify(`Deleted ${modelName} from cache.`);
       fetchData();
     } catch (error) {
@@ -324,11 +370,12 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     setDownloading(true);
     try {
       const res = await downloadModel(downloadConfirmData.model);
-      setActiveDownload({
+      const nextDownload = {
         containerId: res.data?.container_id || '',
         name: downloadConfirmData.model,
         expectedSize: downloadConfirmData.sizeBytes,
-      });
+      };
+      setActiveDownloads((prev) => [nextDownload, ...prev.filter((item) => item.name !== nextDownload.name)]);
       setDownloadMessage('Download started. Progress will update as files appear in the cache.');
       setDownloadName('');
       setDownloadConfirmData(null);
@@ -359,6 +406,8 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
           selectedGpuIds={selectedGpuIds}
           setStartKvCacheDType={(v) => updateDeployConfig('kvCacheDType', v)}
           setStartMaxLen={(v) => updateDeployConfig('maxLen', v)}
+          setStartMaxNumSeqs={(v) => updateDeployConfig('maxNumSeqs', v)}
+          scaleMaxLen={scaleMaxLen}
           setStartMem={(v) => updateDeployConfig('mem', v)}
           setStartModelName={(v) => updateDeployConfig('modelName', v)}
           setStartParser={(v) => updateDeployConfig('parser', v)}
@@ -366,6 +415,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
           startGpus={startGpus}
           startKvCacheDType={startKvCacheDType}
           startMaxLen={startMaxLen}
+          startMaxNumSeqs={startMaxNumSeqs}
           startMem={startMem}
           startModelName={startModelName}
           startParser={startParser}
@@ -377,7 +427,12 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         <ActiveContainersCard
           activeModels={activeModels}
           handleRestart={handleRestart}
+          removing={removing}
           removeError={removeError}
+          requestRemove={(containerId) => {
+            setRemoveError('');
+            setRemoveConfirmId(containerId);
+          }}
           restartingId={restartingId}
           restartError={restartError}
         />
@@ -385,14 +440,14 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
 
       <div className="stack">
         <DownloadModelCard
-          activeDownload={activeDownload}
+          activeDownloads={activeDownloads}
           checkingInfo={checkingInfo}
           downloadError={downloadError}
           downloading={downloading}
           downloadMessage={downloadMessage}
           downloadName={downloadName}
           handleDownload={handleDownload}
-          setActiveDownload={setActiveDownload}
+          setActiveDownloads={setActiveDownloads}
           setDownloadName={setDownloadName}
         />
 

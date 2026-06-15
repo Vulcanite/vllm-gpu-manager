@@ -21,6 +21,7 @@ func TestPrintActiveModelSections(t *testing.T) {
 		GPUs:          "2",
 		MemUtil:       "0.75",
 		MaxLen:        "128000",
+		MaxNumSeqs:    "64",
 		KVCacheDType:  "auto",
 		ToolParser:    "hermes",
 	}})
@@ -32,7 +33,7 @@ func TestPrintActiveModelSections(t *testing.T) {
 		"- Status: running (ready: yes)",
 		"- Serve: http://localhost:8080/v1",
 		"- GPUs: 0,1, tensor parallel 2, memory utilization 0.75",
-		"- Runtime: max length 128000, KV cache auto, parser hermes",
+		"- Runtime: max length 128000, max seqs 64, KV cache auto, parser hermes",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered output missing %q:\n%s", want, rendered)
@@ -89,11 +90,5 @@ func TestRootHelpIncludesDashboardMode(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("help output missing %q:\n%s", want, rendered)
 		}
-	}
-}
-
-func TestCLIFormatBytesUsesSharedFormatter(t *testing.T) {
-	if got, want := formatBytes(1024), api.FormatBytes(1024); got != want {
-		t.Fatalf("formatBytes=%q, want shared formatter %q", got, want)
 	}
 }

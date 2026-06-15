@@ -2,9 +2,6 @@ package api
 
 import (
 	"errors"
-	"net"
-	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -208,29 +205,35 @@ func TestCheckedMulUint64RejectsOverflow(t *testing.T) {
 }
 
 func TestHealthCheckActiveModelsUpdatesReadyAndDefaultMaxLen(t *testing.T) {
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("local listener unavailable: %v", err)
+	original := activeModelHealthProbe
+	type probeArgs struct {
+		containerID   string
+		port          string
+		currentMaxLen string
+		apiKey        string
 	}
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[{"max_model_len":4096}]}`))
-	}))
-	server.Listener = listener
-	server.Start()
-	defer server.Close()
+	argsCh := make(chan probeArgs, 1)
+	activeModelHealthProbe = func(containerID string, port string, currentMaxLen string, apiKey string) (bool, string) {
+		argsCh <- probeArgs{containerID: containerID, port: port, currentMaxLen: currentMaxLen, apiKey: apiKey}
+		return true, "4096"
+	}
+	t.Cleanup(func() {
+		activeModelHealthProbe = original
+	})
 
-	_, port, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
-	if err != nil {
-		t.Fatalf("split test server URL: %v", err)
-	}
 	models := []ActiveModel{{
-		Port:   port,
-		State:  "running",
-		MaxLen: "default",
+		ContainerID: "health-check-test-container",
+		Port:        "12345",
+		State:       "running",
+		MaxLen:      "default",
 	}}
 
-	healthCheckActiveModels(models)
+	healthCheckActiveModels(models, "fallback-key")
+
+	args := <-argsCh
+	if args != (probeArgs{containerID: "health-check-test-container", port: "12345", currentMaxLen: "default", apiKey: "fallback-key"}) {
+		t.Fatalf("probe args=%+v, want test container, port, max len, fallback key", args)
+	}
 
 	if !models[0].IsReady {
 		t.Fatal("model was not marked ready")

@@ -28,6 +28,7 @@ func main() {
 		fs := flag.NewFlagSet("vllm-manager", flag.ExitOnError)
 		fs.Bool("dashboard", false, "Run the web dashboard")
 		port := fs.String("port", defaultDashboardPort, "Port to run the dashboard on")
+		enableProxy := fs.Bool("proxy", false, "Enable the OpenAI-compatible proxy gateway on /v1/")
 		fs.Usage = func() { printRootHelp(os.Stderr) }
 		if err := fs.Parse(os.Args[1:]); err != nil {
 			os.Exit(2)
@@ -36,7 +37,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: dashboard mode does not accept CLI commands: %s\n", strings.Join(fs.Args(), " "))
 			os.Exit(1)
 		}
-		runDashboard(*port)
+		runDashboard(*port, *enableProxy)
 		return
 	}
 

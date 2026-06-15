@@ -23,6 +23,7 @@ type modelKVCacheEstimate struct {
 
 const (
 	defaultGPUMemoryUtilization = 0.9
+	defaultMaxModelLen          = 32768
 	modelVRAMSafetyMargin       = 1.08
 )
 
@@ -37,6 +38,7 @@ var kvCacheDTypeOptions = []string{"auto", "fp8", "fp8_e5m2", "fp8_e4m3"}
 type LaunchConfig struct {
 	ModelVRAMSafetyMargin       float64  `json:"model_vram_safety_margin"`
 	DefaultGPUMemoryUtilization float64  `json:"default_gpu_memory_utilization"`
+	DefaultMaxModelLen          int      `json:"default_max_model_len"`
 	KVCacheDTypeOptions         []string `json:"kv_cache_dtype_options"`
 }
 
@@ -45,6 +47,7 @@ func LaunchDefaults() LaunchConfig {
 	return LaunchConfig{
 		ModelVRAMSafetyMargin:       modelVRAMSafetyMargin,
 		DefaultGPUMemoryUtilization: defaultGPUMemoryUtilization,
+		DefaultMaxModelLen:          defaultMaxModelLen,
 		KVCacheDTypeOptions:         append([]string(nil), kvCacheDTypeOptions...),
 	}
 }
@@ -52,11 +55,15 @@ func LaunchDefaults() LaunchConfig {
 // kvCacheEstimateCache memoizes parsed config.json estimates keyed by config
 // path. Entries are invalidated when the file's mtime changes (e.g. the model is
 // re-downloaded), so a poll of /api/models/downloaded no longer re-reads and
-// re-decodes every model config on every request.
+// re-decodes every model config on every request. Uses LRU-style eviction when
+// the cache exceeds maxEntries to prevent unbounded growth.
 type kvCacheEstimateEntry struct {
-	estimate modelKVCacheEstimate
-	modTime  time.Time
+	estimate   modelKVCacheEstimate
+	modTime    time.Time
+	accessTime time.Time
 }
+
+const kvCacheEstimateMaxEntries = 500
 
 var (
 	kvCacheEstimateCache   = make(map[string]kvCacheEstimateEntry)
@@ -312,6 +319,12 @@ func GetModelKVCacheEstimate(hfCache string, model string) (modelKVCacheEstimate
 		cached, ok := kvCacheEstimateCache[configPath]
 		kvCacheEstimateCacheMu.RUnlock()
 		if ok && cached.modTime.Equal(modTime) {
+			kvCacheEstimateCacheMu.Lock()
+			if entry, found := kvCacheEstimateCache[configPath]; found {
+				entry.accessTime = time.Now()
+				kvCacheEstimateCache[configPath] = entry
+			}
+			kvCacheEstimateCacheMu.Unlock()
 			return cached.estimate, nil
 		}
 	}
@@ -331,19 +344,32 @@ func GetModelKVCacheEstimate(hfCache string, model string) (modelKVCacheEstimate
 		config = textConfig
 	}
 
+	maxModelLen, _ := getConfigInt(
+		config,
+		root,
+		"max_position_embeddings",
+		"max_sequence_length",
+		"max_seq_len",
+		"model_max_length",
+		"seq_length",
+		"n_positions",
+		"sliding_window",
+	)
+	estimate := modelKVCacheEstimate{DefaultMaxModelLen: maxModelLen}
+
 	layers, ok := getConfigInt(config, root, "num_hidden_layers", "n_layer", "num_layers", "num_layers_total")
 	if !ok {
-		return modelKVCacheEstimate{}, validationError("model config does not include num_hidden_layers")
+		return estimate, validationError("model config does not include num_hidden_layers")
 	}
 
 	attentionHeads, ok := getConfigInt(config, root, "num_attention_heads", "n_head", "num_heads")
 	if !ok {
-		return modelKVCacheEstimate{}, validationError("model config does not include num_attention_heads")
+		return estimate, validationError("model config does not include num_attention_heads")
 	}
 
 	hiddenSize, ok := getConfigInt(config, root, "hidden_size", "n_embd", "d_model")
 	if !ok {
-		return modelKVCacheEstimate{}, validationError("model config does not include hidden_size")
+		return estimate, validationError("model config does not include hidden_size")
 	}
 
 	keyValueHeads, ok := getConfigInt(config, root, "num_key_value_heads", "n_kv_head", "num_kv_heads")
@@ -356,7 +382,7 @@ func GetModelKVCacheEstimate(hfCache string, model string) (modelKVCacheEstimate
 		headDim = hiddenSize / attentionHeads
 	}
 	if headDim <= 0 {
-		return modelKVCacheEstimate{}, validationError("model config does not include a usable attention head dimension")
+		return estimate, validationError("model config does not include a usable attention head dimension")
 	}
 
 	dtype := ""
@@ -364,33 +390,36 @@ func GetModelKVCacheEstimate(hfCache string, model string) (modelKVCacheEstimate
 		dtype = value
 	}
 
-	maxModelLen, _ := getConfigInt(
-		config,
-		root,
-		"max_position_embeddings",
-		"max_sequence_length",
-		"max_seq_len",
-		"model_max_length",
-		"seq_length",
-		"n_positions",
-		"sliding_window",
-	)
-
-	estimate := modelKVCacheEstimate{
-		Layers:             layers,
-		KeyValueHeads:      keyValueHeads,
-		HeadDim:            headDim,
-		DTypeBytes:         kvElementBytes(dtype),
-		DefaultMaxModelLen: maxModelLen,
-	}
+	estimate.Layers = layers
+	estimate.KeyValueHeads = keyValueHeads
+	estimate.HeadDim = headDim
+	estimate.DTypeBytes = kvElementBytes(dtype)
 
 	if !modTime.IsZero() {
 		kvCacheEstimateCacheMu.Lock()
-		kvCacheEstimateCache[configPath] = kvCacheEstimateEntry{estimate: estimate, modTime: modTime}
+		evictKVCacheIfNeeded()
+		kvCacheEstimateCache[configPath] = kvCacheEstimateEntry{estimate: estimate, modTime: modTime, accessTime: time.Now()}
 		kvCacheEstimateCacheMu.Unlock()
 	}
 
 	return estimate, nil
+}
+
+func evictKVCacheIfNeeded() {
+	for len(kvCacheEstimateCache) >= kvCacheEstimateMaxEntries {
+		var oldest string
+		oldestTime := time.Now()
+		for path, entry := range kvCacheEstimateCache {
+			if entry.accessTime.Before(oldestTime) {
+				oldestTime = entry.accessTime
+				oldest = path
+			}
+		}
+		if oldest == "" {
+			return
+		}
+		delete(kvCacheEstimateCache, oldest)
+	}
 }
 
 func parseGPUMemoryUtilization(memUtil string) (float64, error) {
@@ -417,6 +446,19 @@ func parseMaxModelLen(maxLen string) (int, error) {
 		return 0, validationError("max context length must be a positive integer")
 	}
 	return maxLenNum, nil
+}
+
+func parseMaxNumSeqs(maxNumSeqs string) (int, error) {
+	maxNumSeqs = strings.TrimSpace(maxNumSeqs)
+	if maxNumSeqs == "" {
+		return 0, nil
+	}
+
+	maxNumSeqsNum, err := strconv.Atoi(maxNumSeqs)
+	if err != nil || maxNumSeqsNum <= 0 {
+		return 0, validationError("max num seqs must be a positive integer")
+	}
+	return maxNumSeqsNum, nil
 }
 
 func normalizeKVCacheDType(kvCacheDType string) (string, error) {
@@ -566,10 +608,12 @@ func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, 
 		estimate.DTypeBytes = kvCacheDTypeElementBytes(kvCacheDType, estimate.DTypeBytes)
 	}
 
-	// Fix #5: reject max-model-len that exceeds the model's rope/positional limit
-	if kvEstimateOK && requestedMaxLen > 0 && estimate.DefaultMaxModelLen > 0 && requestedMaxLen > estimate.DefaultMaxModelLen {
+	// Reject max-model-len that exceeds the model's rope/positional limit.
+	// This only needs DefaultMaxModelLen, so enforce it even when other KV
+	// metadata is incomplete and KV memory estimation has to be skipped.
+	if requestedMaxLen > 0 && estimate.DefaultMaxModelLen > 0 && requestedMaxLen > estimate.DefaultMaxModelLen {
 		return validationError(
-			"requested max_model_len %d exceeds model's maximum positional encoding length %d; vLLM will refuse to start",
+			"requested max_model_len %d exceeds the selected model's default maximum context length %d; reduce max_model_len before launching",
 			requestedMaxLen,
 			estimate.DefaultMaxModelLen,
 		)

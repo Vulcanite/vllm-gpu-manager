@@ -45,6 +45,7 @@ func newCLICommand(out io.Writer, errOut io.Writer) *cobra.Command {
 	cmd.SetErr(errOut)
 	cmd.Flags().Bool("dashboard", false, "run the web dashboard")
 	cmd.Flags().String("port", defaultDashboardPort, "dashboard port")
+	cmd.Flags().Bool("proxy", false, "enable the /v1/ proxy gateway")
 	cmd.PersistentFlags().BoolVar(&opts.JSON, "json", false, "print JSON output")
 	cmd.AddCommand(
 		newGPUCommand(opts),
@@ -58,6 +59,7 @@ func newCLICommand(out io.Writer, errOut io.Writer) *cobra.Command {
 		"  vllm-manager model start Qwen/Qwen2.5-7B-Instruct --port 8080 --gpus 1",
 		"  vllm-manager settings get",
 		"  vllm-manager --dashboard --port 9090",
+		"  vllm-manager --dashboard --port 9090 --proxy",
 	}, "\n")
 	return cmd
 }
@@ -130,11 +132,30 @@ func newModelCommand(opts *cliOptions) *cobra.Command {
 				return cliModelProgress(args, *opts)
 			},
 		},
+		newModelRecommendCommand(opts),
 		newModelStartCommand(opts),
 		newModelStopCommand(opts),
 		newModelRestartCommand(opts),
 		newModelRemoveCommand(opts),
 	)
+	return cmd
+}
+
+func newModelRecommendCommand(opts *cliOptions) *cobra.Command {
+	var useCase string
+	var fitOnly bool
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "recommend",
+		Short: "Recommend models for the detected GPUs",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return cliModelRecommend(*opts, useCase, fitOnly, limit)
+		},
+	}
+	cmd.Flags().StringVar(&useCase, "use-case", "general", "recommendation use case: general, coding, reasoning, chat, vision")
+	cmd.Flags().BoolVar(&fitOnly, "fit-only", false, "hide models that do not fit")
+	cmd.Flags().IntVar(&limit, "limit", 20, "maximum recommendations to print")
 	return cmd
 }
 
@@ -144,6 +165,7 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 	var gpuIDs string
 	var memUtil string
 	var maxLen string
+	var maxNumSeqs string
 	var kvCacheDType string
 	var toolParser string
 	cmd := &cobra.Command{
@@ -158,9 +180,10 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 				return errors.New("model start requires --gpus")
 			}
 			settings := getSettings()
-			if err := api.StartModel(args[0], port, gpus, gpuIDs, memUtil, maxLen, kvCacheDType, toolParser, settings.HFCache, settings.HFToken, settings.VLLMAPIKey); err != nil {
+			if err := api.StartModel(args[0], port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, kvCacheDType, toolParser, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, "0.0.0.0"); err != nil {
 				return err
 			}
+			upsertRoute(args[0], port)
 			return printMutationResult(*opts, map[string]interface{}{
 				"status":         "started",
 				"model":          args[0],
@@ -168,6 +191,8 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 				"gpus":           gpus,
 				"gpu_ids":        emptyAsDefault(gpuIDs, "auto"),
 				"mem_util":       memUtil,
+				"max_len":        emptyAsDefault(maxLen, "default"),
+				"max_num_seqs":   emptyAsDefault(maxNumSeqs, "default"),
 				"kv_cache_dtype": kvCacheDType,
 			})
 		},
@@ -177,6 +202,7 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 	cmd.Flags().StringVar(&gpuIDs, "gpu-ids", "", "comma-separated GPU IDs")
 	cmd.Flags().StringVar(&memUtil, "mem-util", "0.9", "vLLM GPU memory utilization")
 	cmd.Flags().StringVar(&maxLen, "max-len", "", "vLLM max model length")
+	cmd.Flags().StringVar(&maxNumSeqs, "max-num-seqs", "", "vLLM max number of sequences")
 	cmd.Flags().StringVar(&kvCacheDType, "kv-cache-dtype", "auto", "vLLM KV cache dtype: auto, fp8, fp8_e5m2, fp8_e4m3")
 	cmd.Flags().StringVar(&toolParser, "tool-parser", "", "vLLM tool call parser")
 	return cmd
@@ -315,11 +341,13 @@ func newSettingsSetCommand(opts *cliOptions) *cobra.Command {
 	var clearHFToken bool
 	var vllmAPIKey string
 	var clearVLLMAPIKey bool
+	var enableCUDACompatibility bool
+	var hfHubOffline bool
 	cmd := &cobra.Command{
 		Use:   "set",
 		Short: "Update local settings",
 		Args:  cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if strings.TrimSpace(hfCache) == "" {
 				return errors.New("settings set requires --hf-cache")
 			}
@@ -330,20 +358,26 @@ func newSettingsSetCommand(opts *cliOptions) *cobra.Command {
 				return errors.New("settings set cannot use --vllm-api-key and --clear-vllm-api-key together")
 			}
 			settings, err := updateSettings(SettingsUpdate{
-				HFCache:         hfCache,
-				HFToken:         hfToken,
-				ClearHFToken:    clearHFToken,
-				VLLMAPIKey:      vllmAPIKey,
-				ClearVLLMAPIKey: clearVLLMAPIKey,
+				HFCache:                 hfCache,
+				HFToken:                 hfToken,
+				ClearHFToken:            clearHFToken,
+				VLLMAPIKey:              vllmAPIKey,
+				ClearVLLMAPIKey:         clearVLLMAPIKey,
+				EnableCUDACompatibility: enableCUDACompatibility,
+				SetCUDACompatibility:    cmd.Flags().Changed("vllm-cuda-compatibility"),
+				HFHubOffline:            hfHubOffline,
+				SetHFHubOffline:         cmd.Flags().Changed("hf-hub-offline"),
 			})
 			if err != nil {
 				return err
 			}
 			return printMutationResult(*opts, map[string]interface{}{
-				"status":           "saved",
-				"hf_cache":         settings.HFCache,
-				"hf_token_set":     settings.HFToken != "",
-				"vllm_api_key_set": settings.VLLMAPIKey != "",
+				"status":                    "saved",
+				"hf_cache":                  settings.HFCache,
+				"hf_token_set":              settings.HFToken != "",
+				"vllm_api_key_set":          settings.VLLMAPIKey != "",
+				"enable_cuda_compatibility": settings.EnableCUDACompatibility,
+				"hf_hub_offline":            settings.HFHubOffline,
 			})
 		},
 	}
@@ -352,6 +386,8 @@ func newSettingsSetCommand(opts *cliOptions) *cobra.Command {
 	cmd.Flags().BoolVar(&clearHFToken, "clear-hf-token", false, "clear stored Hugging Face token")
 	cmd.Flags().StringVar(&vllmAPIKey, "vllm-api-key", "", "vLLM OpenAI-compatible API key")
 	cmd.Flags().BoolVar(&clearVLLMAPIKey, "clear-vllm-api-key", false, "clear stored vLLM API key")
+	cmd.Flags().BoolVar(&enableCUDACompatibility, "vllm-cuda-compatibility", false, "set VLLM_ENABLE_CUDA_COMPATIBILITY=1 on new serving containers")
+	cmd.Flags().BoolVar(&hfHubOffline, "hf-hub-offline", false, "set HF_HUB_OFFLINE=1 on new serving containers")
 	return cmd
 }
 
@@ -368,8 +404,8 @@ func cliGPUList(opts cliOptions) error {
 		rows = append(rows, []string{
 			strconv.Itoa(gpu.ID),
 			gpu.Name,
-			formatBytes(gpu.MemoryUsed),
-			formatBytes(gpu.MemoryTotal),
+			api.FormatBytes(gpu.MemoryUsed),
+			api.FormatBytes(gpu.MemoryTotal),
 			fmt.Sprintf("%.1f%%", gpu.MemoryPercent),
 			fmt.Sprintf("%d%%", gpu.GPUUtilization),
 		})
@@ -382,7 +418,7 @@ func cliModelActive(args []string, opts cliOptions) error {
 	if len(args) != 0 {
 		return fmt.Errorf("model active does not accept arguments: %s", strings.Join(args, " "))
 	}
-	models, err := api.GetActiveModels()
+	models, err := api.GetActiveModels(getSettings().VLLMAPIKey)
 	if err != nil {
 		return err
 	}
@@ -419,7 +455,7 @@ func cliModelCached(args []string, opts cliOptions) error {
 			model.Name,
 			model.Size,
 			zeroAsDash(model.DefaultMaxModelLen),
-			formatBytes(model.KVCacheBytesPerToken),
+			api.FormatBytes(model.KVCacheBytesPerToken),
 		})
 	}
 	printMarkdownTable(os.Stdout, []string{"Model", "Size", "Default Max Len", "KV Bytes/Token"}, rows)
@@ -439,7 +475,7 @@ func cliModelInfo(args []string, opts cliOptions) error {
 	}
 	printMarkdownTable(os.Stdout, []string{"Model", "Size", "Downloads", "Likes"}, [][]string{{
 		info.Model,
-		formatBytes(uint64(info.SizeBytes)),
+		api.FormatBytes(uint64(info.SizeBytes)),
 		strconv.Itoa(info.Downloads),
 		strconv.Itoa(info.Likes),
 	}})
@@ -480,7 +516,38 @@ func cliModelProgress(args []string, opts cliOptions) error {
 	if opts.JSON {
 		return printJSON(payload)
 	}
-	printMarkdownTable(os.Stdout, []string{"Model", "Downloaded"}, [][]string{{args[0], formatBytes(size)}})
+	printMarkdownTable(os.Stdout, []string{"Model", "Downloaded"}, [][]string{{args[0], api.FormatBytes(size)}})
+	return nil
+}
+
+func cliModelRecommend(opts cliOptions, useCase string, fitOnly bool, limit int) error {
+	recommendations, err := api.RecommendModels(api.RecommendationOptions{
+		UseCase: useCase,
+		FitOnly: fitOnly,
+		Limit:   limit,
+	})
+	if err != nil {
+		return err
+	}
+	if opts.JSON {
+		return printJSON(recommendations)
+	}
+	rows := make([][]string, 0, len(recommendations.Models))
+	for _, model := range recommendations.Models {
+		rows = append(rows, []string{
+			model.Name,
+			model.ParameterCount,
+			model.Quantization,
+			model.FitLevel,
+			fmt.Sprintf("%.1f", model.Score),
+			fmt.Sprintf("%.0f", model.ModelQuality),
+			fmt.Sprintf("%d", model.RecommendedGPUs),
+			model.RecommendedGPUIDs,
+			fmt.Sprintf("%.1f GiB", model.RequiredGBPerGPU),
+			model.Reason,
+		})
+	}
+	printMarkdownTable(os.Stdout, []string{"Model", "Params", "Quant", "Fit", "Score", "Quality", "GPUs", "GPU IDs", "Need/GPU", "Reason"}, rows)
 	return nil
 }
 
@@ -496,12 +563,14 @@ func cliSettingsGet(args []string, opts cliOptions) error {
 		{"HF Cache", status.HFCache},
 		{"HF Token", setUnset(status.HFTokenSet)},
 		{"vLLM API Key", setUnset(status.VLLMAPIKeySet)},
-		{"Cache Disk Used", formatBytes(status.DiskUsed)},
-		{"Cache Disk Total", formatBytes(status.DiskTotal)},
-		{"Cache Disk Free", formatBytes(status.DiskFree)},
-		{"System RAM Used", formatBytes(status.RAMUsed)},
-		{"System RAM Total", formatBytes(status.RAMTotal)},
-		{"System RAM Free", formatBytes(status.RAMFree)},
+		{"vLLM CUDA Compatibility", enabledDisabled(status.EnableCUDACompatibility)},
+		{"HF Hub Offline", enabledDisabled(status.HFHubOffline)},
+		{"Cache Disk Used", api.FormatBytes(status.DiskUsed)},
+		{"Cache Disk Total", api.FormatBytes(status.DiskTotal)},
+		{"Cache Disk Free", api.FormatBytes(status.DiskFree)},
+		{"System RAM Used", api.FormatBytes(status.RAMUsed)},
+		{"System RAM Total", api.FormatBytes(status.RAMTotal)},
+		{"System RAM Free", api.FormatBytes(status.RAMFree)},
 	})
 	return nil
 }
@@ -584,8 +653,9 @@ func printActiveModelSections(w io.Writer, models []api.ActiveModel) {
 			markdownLine(model.GPUs),
 			markdownLine(model.MemUtil),
 		)
-		fmt.Fprintf(&b, "- Runtime: max length %s, KV cache %s, parser %s\n",
+		fmt.Fprintf(&b, "- Runtime: max length %s, max seqs %s, KV cache %s, parser %s\n",
 			markdownLine(model.MaxLen),
+			markdownLine(emptyAsDefault(model.MaxNumSeqs, "default")),
 			markdownLine(emptyAsDefault(model.KVCacheDType, "auto")),
 			markdownLine(model.ToolParser),
 		)
@@ -674,10 +744,6 @@ func escapeCells(cells []string) []string {
 	return escaped
 }
 
-func formatBytes(bytes uint64) string {
-	return api.FormatBytes(bytes)
-}
-
 func zeroAsDash(value int) string {
 	if value == 0 {
 		return "-"
@@ -704,4 +770,11 @@ func setUnset(value bool) string {
 		return "set"
 	}
 	return "unset"
+}
+
+func enabledDisabled(value bool) string {
+	if value {
+		return "enabled"
+	}
+	return "disabled"
 }

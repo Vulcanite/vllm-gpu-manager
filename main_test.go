@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -34,6 +35,11 @@ func TestShouldRunDashboard(t *testing.T) {
 		{
 			name: "explicit dashboard flag",
 			args: []string{"--dashboard"},
+			want: true,
+		},
+		{
+			name: "single dash dashboard flag",
+			args: []string{"-dashboard"},
 			want: true,
 		},
 		{
@@ -168,6 +174,18 @@ func TestSaveSettingsWritesPrivateFileAndUpdatesCache(t *testing.T) {
 	}
 }
 
+func TestGetSettingsReturnsCopiedRoutingTable(t *testing.T) {
+	resetSettingsCache(t, Settings{HFCache: t.TempDir(), RoutingTable: map[string]int{"model-a": 8000}}, true)
+
+	settings := getSettings()
+	settings.RoutingTable["model-b"] = 8001
+
+	settings = getSettings()
+	if _, ok := settings.RoutingTable["model-b"]; ok {
+		t.Fatalf("getSettings returned shared routing table: %+v", settings.RoutingTable)
+	}
+}
+
 func TestUpdateSettingsUpdatesAndClearsVLLMAPIKey(t *testing.T) {
 	cacheDir := t.TempDir()
 	resetSettingsCache(t, Settings{HFCache: cacheDir, HFToken: "hf-old", VLLMAPIKey: "old-key"}, true)
@@ -187,6 +205,48 @@ func TestUpdateSettingsUpdatesAndClearsVLLMAPIKey(t *testing.T) {
 	}
 	if updated.VLLMAPIKey != "" {
 		t.Fatalf("VLLMAPIKey=%q, want cleared", updated.VLLMAPIKey)
+	}
+}
+
+func TestUpdateSettingsUpdatesServingEnvironmentToggles(t *testing.T) {
+	cacheDir := t.TempDir()
+	resetSettingsCache(t, Settings{HFCache: cacheDir}, true)
+	t.Chdir(t.TempDir())
+
+	updated, err := updateSettings(SettingsUpdate{
+		HFCache:                 cacheDir,
+		EnableCUDACompatibility: true,
+		SetCUDACompatibility:    true,
+		HFHubOffline:            true,
+		SetHFHubOffline:         true,
+	})
+	if err != nil {
+		t.Fatalf("updateSettings() error=%v", err)
+	}
+	if !updated.EnableCUDACompatibility || !updated.HFHubOffline {
+		t.Fatalf("settings=%+v, want serving environment toggles enabled", updated)
+	}
+
+	updated, err = updateSettings(SettingsUpdate{HFCache: cacheDir})
+	if err != nil {
+		t.Fatalf("preserve updateSettings() error=%v", err)
+	}
+	if !updated.EnableCUDACompatibility || !updated.HFHubOffline {
+		t.Fatalf("settings=%+v, want omitted toggles preserved", updated)
+	}
+
+	updated, err = updateSettings(SettingsUpdate{
+		HFCache:                 cacheDir,
+		EnableCUDACompatibility: false,
+		SetCUDACompatibility:    true,
+		HFHubOffline:            false,
+		SetHFHubOffline:         true,
+	})
+	if err != nil {
+		t.Fatalf("disable updateSettings() error=%v", err)
+	}
+	if updated.EnableCUDACompatibility || updated.HFHubOffline {
+		t.Fatalf("settings=%+v, want serving environment toggles disabled", updated)
 	}
 }
 
@@ -218,11 +278,55 @@ func TestCorsMiddlewareRejectsBadOrigin(t *testing.T) {
 	}
 }
 
+func TestInferenceProxyRewritesAuthorizationForBackend(t *testing.T) {
+	backendAuth := make(chan string, 1)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendAuth <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer backend.Close()
+
+	idx := strings.LastIndex(backend.URL, ":")
+	if idx == -1 {
+		t.Fatalf("backend URL %q does not contain port", backend.URL)
+	}
+	port := backend.URL[idx+1:]
+	resetSettingsCache(t, Settings{
+		HFCache:         t.TempDir(),
+		VLLMAPIKey:      "vllm-secret",
+		InferenceAPIKey: "inference-secret",
+		RoutingTable:    map[string]int{"test-model": mustAtoi(t, port)},
+	}, true)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model"}`))
+	req.Header.Set("Authorization", "Bearer inference-secret")
+	rr := httptest.NewRecorder()
+
+	inferenceProxyHandler()(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d: %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := <-backendAuth; got != "Bearer vllm-secret" {
+		t.Fatalf("backend Authorization=%q, want vLLM key", got)
+	}
+}
+
+func mustAtoi(t *testing.T, value string) int {
+	t.Helper()
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		t.Fatalf("parse int %q: %v", value, err)
+	}
+	return parsed
+}
+
 func TestSettingsEndpointReturnsStatus(t *testing.T) {
 	t.Setenv("VLLM_MANAGER_PASSWORD", "")
 	cacheDir := t.TempDir()
-	resetSettingsCache(t, Settings{HFCache: cacheDir, HFToken: "hf-secret", VLLMAPIKey: "api-secret"}, true)
-	mux, _ := newDashboardMux()
+	resetSettingsCache(t, Settings{HFCache: cacheDir, HFToken: "hf-secret", VLLMAPIKey: "api-secret", EnableCUDACompatibility: true, HFHubOffline: true}, true)
+	mux, _ := newDashboardMux(true)
 	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
 	rr := httptest.NewRecorder()
 
@@ -235,14 +339,17 @@ func TestSettingsEndpointReturnsStatus(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&status); err != nil {
 		t.Fatalf("decode settings status: %v", err)
 	}
-	if status.HFCache != cacheDir || !status.HFTokenSet || !status.VLLMAPIKeySet {
+	if status.HFCache != cacheDir || !status.HFTokenSet || !status.VLLMAPIKeySet || !status.EnableCUDACompatibility || !status.HFHubOffline {
 		t.Fatalf("status=%+v, want cache and secret flags", status)
+	}
+	if status.HFTokenSuffix != "cret" || status.VLLMAPIKeySuffix != "cret" {
+		t.Fatalf("status suffixes=%q/%q, want last four characters", status.HFTokenSuffix, status.VLLMAPIKeySuffix)
 	}
 }
 
 func TestSPAFallbackServesIndex(t *testing.T) {
 	t.Setenv("VLLM_MANAGER_PASSWORD", "")
-	mux, _ := newDashboardMux()
+	mux, _ := newDashboardMux(true)
 	req := httptest.NewRequest(http.MethodGet, "/settings", nil)
 	rr := httptest.NewRecorder()
 

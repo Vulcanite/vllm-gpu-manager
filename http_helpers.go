@@ -38,6 +38,20 @@ func writeJSONError(w http.ResponseWriter, status int, detail string) {
 	json.NewEncoder(w).Encode(map[string]string{"detail": detail})
 }
 
+func redactSensitive(detail string) string {
+	detail = strings.Replace(detail, "hf_token", "<redacted>", -1)
+	parts := strings.Fields(detail)
+	for i, p := range parts {
+		if strings.HasPrefix(p, "HF_TOKEN=") {
+			parts[i] = "HF_TOKEN=<redacted>"
+		}
+		if (p == "--api-key" || (p == "-H" && i+1 < len(parts) && strings.HasPrefix(parts[i+1], "Authorization:"))) && i+1 < len(parts) {
+			parts[i+1] = "<redacted>"
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func writeAPIError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	if api.IsValidationError(err) {
@@ -47,6 +61,7 @@ func writeAPIError(w http.ResponseWriter, err error) {
 	if errors.As(err, &appErr) {
 		status = appErr.Status
 	}
+	log.Printf("[API] error: %s -> %d", redactSensitive(err.Error()), status)
 	writeJSONError(w, status, err.Error())
 }
 

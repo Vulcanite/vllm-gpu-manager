@@ -18,12 +18,14 @@ type ActiveModel struct {
 	GPUIDs        string `json:"gpu_ids"`
 	MemUtil       string `json:"mem_util"`
 	MaxLen        string `json:"max_len"`
+	MaxNumSeqs    string `json:"max_num_seqs"`
 	KVCacheDType  string `json:"kv_cache_dtype"`
 	ToolParser    string `json:"tool_parser"`
 	APIUrl        string `json:"api_url"`
 	IsReady       bool   `json:"is_ready"`
 	Arch          string `json:"arch"`
 	State         string `json:"state"`
+	APIKey        string `json:"-"`
 }
 
 type DownloadedModel struct {
