@@ -28,7 +28,7 @@ The manager currently targets:
 - NVIDIA GPUs
 - Docker
 - NVIDIA Container Toolkit
-- `vllm/vllm-openai:latest`
+- Configurable vLLM Docker image (defaults to `vllm/vllm-openai:latest`)
 - Hugging Face Hub model cache layout
 - internal/private network usage
 
@@ -44,7 +44,7 @@ Runtime operations are performed through host integrations:
 
 - `nvidia-smi` for GPU status
 - Docker Engine API for container listing, inspection, creation, start, stop, restart, removal, image inspection, and image pulls
-- Detached Docker Engine API containers using `vllm/vllm-openai:latest` and entrypoint `hf` for model downloads
+- Detached Docker Engine API containers using the configured vLLM Docker image and entrypoint `hf` for model downloads
 - A short-lived Docker Engine API `alpine` container mounted at `<hf-home>/hub:/target` for cached model deletion
 
 Managed Docker containers are labelled so the app can distinguish serving containers from download containers:
@@ -62,7 +62,7 @@ Runtime host:
 - `nvidia-smi` available in `PATH`
 - Docker installed and running
 - NVIDIA Container Toolkit configured so Docker supports `--runtime nvidia`
-- `vllm/vllm-openai:latest` available locally or pullable by Docker
+- Configured vLLM Docker image (defaults to `vllm/vllm-openai:latest`) available locally or pullable by Docker
 - `alpine` image available locally for cached model deletion
 
 Build machine:
@@ -165,6 +165,7 @@ You can also use the helper script:
 Logs are written to `vllm-manager.log` when started through `manager.sh`.
 
 Pass `--proxy` to `manager.sh start` or set `VLLM_MANAGER_PROXY=1` to enable the built-in `/v1/` proxy gateway from the helper script.
+The helper writes `.vllm-manager.state` with the last port, proxy mode, and dashboard password so `./manager.sh restart` reuses them. The state file is written with `0600` permissions but stores the password as plaintext.
 
 Dashboard mode handles `SIGINT` and `SIGTERM` with a graceful HTTP shutdown timeout, so in-flight API requests get a short window to finish during restarts.
 
@@ -179,7 +180,8 @@ Settings are stored in `settings.json` beside the binary.
   "vllm_api_key": "token-...",
   "inference_api_key": "optional-key-for-proxy",
   "enable_cuda_compatibility": false,
-  "hf_hub_offline": false
+  "hf_hub_offline": false,
+  "vllm_image": "vllm/vllm-openai:latest"
 }
 ```
 
@@ -189,7 +191,7 @@ Settings are stored in `settings.json` beside the binary.
 
 `vllm_api_key` is optional. When set, the manager passes it to newly created serving containers as `--api-key <value>`, so OpenAI-compatible clients must send `Authorization: Bearer <value>`. Existing containers keep the command they were created with; recreate a container to apply a changed key.
 
-`enable_cuda_compatibility` sets `VLLM_ENABLE_CUDA_COMPATIBILITY=1` on newly created serving containers. `hf_hub_offline` sets `HF_HUB_OFFLINE=1` on newly created serving containers and should only be enabled after required models are cached locally. Existing containers keep their original environment; recreate a container to apply changed serving environment settings.
+`enable_cuda_compatibility` sets `VLLM_ENABLE_CUDA_COMPATIBILITY=1` on newly created serving containers. `hf_hub_offline` sets `HF_HUB_OFFLINE=1` on newly created serving containers and should only be enabled after required models are cached locally. `vllm_image` is optional and specifies the Docker image name and tag used to run serving containers and model downloads (defaults to `vllm/vllm-openai:latest`). When set online, it verifies the tag exists on Docker Hub. Existing containers keep their original environment/image; recreate a container to apply changed settings.
 
 Example:
 
@@ -216,7 +218,7 @@ docker run -d --rm \
   -v <hf_cache>:/hf_cache \
   -e HF_HOME=/hf_cache \
   --entrypoint hf \
-  vllm/vllm-openai:latest \
+  <vllm_image> \
   download <model>
 ```
 
@@ -249,7 +251,7 @@ docker run -d \
   --network host \
   -v <hf_cache>:/hf_cache \
   -e HF_HOME=/hf_cache \
-  vllm/vllm-openai:latest \
+  <vllm_image> \
   --model <model> \
   --tensor-parallel-size <gpus> \
   --port <port> \

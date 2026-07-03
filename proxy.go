@@ -10,12 +10,14 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -23,18 +25,10 @@ func inferenceProxyHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		settings := getSettings()
 
-		// Auth
-		if settings.InferenceAPIKey != "" {
-			authHeader := r.Header.Get("Authorization")
-			expected := "Bearer " + settings.InferenceAPIKey
-			if authHeader != expected {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-		} else {
-			// If no key is set, maybe deny? The prompt implies it's required if set, or just requires it.
-			// "Protect the proxied '/v1/' endpoints using a dedicated 'Authorization: Bearer <API_KEY>' check."
-			// We can enforce it if the settings have it.
+		username, ok := authenticateProxyUser(r.Header.Get("Authorization"), settings.ProxyUsers)
+		if !ok {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
 		}
 
 		// Path allowlist
@@ -70,10 +64,14 @@ func inferenceProxyHandler() http.HandlerFunc {
 			return
 		}
 
-		if settings.VLLMAPIKey != "" {
-			r.Header.Set("Authorization", "Bearer "+settings.VLLMAPIKey)
+		upstreamKey := settings.VLLMAPIKey
+		if upstreamKey != "" {
+			r.Header.Set("Authorization", "Bearer "+upstreamKey)
 		} else {
 			r.Header.Del("Authorization")
+		}
+		if r.Method == http.MethodPost {
+			incrementProxyUserRequestCount(username)
 		}
 
 		targetURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
@@ -112,6 +110,9 @@ func handleV1Models(w http.ResponseWriter, table map[string]int) {
 func ensureCerts(certFile, keyFile string) error {
 	if _, err := os.Stat(certFile); err == nil {
 		if _, err := os.Stat(keyFile); err == nil {
+			if subject, subjErr := readCertSubject(certFile); subjErr == nil && subject != "vLLM GPU Manager" {
+				log.Printf("[PROXY] warning: %s exists but is not a vllm-manager certificate (subject=%q); leaving in place. Regenerate manually if you want a vllm-manager cert.", certFile, subject)
+			}
 			return nil
 		}
 	}
@@ -159,6 +160,10 @@ func ensureCerts(certFile, keyFile string) error {
 	}
 	pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
 	certOut.Close()
+	// Certificate is public; 0644 is appropriate.
+	if err := os.Chmod(certFile, 0644); err != nil {
+		return err
+	}
 
 	keyOut, err := os.Create(keyFile)
 	if err != nil {
@@ -166,6 +171,53 @@ func ensureCerts(certFile, keyFile string) error {
 	}
 	pem.Encode(keyOut, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
 	keyOut.Close()
+	// Private key must never be world-readable; tighten to 0600 even if umask
+	// produced a more permissive default.
+	if err := os.Chmod(keyFile, 0600); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+// readCertSubject returns the Organization of the first CERTIFICATE PEM block
+// in the file, or an error if it cannot be parsed.
+func readCertSubject(certFile string) (string, error) {
+	data, err := os.ReadFile(certFile)
+	if err != nil {
+		return "", err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return "", fmt.Errorf("no PEM block found in %s", certFile)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", err
+	}
+	if len(cert.Subject.Organization) == 0 {
+		return "", nil
+	}
+	return cert.Subject.Organization[0], nil
+}
+
+// lookupServerAPIKeyByPort returns the per-server API key whose container
+// name ends with the given port suffix (e.g. "vllm-llama-3-8080" → 8080).
+// Returns an empty string when no override is set, in which case the caller
+// should fall back to the global VLLM API key. We accept a nil map and a
+// non-positive port to keep the call site simple.
+func lookupServerAPIKeyByPort(keys map[string]string, port int) string {
+	if port <= 0 || len(keys) == 0 {
+		return ""
+	}
+	suffix := fmt.Sprintf("-%d", port)
+	for name, key := range keys {
+		if key == "" {
+			continue
+		}
+		if strings.HasSuffix(name, suffix) {
+			return key
+		}
+	}
+	return ""
 }
