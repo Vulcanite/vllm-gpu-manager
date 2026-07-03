@@ -147,13 +147,18 @@ func downloadContainerModelName(vc managedVLLMContainer) string {
 
 // downloadContainerForModel returns the name of an in-progress download
 // container for the given model, or "" if none, scanning a snapshot taken by
-// the caller.
+// the caller. The comparison is done on the lowercased normalized model key
+// so case-different labels are treated as the same download.
 func downloadContainerForModel(containers []managedVLLMContainer, model string) string {
+	want := NormalizeModelKeyForMatch(model)
+	if want == "" {
+		return ""
+	}
 	for _, vc := range containers {
 		if !strings.HasPrefix(vc.name, "vllm-download-") {
 			continue
 		}
-		if downloadContainerModelName(vc) == model {
+		if NormalizeModelKeyForMatch(downloadContainerModelName(vc)) == want {
 			return vc.name
 		}
 	}
@@ -169,9 +174,8 @@ func ensureModelCacheCanBeDeleted(model string) error {
 	for _, activeModel := range activeModelsFromContainers(containers) {
 		if activeModel.Model == model {
 			return validationError(
-				"cannot delete %s because container %s still references it; remove the container first",
+				"Cannot delete %s because a container still references it; Remove the container first",
 				model,
-				activeModel.ContainerID,
 			)
 		}
 	}
@@ -234,7 +238,7 @@ func DeleteDownloadedModel(model string, hfCache string) error {
 		return validationError("model cache path is not a directory: %s", modelPath)
 	}
 
-	if err := withDockerClient(0, func(ctx context.Context, cli *dockerclient.Client) error {
+	if err := withDockerClient(execTimeoutStart, func(ctx context.Context, cli *dockerclient.Client) error {
 		if err := ensureDockerImage(ctx, cli, "alpine"); err != nil {
 			return fmt.Errorf("failed to ensure alpine image: %v", err)
 		}
@@ -315,6 +319,54 @@ func GetDownloadedModels(hfCache string) ([]DownloadedModel, error) {
 	return models, nil
 }
 
+// hubModelDirName converts a user-visible model identifier
+// ("Qwen/Qwen2.5-7B-Instruct") into the directory name used by the
+// Hugging Face hub cache ("models--Qwen--Qwen2.5-7B-Instruct"). It is the
+// inverse of the conversion done in GetDownloadedModels.
+func hubModelDirName(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return ""
+	}
+	return "models--" + strings.ReplaceAll(model, "/", "--")
+}
+
+// IsModelDownloaded reports whether a model identifier is already present in
+// the configured Hugging Face cache. It returns (true, on-disk size in bytes,
+// nil) on a hit, (false, 0, nil) on a miss, and an error only if the cache
+// directory itself is misconfigured (not if the model is merely absent).
+func IsModelDownloaded(model string, hfCache string) (bool, uint64, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return false, 0, nil
+	}
+	hubPath := HFHubPath(hfCache)
+	if hubPath == "" || hubPath == "hub" {
+		// HFHubPath returns "hub" (relative) when NormalizeHFHome yielded
+		// the empty string. That's a misconfiguration, not a normal miss.
+		return false, 0, fmt.Errorf("hugging face cache directory is required")
+	}
+	dirName := hubModelDirName(model)
+	if dirName == "" || dirName == "models--" {
+		return false, 0, nil
+	}
+	dir := filepath.Join(hubPath, dirName)
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, 0, nil
+		}
+		return false, 0, err
+	}
+	if !info.IsDir() {
+		return false, 0, nil
+	}
+	// Reuse the existing size calculator so the on-disk bytes include all
+	// the snapshots/weights/refs the cache may have.
+	bytes, _, sizeErr := GetDownloadedModelSize(hfCache, model)
+	return true, bytes, sizeErr
+}
+
 func DownloadModel(model string, hfCache string, hfToken string) (string, error) {
 	hfCache = NormalizeHFHome(hfCache)
 	if hfCache == "" {
@@ -328,6 +380,18 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 	lock := getModelOperationLock(hfCache, model)
 	lock.Lock()
 	defer lock.Unlock()
+
+	// Refuse to re-download a model that is already fully present on disk.
+	// Re-running the downloader would still be a no-op (HF skips existing
+	// files) but it spins up a Docker container and burns time, and the
+	// user almost certainly hit "Download" by accident. Callers that
+	// genuinely need to force a fresh download should remove the cache
+	// directory first.
+	if downloaded, _, err := IsModelDownloaded(model, hfCache); err != nil {
+		return "", fmt.Errorf("failed to check existing cache: %v", err)
+	} else if downloaded {
+		return "", validationError("%s is already downloaded; remove it first if you want to re-download", model)
+	}
 
 	containers, err := snapshotManagedVLLMContainers()
 	if err != nil {
@@ -349,22 +413,22 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 		containerKindLabel:    containerKindDownload,
 		containerModelLabel:   model,
 	}
-	env := []string{"HF_HOME=/hf_cache"}
+	env := []string{"HF_HOME=/hf_cache", "PYTHONUNBUFFERED=1"}
 
 	if hfToken != "" {
 		env = append(env, fmt.Sprintf("HF_TOKEN=%s", hfToken))
 	}
 
 	var containerID string
-	err = withDockerClient(0, func(ctx context.Context, cli *dockerclient.Client) error {
-		if err := ensureDockerImage(ctx, cli, vllmImage); err != nil {
+	err = withDockerClient(execTimeoutStart, func(ctx context.Context, cli *dockerclient.Client) error {
+		if err := ensureDockerImage(ctx, cli, VLLMImage); err != nil {
 			return fmt.Errorf("failed to ensure vLLM image: %v", err)
 		}
 
 		logDockerAPI(
 			"container create",
 			containerName,
-			"image="+vllmImage,
+			"image="+VLLMImage,
 			"network=host",
 			"autoremove=true",
 			"entrypoint=hf",
@@ -374,7 +438,7 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 		created, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
 			Name: containerName,
 			Config: &container.Config{
-				Image:      vllmImage,
+				Image:      VLLMImage,
 				Entrypoint: []string{"hf"},
 				Cmd:        []string{"download", model},
 				Env:        env,

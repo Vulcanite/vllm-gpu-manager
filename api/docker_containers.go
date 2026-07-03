@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/netip"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,8 +21,7 @@ import (
 )
 
 const (
-	modelHealthCheckTimeout        = 5 * time.Second
-	modelHealthCheckOverallTimeout = 5 * time.Second
+	modelHealthCheckTimeout = 5 * time.Second
 )
 
 func validateGPUSelection(gpus int, gpuIds string) (string, []GPUInfo, error) {
@@ -314,6 +312,28 @@ func activeModelsNoHealth() ([]ActiveModel, error) {
 	return activeModelsFromContainers(containers), nil
 }
 
+// GetManagedModelByContainerID returns metadata for a managed serving
+// container without running readiness probes. containerID may be a full ID,
+// short ID, or container name.
+func GetManagedModelByContainerID(containerID string) (ActiveModel, bool, error) {
+	containerID = strings.TrimSpace(strings.TrimPrefix(containerID, "/"))
+	if containerID == "" {
+		return ActiveModel{}, false, validationError("container id is required")
+	}
+	containers, err := snapshotManagedVLLMContainers()
+	if err != nil {
+		return ActiveModel{}, false, err
+	}
+	for _, vc := range containers {
+		if vc.id != containerID && !strings.HasPrefix(vc.id, containerID) && vc.name != containerID {
+			continue
+		}
+		model, ok := buildActiveModel(vc)
+		return model, ok, nil
+	}
+	return ActiveModel{}, false, nil
+}
+
 func GetActiveModels(vllmAPIKey string) ([]ActiveModel, error) {
 	models, err := activeModelsNoHealth()
 	if err != nil {
@@ -321,6 +341,26 @@ func GetActiveModels(vllmAPIKey string) ([]ActiveModel, error) {
 	}
 	healthCheckActiveModels(models, vllmAPIKey)
 	return models, nil
+}
+
+// GetServerContainersUsingAPIKey returns managed server containers, running or
+// stopped, that were launched with the given vLLM --api-key.
+func GetServerContainersUsingAPIKey(apiKey string) ([]ActiveModel, error) {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil, nil
+	}
+	models, err := activeModelsNoHealth()
+	if err != nil {
+		return nil, err
+	}
+	var matches []ActiveModel
+	for _, model := range models {
+		if model.APIKey == apiKey {
+			matches = append(matches, model)
+		}
+	}
+	return matches, nil
 }
 
 type activeModelHealthResult struct {
@@ -332,16 +372,12 @@ type activeModelHealthResult struct {
 var activeModelHealthProbe = dockerActiveModelHealthProbe
 
 func healthCheckActiveModels(models []ActiveModel, fallbackAPIKey string) {
-	ctx, cancel := context.WithTimeout(context.Background(), modelHealthCheckOverallTimeout)
-	defer cancel()
-
-	targets := 0
 	results := make(chan activeModelHealthResult, len(models))
+	launched := 0
 	for i := range models {
 		if models[i].Port == "unknown" || models[i].State != "running" || models[i].ContainerID == "" {
 			continue
 		}
-		targets++
 		effectiveKey := models[i].APIKey
 		if effectiveKey == "" {
 			effectiveKey = fallbackAPIKey
@@ -351,20 +387,17 @@ func healthCheckActiveModels(models []ActiveModel, fallbackAPIKey string) {
 			result.ready, result.maxLen = activeModelHealthProbe(containerID, port, currentMaxLen, apiKey)
 			select {
 			case results <- result:
-			case <-ctx.Done():
+			default:
 			}
 		}(i, models[i].ContainerID, models[i].Port, models[i].MaxLen, effectiveKey)
+		launched++
 	}
 
-	for i := 0; i < targets; i++ {
-		select {
-		case result := <-results:
-			models[result.index].IsReady = result.ready
-			if result.maxLen != "" {
-				models[result.index].MaxLen = result.maxLen
-			}
-		case <-ctx.Done():
-			return
+	for i := 0; i < launched; i++ {
+		result := <-results
+		models[result.index].IsReady = result.ready
+		if result.maxLen != "" {
+			models[result.index].MaxLen = result.maxLen
 		}
 	}
 }
@@ -467,7 +500,111 @@ func normalizeHostBindIP(hostBindIP string) (netip.Addr, error) {
 	return netip.MustParseAddr(hostBindIP), nil
 }
 
-func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, kvCacheDType string, toolParser string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string) error {
+// allowedToolParsers is the explicit allowlist of vLLM tool-call parsers. vLLM
+// passes this string to its built-in registry and forwards it to Python, so
+// anything outside this set is rejected as a hardening measure.
+//
+// Updating this list:
+//
+//  1. Check the vLLM release notes or source for new parser names.
+//  2. Add the new parser to this map using the exact name vLLM expects.
+//  3. Update the dashboard's LaunchDefaults (which reads this map) so the
+//     frontend <select> stays in sync.
+//  4. Bump the version label (vllm-manager.version) when releasing.
+//
+// The list is exposed to the dashboard via LaunchDefaults so the <select> in
+// DeployServerCard cannot drift from the backend.
+var allowedToolParsers = map[string]struct{}{
+	"hermes":             {},
+	"llama3_json":        {},
+	"mistral":            {},
+	"granite":            {},
+	"granite4":           {},
+	"granite-20b-fc":     {},
+	"internlm":           {},
+	"jamba":              {},
+	"pythonic":           {},
+	"python_tool":        {},
+	"jinja":              {},
+	"guidance":           {},
+	"lm_format_enforcer": {},
+	"xlam":               {},
+	"qwen2":              {},
+	"qwen3_coder":        {},
+	"qwen3_xml":          {},
+	"llama4_pythonic":    {},
+	"deepseek_v3":        {},
+	"deepseek_v31":       {},
+	"openai":             {},
+	"kimi_k2":            {},
+	"hunyuan_a13b":       {},
+	"cohere_command3":    {},
+	"longcat":            {},
+	"glm45":              {},
+	"glm47":              {},
+	"functiongemma":      {},
+	"olmo3":              {},
+	"gigachat3":          {},
+	"apertus":            {},
+}
+
+// allowedToolParserNames returns the allowlist as a sorted slice so the
+// dashboard can render an authoritative <select> without re-listing the values
+// in two places.
+func allowedToolParserNames() []string {
+	names := make([]string, 0, len(allowedToolParsers))
+	for name := range allowedToolParsers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// normalizeModelKey lowercases the user-visible model identifier and
+// validates it against a conservative character class. It is used as the key
+// for routing table lookups so case-different labels do not produce
+// duplicate entries. It returns "" for invalid input; callers should treat
+// that as a validation error.
+func normalizeModelKey(model string) string {
+	model = strings.TrimSpace(strings.ToLower(model))
+	if model == "" || len(model) > 128 {
+		return ""
+	}
+	for i, r := range model {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '.' || r == '_' || r == '-' || r == '/':
+		default:
+			return ""
+		}
+		if i == 0 && (r == '.' || r == '_' || r == '-' || r == '/') {
+			return ""
+		}
+	}
+	return model
+}
+
+// NormalizeModelKey validates and canonicalizes a user-supplied model routing
+// key.
+func NormalizeModelKey(model string) string {
+	return normalizeModelKey(model)
+}
+
+// NormalizeModelKeyForMatch is a looser, internal matcher used for comparing
+// against values already stored in Docker labels. It lowercases and trims the
+// input and returns "" for empty results, but it does NOT enforce the strict
+// character class — labels written by older versions may contain characters
+// we no longer accept on input, and we still want to match them.
+func NormalizeModelKeyForMatch(model string) string {
+	model = strings.TrimSpace(strings.ToLower(model))
+	if model == "" {
+		return ""
+	}
+	return model
+}
+
+func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, kvCacheDType string, toolParser string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, serverAPIKey string) error {
 	hfCache = NormalizeHFHome(hfCache)
 	if hfCache == "" {
 		return validationError("hugging face cache directory is required")
@@ -475,6 +612,21 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	vllmAPIKey = strings.TrimSpace(vllmAPIKey)
 	if strings.IndexFunc(vllmAPIKey, unicode.IsSpace) >= 0 {
 		return validationError("vLLM API key cannot contain whitespace")
+	}
+	// serverAPIKey is the optional per-container override. The caller is
+	// expected to set either the global vllmAPIKey or a per-server key,
+	// but never both. We forward whichever is set as `--api-key` so vLLM
+	// applies the more specific secret.
+	serverAPIKey = strings.TrimSpace(serverAPIKey)
+	if strings.IndexFunc(serverAPIKey, unicode.IsSpace) >= 0 {
+		return validationError("per-server API key cannot contain whitespace")
+	}
+	if vllmAPIKey != "" && serverAPIKey != "" {
+		return validationError("vLLM API key and per-server API key are mutually exclusive; pass at most one")
+	}
+	effectiveAPIKey := vllmAPIKey
+	if serverAPIKey != "" {
+		effectiveAPIKey = serverAPIKey
 	}
 	model = strings.TrimSpace(model)
 	if model == "" {
@@ -506,6 +658,33 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 		return validationError("cannot start %s because it is currently being downloaded by %s", model, downloadName)
 	}
 
+	// Compute the container name up front so we can reject the request before
+	// doing a net.Listen probe when a stale (stopped or running) container
+	// already owns this name/port. Without this guard the user sees a
+	// generic "container already exists" error only after the listener check
+	// passes for a stopped container, which is confusing.
+	shortName := model
+	if idx := strings.LastIndex(model, "/"); idx != -1 {
+		shortName = model[idx+1:]
+	}
+	shortName = sanitizeDockerNamePart(shortName)
+	containerName := fmt.Sprintf("vllm-%s-%d", shortName, port)
+
+	// Reject if any managed vLLM container (stopped or running) already
+	// claims the target port via its name suffix. We use the suffix because
+	// the port alone could be reused by a foreign process — the user
+	// explicitly reserved `-<port>` for vllm-manager containers, and a
+	// stale one would collide on the next start.
+	portSuffix := fmt.Sprintf("-%d", port)
+	for _, vc := range snapshot {
+		if vc.name == containerName {
+			return validationError("port %d is reserved by existing container %q (%s); remove it first or pick a different port", port, vc.name, vc.state)
+		}
+		if strings.HasSuffix(vc.name, portSuffix) && vc.name != containerName {
+			return validationError("port %d is reserved by existing container %q (%s) with a different model name; remove it first or pick a different port", port, vc.name, vc.state)
+		}
+	}
+
 	utilization, err := parseGPUMemoryUtilization(memUtil)
 	if err != nil {
 		return err
@@ -526,25 +705,30 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	}
 
 	if toolParser != "" {
-		matched, _ := regexp.MatchString(`^[a-zA-Z0-9_\-]+$`, toolParser)
-		if !matched {
-			return validationError("invalid tool parser format")
+		if _, ok := allowedToolParsers[toolParser]; !ok {
+			allowed := allowedToolParserNames()
+			return validationError("unsupported tool parser %q; allowed: %s", toolParser, strings.Join(allowed, ", "))
 		}
 	}
 
-	// Check if port is already in use
+	// Check if port is already in use and hold the listener until the container
+	// is created.  This eliminates the TOCTOU window where another process could
+	// bind the port between the listen check and ContainerCreate.  If container
+	// creation fails the listener is closed and the port is released; if it
+	// succeeds the listener is closed after the container is started (the
+	// container's own port binding takes over).
 	l, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return validationError("port %d is already in use", port)
 	}
-	l.Close()
-
-	shortName := model
-	if idx := strings.LastIndex(model, "/"); idx != -1 {
-		shortName = model[idx+1:]
+	listenerOpen := true
+	closeReservedPort := func() {
+		if listenerOpen {
+			_ = l.Close()
+			listenerOpen = false
+		}
 	}
-	shortName = sanitizeDockerNamePart(shortName)
-	containerName := fmt.Sprintf("vllm-%s-%d", shortName, port)
+	defer closeReservedPort()
 
 	gpuFlag, selectedGPUs, err := validateGPUSelection(gpus, gpuIds)
 	if err != nil {
@@ -576,20 +760,16 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 		return err
 	}
 
-	// Deploy should create a fresh container only. Existing containers keep their
-	// original GPU devices, env, image, and volume mounts, so restarting them here
-	// can silently run a different configuration than the user requested.
-	for _, vc := range snapshot {
-		if vc.name == containerName {
-			return validationError("container %q already exists; remove it before deploying a new model with this name and port", containerName)
-		}
-	}
+	// The container-name / port-suffix collision check moved earlier in
+	// StartModel so the user gets a clear "reserved by existing container"
+	// error before we even probe the listener.
 
 	labels := map[string]string{
-		"app":                 "vllm-manager",
-		managedContainerLabel: "true",
-		containerKindLabel:    containerKindServer,
-		containerModelLabel:   model,
+		"app":                  "vllm-manager",
+		managedContainerLabel:  "true",
+		containerKindLabel:     containerKindServer,
+		containerModelLabel:    model,
+		"vllm-manager.version": managerVersion,
 	}
 	env := []string{"HF_HOME=/hf_cache"}
 
@@ -627,12 +807,12 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	if toolParser != "" {
 		cmd = append(cmd, "--tool-call-parser", toolParser, "--enable-auto-tool-choice")
 	}
-	if vllmAPIKey != "" {
-		cmd = append(cmd, "--api-key", vllmAPIKey)
+	if effectiveAPIKey != "" {
+		cmd = append(cmd, "--api-key", effectiveAPIKey)
 	}
 
-	return withDockerClient(0, func(ctx context.Context, cli *dockerclient.Client) error {
-		if err := ensureDockerImage(ctx, cli, vllmImage); err != nil {
+	return withDockerClient(execTimeoutStart, func(ctx context.Context, cli *dockerclient.Client) error {
+		if err := ensureDockerImage(ctx, cli, VLLMImage); err != nil {
 			return fmt.Errorf("failed to ensure vLLM image: %v", err)
 		}
 
@@ -640,16 +820,21 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 		logDockerAPI(
 			"container create",
 			containerName,
-			"image="+vllmImage,
+			"image="+VLLMImage,
 			"ipc=host",
 			"runtime=nvidia",
 			"gpus="+gpuFlag,
 			"ports="+hostBindAddr.String()+":"+portStr+":"+portStr,
+			"network=bridge",
 			"bind="+fmt.Sprintf("%s:/hf_cache", hfCache),
 			"cmd="+strings.Join(cmd, " "),
 		)
 		p, _ := network.ParsePort(portStr + "/tcp")
-		portBinding := network.PortMap{
+		var portBinding network.PortMap
+		exposedPorts := network.PortSet{}
+		networkMode := container.NetworkMode("bridge")
+
+		portBinding = network.PortMap{
 			p: []network.PortBinding{
 				{
 					HostIP:   hostBindAddr,
@@ -657,14 +842,14 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 				},
 			},
 		}
-		exposedPorts := network.PortSet{
+		exposedPorts = network.PortSet{
 			p: struct{}{},
 		}
 
 		created, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
 			Name: containerName,
 			Config: &container.Config{
-				Image:        vllmImage,
+				Image:        VLLMImage,
 				Cmd:          cmd,
 				Env:          env,
 				Labels:       labels,
@@ -673,6 +858,7 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 			HostConfig: &container.HostConfig{
 				IpcMode:      container.IPCModeHost,
 				Runtime:      "nvidia",
+				NetworkMode:  networkMode,
 				PortBindings: portBinding,
 				Binds:        []string{fmt.Sprintf("%s:/hf_cache", hfCache)},
 				Resources: container.Resources{
@@ -683,6 +869,7 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 		if err != nil {
 			return err
 		}
+		closeReservedPort()
 
 		logDockerAPI("container start", created.ID)
 		if _, err := cli.ContainerStart(ctx, created.ID, dockerclient.ContainerStartOptions{}); err != nil {
