@@ -4,6 +4,7 @@ import (
 	"embed"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
@@ -30,19 +31,15 @@ func main() {
 	}
 
 	if shouldRunDashboard(os.Args[1:]) {
-		fs := flag.NewFlagSet("vllm-manager", flag.ExitOnError)
-		fs.Bool("dashboard", false, "Run the web dashboard")
-		port := fs.String("port", defaultDashboardPort, "Port to run the dashboard on")
-		fs.Bool("proxy", true, "Enable the OpenAI-compatible proxy gateway on /v1/ (always enabled in dashboard mode)")
-		fs.Usage = func() { printRootHelp(os.Stderr) }
-		if err := fs.Parse(os.Args[1:]); err != nil {
+		port, proxyEnabled, err := parseDashboardFlags(os.Args[1:], os.Stderr)
+		if err != nil {
 			os.Exit(2)
 		}
-		if fs.NArg() != 0 {
-			fmt.Fprintf(os.Stderr, "error: dashboard mode does not accept CLI commands: %s\n", strings.Join(fs.Args(), " "))
+		if len(port.extraArgs) != 0 {
+			fmt.Fprintf(os.Stderr, "error: dashboard mode does not accept CLI commands: %s\n", strings.Join(port.extraArgs, " "))
 			os.Exit(1)
 		}
-		runDashboard(*port, true)
+		runDashboard(port.value, proxyEnabled)
 		return
 	}
 
@@ -63,4 +60,22 @@ func hasDashboardFlag(args []string) bool {
 
 func shouldRunDashboard(args []string) bool {
 	return hasDashboardFlag(args)
+}
+
+type dashboardFlagValues struct {
+	value     string
+	extraArgs []string
+}
+
+func parseDashboardFlags(args []string, errOut io.Writer) (dashboardFlagValues, bool, error) {
+	fs := flag.NewFlagSet("vllm-manager", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+	fs.Bool("dashboard", false, "Run the web dashboard")
+	port := fs.String("port", defaultDashboardPort, "Port to run the dashboard on")
+	noProxy := fs.Bool("no-proxy", false, "disable the OpenAI-compatible proxy gateway on /v1/")
+	fs.Usage = func() { printRootHelp(errOut) }
+	if err := fs.Parse(args); err != nil {
+		return dashboardFlagValues{}, false, err
+	}
+	return dashboardFlagValues{value: *port, extraArgs: fs.Args()}, !*noProxy, nil
 }

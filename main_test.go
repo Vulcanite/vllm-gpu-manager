@@ -72,6 +72,49 @@ func TestShouldRunDashboard(t *testing.T) {
 	}
 }
 
+func TestParseDashboardFlagsProxyDefaults(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantPort  string
+		wantProxy bool
+	}{
+		{
+			name:      "proxy enabled by default",
+			args:      []string{"--dashboard"},
+			wantPort:  defaultDashboardPort,
+			wantProxy: true,
+		},
+		{
+			name:      "custom port keeps proxy enabled",
+			args:      []string{"--dashboard", "--port", "9443"},
+			wantPort:  "9443",
+			wantProxy: true,
+		},
+		{
+			name:      "no proxy disables gateway",
+			args:      []string{"--dashboard", "--no-proxy"},
+			wantPort:  defaultDashboardPort,
+			wantProxy: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			values, proxyEnabled, err := parseDashboardFlags(tt.args, io.Discard)
+			if err != nil {
+				t.Fatalf("parseDashboardFlags() error=%v", err)
+			}
+			if values.value != tt.wantPort {
+				t.Fatalf("port=%q, want %q", values.value, tt.wantPort)
+			}
+			if proxyEnabled != tt.wantProxy {
+				t.Fatalf("proxyEnabled=%v, want %v", proxyEnabled, tt.wantProxy)
+			}
+		})
+	}
+}
+
 func TestDashboardAuthDisabledAllowsRequests(t *testing.T) {
 	auth := dashboardAuth{}
 

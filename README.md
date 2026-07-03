@@ -16,7 +16,7 @@ This project is intentionally small. It is not a cluster scheduler, model platfo
 - **Download progress:** Starts model downloads in background Docker containers and estimates progress from cached bytes on disk.
 - **Model recommendations:** Ranks an embedded open-source model catalog against detected GPUs, use case, VRAM fit, and estimated speed.
 - **HF token handling:** Stores an optional Hugging Face token in `settings.json` with file mode `0600`.
-- **vLLM API key handling:** Stores one optional global vLLM API key and applies it to newly created serving containers.
+- **vLLM API key handling:** Stores one optional global vLLM API key, optional per-server keys outside proxy mode, and proxy user API keys for `/v1/` clients.
 - **Optional dashboard authentication:** Protect the web UI and JSON APIs with a simple password-backed session cookie.
 - **Single binary deployment:** The React frontend is embedded into the Go binary using `go:embed`.
 
@@ -32,7 +32,7 @@ The manager currently targets:
 - Hugging Face Hub model cache layout
 - internal/private network usage
 
-It does not provide multi-user authorization, Kubernetes orchestration, or cluster scheduling. It **does** provide automatic local HTTPS termination (via self-signed certificates) and an optional dynamic OpenAI proxy gateway that routes `/v1/` requests to active model containers.
+It does not provide multi-user dashboard authorization, Kubernetes orchestration, or cluster scheduling. It **does** provide automatic local HTTPS termination (via self-signed certificates) and a dynamic OpenAI proxy gateway that routes `/v1/` requests to active model containers.
 
 ## How It Works
 
@@ -137,18 +137,16 @@ Set `VLLM_MANAGER_PASSWORD` to require browser login before the dashboard can ca
 VLLM_MANAGER_PASSWORD='change-me' ./vllm-manager --dashboard --port 9090
 ```
 
-Enable the built-in `/v1/` OpenAI-compatible proxy gateway with `--proxy`:
+Dashboard mode enables the built-in `/v1/` OpenAI-compatible proxy gateway by default. Use `--no-proxy` only when you want to run the dashboard without the `/v1/` gateway:
 
 ```bash
-./vllm-manager --dashboard --port 9090 --proxy
+./vllm-manager --dashboard --port 9090 --no-proxy
 ```
-
-When the proxy is not enabled, no `/v1/` gateway is registered and the Traffic Routing page is hidden from the dashboard.
 
 Then open:
 
 ```text
-http://<host>:9090
+https://<host>:9090
 ```
 
 You can also use the helper script:
@@ -156,7 +154,8 @@ You can also use the helper script:
 ```bash
 ./manager.sh start
 ./manager.sh start 8080
-./manager.sh start 8080 change-me --proxy
+./manager.sh start 8080 change-me
+./manager.sh start 8080 change-me --no-proxy
 ./manager.sh status
 ./manager.sh stop
 ./manager.sh restart
@@ -164,8 +163,7 @@ You can also use the helper script:
 
 Logs are written to `vllm-manager.log` when started through `manager.sh`.
 
-Pass `--proxy` to `manager.sh start` or set `VLLM_MANAGER_PROXY=1` to enable the built-in `/v1/` proxy gateway from the helper script.
-The helper writes `.vllm-manager.state` with the last port, proxy mode, and dashboard password so `./manager.sh restart` reuses them. The state file is written with `0600` permissions but stores the password as plaintext.
+The helper writes `.vllm-manager.state` with the last port, no-proxy flag state, and dashboard password so `./manager.sh restart` reuses them. The state file is written with `0600` permissions but stores the password as plaintext.
 
 Dashboard mode handles `SIGINT` and `SIGTERM` with a graceful HTTP shutdown timeout, so in-flight API requests get a short window to finish during restarts.
 
@@ -178,18 +176,32 @@ Settings are stored in `settings.json` beside the binary.
   "hf_cache": "/mnt/data/models",
   "hf_token": "hf_...",
   "vllm_api_key": "token-...",
-  "inference_api_key": "optional-key-for-proxy",
+  "proxy_users": [
+    {
+      "username": "alice",
+      "api_key": "vllm_...",
+      "request_count": 0
+    }
+  ],
+  "server_api_keys": {
+    "vllm-model-8080": "vllm_..."
+  },
   "enable_cuda_compatibility": false,
   "hf_hub_offline": false,
-  "vllm_image": "vllm/vllm-openai:latest"
+  "vllm_image": "vllm/vllm-openai:latest",
+  "routing_table": {
+    "Qwen/Qwen2.5-Coder-7B-Instruct": 8080
+  }
 }
 ```
 
-`inference_api_key` is an optional key required to access the `/v1/` proxy gateway. When set, all proxied OpenAI-compatible requests must include `Authorization: Bearer <inference_api_key>`.
+`proxy_users` stores named API keys for `/v1/` proxy clients. Proxied OpenAI-compatible requests must include `Authorization: Bearer <proxy_user_api_key>`. These keys are managed from the Proxy Gateway page.
 
 `hf_cache` is the Hugging Face home directory, not the `hub` directory itself. If a user enters a path ending in `/hub`, the backend normalizes it to the parent directory.
 
-`vllm_api_key` is optional. When set, the manager passes it to newly created serving containers as `--api-key <value>`, so OpenAI-compatible clients must send `Authorization: Bearer <value>`. Existing containers keep the command they were created with; recreate a container to apply a changed key.
+`vllm_api_key` is optional. In proxy mode, the manager passes it to newly created serving containers as `--api-key <value>` and rewrites proxied upstream requests to use it. Outside proxy mode, direct OpenAI-compatible clients must send `Authorization: Bearer <value>` for containers launched with the global key. Existing containers keep the command they were created with; recreate a container to apply a changed key.
+
+`server_api_keys` stores optional per-container API key overrides for containers launched outside proxy mode. The keys are indexed by managed container name and are not used as proxy client keys.
 
 `enable_cuda_compatibility` sets `VLLM_ENABLE_CUDA_COMPATIBILITY=1` on newly created serving containers. `hf_hub_offline` sets `HF_HUB_OFFLINE=1` on newly created serving containers and should only be enabled after required models are cached locally. `vllm_image` is optional and specifies the Docker image name and tag used to run serving containers and model downloads (defaults to `vllm/vllm-openai:latest`). When set online, it verifies the tag exists on Docker Hub. Existing containers keep their original environment/image; recreate a container to apply changed settings.
 
@@ -241,22 +253,26 @@ Catalog fields include:
 
 ## Starting A Model
 
-Serving containers are created through the Docker Engine API with host networking and the NVIDIA runtime, equivalent to:
+Serving containers are created through the Docker Engine API with bridge networking, explicit port publishing, and the NVIDIA runtime, equivalent to:
 
 ```bash
 docker run -d \
   --ipc=host \
   --runtime nvidia \
   --gpus <selection> \
-  --network host \
+  --network bridge \
+  -p <host_bind_ip>:<port>:<port> \
   -v <hf_cache>:/hf_cache \
   -e HF_HOME=/hf_cache \
   <vllm_image> \
   --model <model> \
+  --host 0.0.0.0 \
   --tensor-parallel-size <gpus> \
   --port <port> \
   --gpu-memory-utilization <mem_util>
 ```
+
+In proxy mode, the host bind IP is `127.0.0.1`, so browsers and external clients reach the model through the manager's `/v1/` proxy. Outside proxy mode, containers bind on `0.0.0.0` for direct access.
 
 Optional launch parameters currently exposed by the UI/API:
 
@@ -265,7 +281,7 @@ Optional launch parameters currently exposed by the UI/API:
 - `--kv-cache-dtype`
 - `--tool-call-parser`
 - `--enable-auto-tool-choice`
-- `--api-key` when a global vLLM API key is configured
+- `--api-key` when a global vLLM API key or per-server key is configured
 
 Managed container restart works for both running and stopped containers. Running containers are restarted through Docker; stopped containers are started with their original image, command, environment, GPU devices, and volume mounts.
 
@@ -300,14 +316,22 @@ All APIs are under `/api`.
 | `POST` | `/auth/logout`                         | Clear the browser session cookie.                                         |
 | `GET`  | `/settings`                            | Read HF cache path, secret status, cache disk usage, and system RAM usage. |
 | `POST` | `/settings`                            | Save HF cache path and optionally update or clear stored secrets.          |
+| `GET`  | `/settings/vllm-api-key`               | Reveal the stored global vLLM API key.                                    |
+| `GET`  | `/proxy-users`                         | List proxy API key users and request counts.                              |
+| `POST` | `/proxy-users`                         | Create a proxy API key user.                                              |
+| `GET`  | `/proxy-users/key?username=<name>`      | Reveal a proxy user's API key.                                            |
+| `POST` | `/proxy-users/revoke`                  | Revoke a proxy API key user.                                              |
 | `GET`  | `/routing`                             | Read the traffic routing table mapping models to local container ports.   |
 | `POST` | `/routing`                             | Save the traffic routing table.                                           |
 | `GET`  | `/gpus`                                | Return parsed NVIDIA GPU status from `nvidia-smi`.                        |
 | `GET`  | `/models/active`                       | List managed vLLM serving containers.                                     |
+| `GET`  | `/models/server-api-key`               | Reveal a non-proxy per-server API key by container name.                  |
 | `GET`  | `/models/downloaded`                   | List cached Hugging Face models and local size/KV metadata.               |
 | `GET`  | `/models/info?model=<id>`              | Fetch model metadata from the Hugging Face API.                           |
 | `POST` | `/models/download`                     | Start a background model download container.                              |
 | `GET`  | `/models/download/progress?model=<id>` | Return current cached byte count for a model.                             |
+| `GET`  | `/models/logs?container_id=<id>`       | Return recent logs for a managed container.                               |
+| `GET`  | `/models/logs/stream?container_id=<id>` | Stream container logs as server-sent events.                              |
 | `POST` | `/models/start`                        | Start a vLLM serving container.                                           |
 | `POST` | `/models/stop`                         | Stop a serving container by port.                                         |
 | `POST` | `/models/restart`                      | Restart a running managed container or start a stopped one by container ID. |
@@ -317,9 +341,9 @@ All APIs are under `/api`.
 
 ### Proxy Gateway
 
-When dashboard mode is started with `--proxy`, the manager provides a built-in reverse proxy gateway on `/v1/`. You can point your OpenAI-compatible clients directly to the manager. It will inspect the incoming JSON payload (e.g. `{"model": "..."}`), look up the configured routing table, and forward the request to the correct underlying vLLM container port. Optional API Key authorization is applied if an inference API key is configured.
+In dashboard mode, the manager provides a built-in reverse proxy gateway on `/v1/` unless started with `--no-proxy`. You can point your OpenAI-compatible clients directly to the manager. It authenticates each request with a proxy user API key, inspects the incoming JSON payload (e.g. `{"model": "..."}`), looks up the configured routing table, and forwards the request to the correct underlying vLLM container port.
 
-The frontend currently hides container removal from the active model UI, but the backend endpoint remains available for operational cleanup.
+The active model UI can restart existing model servers and remove stopped containers. Removal is disabled while a container is active.
 
 ## Security
 
@@ -327,6 +351,6 @@ This is an internal utility. It provides:
 
 - Optional single-password dashboard authentication for the web UI and JSON APIs
 - Self-signed HTTPS termination on the dashboard port (certificate auto-generated on first run)
-- Request-level `Authorization: Bearer <inference_api_key>` for `/v1/` proxy endpoints
+- Request-level `Authorization: Bearer <proxy_user_api_key>` for `/v1/` proxy endpoints
 
 Anyone who can access the web interface can inspect GPU state, start and stop model containers, trigger model downloads, delete cached models, and use configured Hugging Face or vLLM API keys indirectly.

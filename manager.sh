@@ -4,14 +4,14 @@ STATE_FILE=".vllm-manager.state"
 PORT=9090
 PORT_SET=0
 PASSWORD=""
-PROXY=""
-PROXY_SET=0
+NO_PROXY=""
+NO_PROXY_SET=0
 
 for ARG in "${@:2}"; do
     case "$ARG" in
-        --proxy)
-            PROXY=1
-            PROXY_SET=1
+        --no-proxy)
+            NO_PROXY=1
+            NO_PROXY_SET=1
             ;;
         *)
             if [ "$PORT_SET" -eq 0 ] && [[ "$ARG" =~ ^[0-9]+$ ]]; then
@@ -32,7 +32,7 @@ load_state_for_restart() {
     [ -f "$STATE_FILE" ] || return 0
 
     local saved_port=""
-    local saved_proxy=""
+    local saved_no_proxy=""
     local saved_password=""
     while IFS='=' read -r key value; do
         case "$key" in
@@ -41,9 +41,9 @@ load_state_for_restart() {
                     saved_port="$value"
                 fi
                 ;;
-            PROXY)
+            NO_PROXY)
                 if [ "$value" = "1" ]; then
-                    saved_proxy=1
+                    saved_no_proxy=1
                 fi
                 ;;
             PASSWORD)
@@ -55,8 +55,8 @@ load_state_for_restart() {
     if [ "$PORT_SET" -eq 0 ] && [ -n "$saved_port" ]; then
         PORT="$saved_port"
     fi
-    if [ "$PROXY_SET" -eq 0 ]; then
-        PROXY="$saved_proxy"
+    if [ "$NO_PROXY_SET" -eq 0 ]; then
+        NO_PROXY="$saved_no_proxy"
     fi
     if [ -z "$PASSWORD" ] && [ -n "$saved_password" ]; then
         PASSWORD="$saved_password"
@@ -64,11 +64,11 @@ load_state_for_restart() {
 }
 
 save_state() {
-    local proxy_value="$1"
+    local no_proxy_value="$1"
     local password_value="$2"
     {
         echo "PORT=$PORT"
-        echo "PROXY=$proxy_value"
+        echo "NO_PROXY=$no_proxy_value"
         echo "PASSWORD=$password_value"
     } > "$STATE_FILE"
     chmod 600 "$STATE_FILE"
@@ -93,14 +93,14 @@ case "$1" in
         fi
 
         ARGS=(--dashboard --port "$PORT")
-        PROXY_ENABLED=""
-        if [ -n "$PROXY" ] || [ "$VLLM_MANAGER_PROXY" = "1" ] || [ "$VLLM_MANAGER_PROXY" = "true" ]; then
-            ARGS+=(--proxy)
-            PROXY_ENABLED=1
-            echo "Proxy gateway enabled."
+        NO_PROXY_ENABLED=""
+        if [ -n "$NO_PROXY" ] || [ "$VLLM_MANAGER_NO_PROXY" = "1" ] || [ "$VLLM_MANAGER_NO_PROXY" = "true" ]; then
+            ARGS+=(--no-proxy)
+            NO_PROXY_ENABLED=1
+            echo "Proxy gateway disabled."
         fi
 
-        save_state "${PROXY_ENABLED:-0}" "$ACTIVE_PASSWORD"
+        save_state "${NO_PROXY_ENABLED:-0}" "$ACTIVE_PASSWORD"
         echo "Starting vllm-manager on port $PORT in the background..."
         nohup ./vllm-manager "${ARGS[@]}" > vllm-manager.log 2>&1 &
         echo "Done! Server is running at https://localhost:$PORT"
@@ -132,13 +132,13 @@ case "$1" in
             echo "Error: vllm-manager did not stop in time; restart aborted."
             exit 1
         fi
-        "$0" start "$PORT" ${PASSWORD:+"$PASSWORD"} ${PROXY:+--proxy}
+        "$0" start "$PORT" ${PASSWORD:+"$PASSWORD"} ${NO_PROXY:+--no-proxy}
         ;;
     *)
-        echo "Usage: $0 {start|stop|status|restart} [port] [password] [--proxy]"
+        echo "Usage: $0 {start|stop|status|restart} [port] [password] [--no-proxy]"
         echo "  [port] defaults to 9090."
         echo "  [password] is optional and secures the dashboard."
-        echo "  --proxy enables the /v1/ OpenAI-compatible proxy gateway."
+        echo "  --no-proxy disables the /v1/ OpenAI-compatible proxy gateway."
         exit 1
         ;;
 esac

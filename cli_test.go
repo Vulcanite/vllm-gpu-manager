@@ -86,9 +86,12 @@ func TestRootHelpIncludesDashboardMode(t *testing.T) {
 		t.Fatalf("help returned error: %v", err)
 	}
 	rendered := out.String()
-	for _, want := range []string{"--dashboard", "--port", "gpu", "model", "settings"} {
+	for _, want := range []string{"--dashboard", "--port", "--no-proxy", "gpu", "model", "settings"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("help output missing %q:\n%s", want, rendered)
 		}
+	}
+	if strings.Contains(rendered, "      --proxy ") || strings.Contains(rendered, "\n      --proxy\t") {
+		t.Fatalf("help output should not advertise --proxy:\n%s", rendered)
 	}
 }

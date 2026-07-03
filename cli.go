@@ -46,7 +46,7 @@ func newCLICommand(out io.Writer, errOut io.Writer) *cobra.Command {
 	cmd.SetErr(errOut)
 	cmd.Flags().Bool("dashboard", false, "run the web dashboard")
 	cmd.Flags().String("port", defaultDashboardPort, "dashboard port")
-	cmd.Flags().Bool("proxy", false, "enable the /v1/ proxy gateway (always enabled in dashboard mode)")
+	cmd.Flags().Bool("no-proxy", false, "disable the /v1/ proxy gateway in dashboard mode")
 	cmd.PersistentFlags().BoolVar(&opts.JSON, "json", false, "print JSON output")
 	cmd.AddCommand(
 		newGPUCommand(opts),
@@ -60,7 +60,7 @@ func newCLICommand(out io.Writer, errOut io.Writer) *cobra.Command {
 		"  vllm-manager model start Qwen/Qwen2.5-7B-Instruct --port 8080 --gpus 1",
 		"  vllm-manager settings get",
 		"  vllm-manager --dashboard --port 9090",
-		"  vllm-manager --dashboard --port 9090 --proxy",
+		"  vllm-manager --dashboard --port 9090 --no-proxy",
 	}, "\n")
 	return cmd
 }
