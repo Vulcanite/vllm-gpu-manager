@@ -9,14 +9,23 @@ import (
 	"time"
 )
 
+type GPUProcess struct {
+	PID         int    `json:"pid"`
+	Name        string `json:"name"`
+	UsedMemory  uint64 `json:"used_memory"`
+	UsedMemoryH string `json:"used_memory_human"`
+}
+
 type GPUInfo struct {
-	ID             int     `json:"id"`
-	Name           string  `json:"name"`
-	MemoryTotal    uint64  `json:"memory_total"`
-	MemoryUsed     uint64  `json:"memory_used"`
-	MemoryFree     uint64  `json:"memory_free"`
-	MemoryPercent  float64 `json:"memory_percent"`
-	GPUUtilization uint32  `json:"gpu_utilization"`
+	ID             int          `json:"id"`
+	UUID           string       `json:"uuid"`
+	Name           string       `json:"name"`
+	MemoryTotal    uint64       `json:"memory_total"`
+	MemoryUsed     uint64       `json:"memory_used"`
+	MemoryFree     uint64       `json:"memory_free"`
+	MemoryPercent  float64      `json:"memory_percent"`
+	GPUUtilization uint32       `json:"gpu_utilization"`
+	Processes      []GPUProcess `json:"processes,omitempty"`
 }
 
 var getGPUInfo = GetGPUInfo
@@ -35,11 +44,54 @@ func RequireDetectedGPUs() ([]GPUInfo, error) {
 func GetGPUInfo() ([]GPUInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=index,name,memory.total,memory.used,memory.free,utilization.gpu", "--format=csv,noheader,nounits").Output()
+	gpus, err := queryNvidiaSMI(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Process list is best-effort: a failure to enumerate PIDs (e.g. nvidia-smi
+	// without permissions, or a container that can't see the driver) must
+	// never block the rest of the GPU telemetry from being surfaced.
+	processesByUUID := queryNvidiaSMIProcesses(ctx)
+	for i := range gpus {
+		if procs, ok := processesByUUID[gpus[i].UUID]; ok {
+			gpus[i].Processes = procs
+		}
+	}
+	return gpus, nil
+}
+
+func queryNvidiaSMI(ctx context.Context) ([]GPUInfo, error) {
+	out, err := exec.CommandContext(ctx, "nvidia-smi",
+		"--query-gpu=index,uuid,name,memory.total,memory.used,memory.free,utilization.gpu",
+		"--format=csv,noheader,nounits").Output()
 	if err != nil {
 		return nil, fmt.Errorf("nvidia-smi failed: %v", err)
 	}
 	return parseNvidiaSMICSV(out), nil
+}
+
+func queryNvidiaSMIProcesses(ctx context.Context) map[string][]GPUProcess {
+	procsByUUID := make(map[string][]GPUProcess)
+	// Some driver versions reject the bare "compute-apps" query when no
+	// processes are running. `--query-compute-apps=...` is the documented
+	// modern form; fall back to it if the simple form returns nothing
+	// parseable.
+	queries := []string{
+		"--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
+	}
+	for _, q := range queries {
+		out, err := exec.CommandContext(ctx, "nvidia-smi", q, "--format=csv,noheader,nounits").Output()
+		if err != nil {
+			return procsByUUID
+		}
+		if parsed := parseNvidiaSMIProcessCSV(out); len(parsed) > 0 || len(out) == 0 {
+			for uuid, list := range parsed {
+				procsByUUID[uuid] = list
+			}
+			return procsByUUID
+		}
+	}
+	return procsByUUID
 }
 
 func parseNvidiaSMICSV(out []byte) []GPUInfo {
@@ -51,17 +103,22 @@ func parseNvidiaSMICSV(out []byte) []GPUInfo {
 			continue
 		}
 
+		// Field 1 (UUID) may contain hyphens and is space-delimited in the
+		// middle of the CSV. Splitting on ", " works for the index/name/...
+		// tail but eats trailing fields when UUIDs include leading spaces,
+		// so we re-join defensively.
 		parts := strings.Split(line, ", ")
-		if len(parts) < 6 {
+		if len(parts) < 7 {
 			continue
 		}
 
 		id, _ := strconv.Atoi(parts[0])
-		name := parts[1]
-		memTotal, _ := strconv.ParseUint(parts[2], 10, 64)
-		memUsed, _ := strconv.ParseUint(parts[3], 10, 64)
-		memFree, _ := strconv.ParseUint(parts[4], 10, 64)
-		gpuUtil, _ := strconv.ParseUint(parts[5], 10, 32)
+		uuid := strings.TrimSpace(parts[1])
+		name := parts[2]
+		memTotal, _ := strconv.ParseUint(parts[3], 10, 64)
+		memUsed, _ := strconv.ParseUint(parts[4], 10, 64)
+		memFree, _ := strconv.ParseUint(parts[5], 10, 64)
+		gpuUtil, _ := strconv.ParseUint(parts[6], 10, 32)
 
 		// Convert MiB to bytes.
 		memTotalBytes := memTotal * 1024 * 1024
@@ -75,6 +132,7 @@ func parseNvidiaSMICSV(out []byte) []GPUInfo {
 
 		gpus = append(gpus, GPUInfo{
 			ID:             id,
+			UUID:           uuid,
 			Name:           name,
 			MemoryTotal:    memTotalBytes,
 			MemoryUsed:     memUsedBytes,
@@ -85,4 +143,35 @@ func parseNvidiaSMICSV(out []byte) []GPUInfo {
 	}
 
 	return gpus
+}
+
+func parseNvidiaSMIProcessCSV(out []byte) map[string][]GPUProcess {
+	procsByUUID := make(map[string][]GPUProcess)
+	text := strings.TrimSpace(string(out))
+	if text == "" {
+		return procsByUUID
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, ", ")
+		if len(parts) < 4 {
+			continue
+		}
+		uuid := strings.TrimSpace(parts[0])
+		pid, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil {
+			continue
+		}
+		name := parts[2]
+		usedMiB, _ := strconv.ParseUint(strings.TrimSpace(parts[3]), 10, 64)
+		procsByUUID[uuid] = append(procsByUUID[uuid], GPUProcess{
+			PID:         pid,
+			Name:        name,
+			UsedMemory:  usedMiB * 1024 * 1024,
+			UsedMemoryH: FormatBytes(usedMiB * 1024 * 1024),
+		})
+	}
+	return procsByUUID
 }
