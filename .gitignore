@@ -5,6 +5,7 @@ test_qwen.py
 # Runtime output
 vllm-manager
 vllm-manager.log
+.vllm-manager.state
 *.log
 server.crt
 server.key
@@ -27,3 +28,4 @@ graphify-out/
 .agents/
 .codex/
 .opencode/
+.cursor/

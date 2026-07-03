@@ -3,9 +3,13 @@ set -e
 
 echo "Building React Frontend..."
 cd frontend
+rm -rf dist
 npm install
 npm run build
 cd ..
+
+echo "Running Golang Tests..."
+go test ./...
 
 echo "Building Golang Backend Binary..."
 CGO_ENABLED=0 go build -o vllm-manager .
