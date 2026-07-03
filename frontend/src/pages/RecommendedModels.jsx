@@ -24,8 +24,6 @@ export const RecommendedModels = ({ downloadedModels = [] }) => {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError('');
     getRecommendations({ useCase: 'general', fitOnly: false, limit: 200 })
       .then((res) => {
         if (!cancelled) setModels(res.data?.models || []);
@@ -72,7 +70,6 @@ export const RecommendedModels = ({ downloadedModels = [] }) => {
           <h2 className="card-title">
             <Sparkles size={18} /> Recommended Models
           </h2>
-          <p className="text-secondary text-sm mt-1">Ranked for the GPUs detected on this server. Download a model before launching it.</p>
         </div>
         <div className="recommendation-toolbar">
           <div className="recommendation-controls" aria-label="Recommendation filters">

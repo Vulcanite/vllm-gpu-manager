@@ -1,4 +1,6 @@
-import { Play } from 'lucide-react';
+import { Play, RefreshCw } from 'lucide-react';
+
+import { generateVLLMToken } from '../../lib/tokens.js';
 
 export const DeployServerCard = ({
   downloadedModels,
@@ -6,14 +8,20 @@ export const DeployServerCard = ({
   gpuUnavailableMessage,
   handleGpuCountChange,
   handleStart,
+  hasGlobalVllmAPIKey,
   kvCacheDTypeOptions,
   launchError,
   launching,
   maxGpus,
   noGpuDetected,
   onClearGpuPinning,
+  proxyEnabled = false,
   scaleMaxLen,
   selectedGpuIds,
+  serverApiKey,
+  setServerApiKey,
+  setUseServerApiKey,
+  setUseCustomServerApiKey,
   setStartKvCacheDType,
   setStartMaxLen,
   setStartMaxNumSeqs,
@@ -29,11 +37,35 @@ export const DeployServerCard = ({
   startModelName,
   startParser,
   startPort,
+  useServerApiKey,
+  useCustomServerApiKey,
   toggleGpu,
+  toolParserOptions,
   usesAllGpus,
 }) => {
+  const handleServerKeyToggle = (event) => {
+    const checked = event.target.checked;
+    setUseServerApiKey(checked);
+    if (!checked) {
+      setUseCustomServerApiKey(false);
+      setServerApiKey('');
+    }
+  };
+
+  const handleCustomServerKeyToggle = (event) => {
+    const checked = event.target.checked;
+    setUseCustomServerApiKey(checked);
+    if (!checked) {
+      setServerApiKey('');
+    }
+  };
+
+  const handleGenerateServerApiKey = () => {
+    setServerApiKey(generateVLLMToken());
+  };
+
   return (
-    <div className="card">
+    <div className="card launch-deploy-card">
       <div className="card-header">
         <h2 className="card-title">
           <Play size={18} /> Deploy Server
@@ -78,25 +110,27 @@ export const DeployServerCard = ({
           </div>
         </div>
 
-        <div className="form-grid">
-          <div className="form-group">
-            <label className="form-label">GPU Pinning</label>
-            <div className="pill-container">
-              {noGpuDetected ? (
-                <span className="text-secondary text-sm">No GPUs detected</span>
-              ) : usesAllGpus ? (
-                <button className="pill selected" type="button" onClick={onClearGpuPinning}>
-                  All
-                </button>
-              ) : (
-                gpuList.map((gpu) => (
-                  <button key={gpu.id} className={`pill ${selectedGpuIds.includes(gpu.id) ? 'selected' : ''}`} type="button" onClick={() => toggleGpu(gpu.id)}>
-                    GPU {gpu.id}
+        <div className={usesAllGpus || maxGpus <= 1 ? 'form-group' : 'form-grid'}>
+          {!usesAllGpus && maxGpus > 1 && (
+            <div className="form-group">
+              <label className="form-label">GPU Pinning</label>
+              <div className="pill-container">
+                {noGpuDetected ? (
+                  <span className="text-secondary text-sm">No GPUs detected</span>
+                ) : usesAllGpus ? (
+                  <button className="pill selected" type="button" onClick={onClearGpuPinning}>
+                    All
                   </button>
-                ))
-              )}
+                ) : (
+                  gpuList.map((gpu) => (
+                    <button key={gpu.id} className={`pill ${selectedGpuIds.includes(gpu.id) ? 'selected' : ''}`} type="button" onClick={() => toggleGpu(gpu.id)}>
+                      GPU {gpu.id}
+                    </button>
+                  ))
+                )}
+              </div>
             </div>
-          </div>
+          )}
           <div className="form-group">
             <label className="form-label" htmlFor="startMem">Memory Utilization</label>
             <input id="startMem" type="text" className="form-control" value={startMem} onChange={(event) => setStartMem(event.target.value)} required />
@@ -128,29 +162,128 @@ export const DeployServerCard = ({
           </div>
         </div>
 
-        <div className="form-group">
-          <label className="form-label" htmlFor="startMaxNumSeqs">Max Num Seqs</label>
-          <input
-            id="startMaxNumSeqs"
-            type="number"
-            className="form-control"
-            value={startMaxNumSeqs}
-            onChange={(event) => setStartMaxNumSeqs(event.target.value)}
-            min="1"
-            placeholder="vLLM default"
-          />
+        <div className="form-grid">
+          <div className="form-group">
+            <label className="form-label" htmlFor="startMaxNumSeqs">Max Num Seqs</label>
+            <input
+              id="startMaxNumSeqs"
+              type="number"
+              className="form-control"
+              value={startMaxNumSeqs}
+              onChange={(event) => setStartMaxNumSeqs(event.target.value)}
+              min="1"
+              placeholder="vLLM default"
+            />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label" htmlFor="startParser">Tool Call Parser</label>
+            <select id="startParser" className="form-control" value={startParser} onChange={(event) => setStartParser(event.target.value)}>
+              <option value="">Disabled</option>
+              {(toolParserOptions && toolParserOptions.length > 0 ? toolParserOptions : [
+                'hermes',
+                'llama3_json',
+                'mistral',
+                'granite',
+                'granite4',
+                'granite-20b-fc',
+                'internlm',
+                'jamba',
+                'pythonic',
+                'python_tool',
+                'jinja',
+                'guidance',
+                'lm_format_enforcer',
+                'xlam',
+                'qwen2',
+                'qwen3_coder',
+                'qwen3_xml',
+                'llama4_pythonic',
+                'deepseek_v3',
+                'deepseek_v31',
+                'openai',
+                'kimi_k2',
+                'hunyuan_a13b',
+                'cohere_command3',
+                'longcat',
+                'glm45',
+                'glm47',
+                'functiongemma',
+                'olmo3',
+                'gigachat3',
+                'apertus',
+              ]).map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
-        <div className="form-group">
-          <label className="form-label" htmlFor="startParser">Tool Call Parser</label>
-          <select id="startParser" className="form-control" value={startParser} onChange={(event) => setStartParser(event.target.value)}>
-            <option value="">Disabled</option>
-            <option value="hermes">hermes</option>
-            <option value="llama3_json">llama3_json</option>
-            <option value="mistral">mistral</option>
-            <option value="qwen3_coder">qwen3_coder</option>
-          </select>
-        </div>
+        {hasGlobalVllmAPIKey && !proxyEnabled && (
+          <div className="form-group">
+            <div className="setting-row launch-setting-row">
+              <div>
+                <label className="form-label">API Key Authentication</label>
+                <p className="text-secondary text-sm">When enabled, the server uses the globally configured API key for authentication.</p>
+              </div>
+              <label className="toggle-control" aria-label="Enable API key authentication for this server">
+                <input
+                  id="startUseServerApiKey"
+                  type="checkbox"
+                  checked={Boolean(useServerApiKey)}
+                  onChange={handleServerKeyToggle}
+                  disabled={launching}
+                />
+                <span className="toggle-track" aria-hidden="true">
+                  <span className="toggle-thumb" />
+                </span>
+              </label>
+            </div>
+            {useServerApiKey && (
+              <div className="api-key-options">
+                <div className="setting-row launch-setting-row mt-2">
+                  <div>
+                    <label className="form-label">Custom API Key</label>
+                    <p className="text-secondary text-sm">Use a per-server key instead of the globally configured API key.</p>
+                  </div>
+                  <label className="toggle-control" aria-label="Use a custom API key for this server">
+                    <input
+                      id="startUseCustomServerApiKey"
+                      type="checkbox"
+                      checked={Boolean(useCustomServerApiKey)}
+                      onChange={handleCustomServerKeyToggle}
+                      disabled={launching}
+                    />
+                    <span className="toggle-track" aria-hidden="true">
+                      <span className="toggle-thumb" />
+                    </span>
+                  </label>
+                </div>
+                {useCustomServerApiKey && (
+                  <>
+                    <div className="inline-control token-generator-control mt-2">
+                      <input
+                        id="startServerApiKey"
+                        type="text"
+                        className="form-control"
+                        value={serverApiKey || ''}
+                        onChange={(event) => setServerApiKey(event.target.value)}
+                        placeholder=""
+                        disabled={launching}
+                        autoComplete="off"
+                      />
+                      <button className="btn btn-outline btn-nowrap" type="button" onClick={handleGenerateServerApiKey} disabled={launching}>
+                        <RefreshCw size={14} /> Generate
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <button type="submit" className="btn btn-primary mt-2 full-width" disabled={launching || noGpuDetected}>
           {launching ? 'Deploying...' : 'Deploy Server'}

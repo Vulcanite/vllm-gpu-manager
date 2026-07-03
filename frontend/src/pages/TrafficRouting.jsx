@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { Network, Plus, Trash2, Save, Loader2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Loader2, Network, Save, Trash2 } from 'lucide-react';
 import { getRoutingTable, saveRoutingTable } from '../lib/api';
+import { ProxyUsersPage } from './ProxyUsersPage.jsx';
 
-export const TrafficRouting = () => {
+export const TrafficRouting = ({ notify }) => {
   const [routes, setRoutes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -10,22 +11,24 @@ export const TrafficRouting = () => {
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
-    fetchRoutes();
+    let cancelled = false;
+    getRoutingTable()
+      .then((res) => {
+        if (cancelled) return;
+        const table = res.data || {};
+        const routesList = Object.keys(table).map((model) => ({ model, port: table[model] }));
+        setRoutes(routesList);
+      })
+      .catch(() => {
+        if (!cancelled) setError('Failed to load routing table.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
-
-  const fetchRoutes = async () => {
-    try {
-      setLoading(true);
-      const res = await getRoutingTable();
-      const table = res.data || {};
-      const routesList = Object.keys(table).map(model => ({ model, port: table[model] }));
-      setRoutes(routesList);
-    } catch (err) {
-      setError('Failed to load routing table.');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleSave = async () => {
     try {
@@ -34,7 +37,7 @@ export const TrafficRouting = () => {
       setSuccess(false);
 
       const table = {};
-      routes.forEach(route => {
+      routes.forEach((route) => {
         if (route.model.trim() && route.port) {
           table[route.model.trim()] = Number(route.port);
         }
@@ -43,27 +46,19 @@ export const TrafficRouting = () => {
       await saveRoutingTable(table);
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
-    } catch (err) {
+    } catch {
       setError('Failed to save routing table.');
     } finally {
       setSaving(false);
     }
   };
 
-  const addRoute = () => {
-    setRoutes([...routes, { model: '', port: '' }]);
-  };
-
   const removeRoute = (index) => {
-    const newRoutes = [...routes];
-    newRoutes.splice(index, 1);
-    setRoutes(newRoutes);
+    setRoutes(routes.filter((_, i) => i !== index));
   };
 
   const updateRoute = (index, field, value) => {
-    const newRoutes = [...routes];
-    newRoutes[index][field] = value;
-    setRoutes(newRoutes);
+    setRoutes(routes.map((route, i) => (i === index ? { ...route, [field]: value } : route)));
   };
 
   if (loading) {
@@ -75,30 +70,33 @@ export const TrafficRouting = () => {
   }
 
   return (
-    <div className="settings-layout" style={{ gridTemplateColumns: '1fr', maxWidth: '900px' }}>
+    <div className="stack proxy-admin-page">
       <div className="card settings-card">
-        <div className="card-header" style={{ marginBottom: '0.5rem' }}>
-          <h2 className="card-title">
-            <Network size={18} /> Traffic Routing Manager
-          </h2>
+        <div className="card-header routing-card-header">
+          <div>
+            <h2 className="card-title">
+              <Network size={18} /> Model Routing
+            </h2>
+            <p className="text-secondary text-sm routing-description">
+              Route exact model names from `/v1/models` to managed vLLM ports.
+            </p>
+          </div>
         </div>
-        
-        <p className="text-secondary text-sm mb-4">
-          Map incoming model requests to backend vLLM ports. The reverse proxy will inspect the "model" field of incoming inference requests and route them to the corresponding port.
-        </p>
 
         {error && <div className="alert alert-danger">{error}</div>}
         {success && <div className="alert alert-success">Routing table saved successfully!</div>}
 
-        <div className="model-list">
-          {routes.length === 0 ? (
-            <div className="empty-state">
-              <p className="text-sm">No routes configured.</p>
-            </div>
-          ) : (
-            routes.map((route, i) => (
-              <div key={i} className="model-item cache-model-item">
-                <div style={{ flex: 2 }}>
+        {routes.length === 0 && (
+          <div className="routing-empty-state">
+            <p className="text-secondary text-sm">No routes configured.</p>
+          </div>
+        )}
+
+        {routes.length > 0 && (
+          <div className="model-list routing-list">
+            {routes.map((route, i) => (
+              <div key={i} className="model-item cache-model-item routing-row">
+                <div className="routing-model-field">
                   <input
                     type="text"
                     value={route.model}
@@ -107,7 +105,7 @@ export const TrafficRouting = () => {
                     className="form-control"
                   />
                 </div>
-                <div style={{ flex: 1 }}>
+                <div className="routing-port-field">
                   <input
                     type="number"
                     value={route.port}
@@ -117,40 +115,31 @@ export const TrafficRouting = () => {
                   />
                 </div>
                 <div className="cache-model-actions">
-                  <button onClick={() => removeRoute(i)} className="icon-button text-red">
+                  <button type="button" onClick={() => removeRoute(i)} className="icon-button text-red" aria-label="Remove route">
                     <Trash2 size={16} />
                   </button>
                 </div>
               </div>
-            ))
-          )}
-        </div>
+            ))}
+          </div>
+        )}
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border-subtle)' }}>
-          <button
-            onClick={addRoute}
-            className="btn btn-outline"
-          >
-            <Plus size={16} /> Add Route
-          </button>
-
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="btn btn-primary"
-          >
+        <div className="routing-actions">
+          <button type="button" onClick={handleSave} disabled={saving} className="btn btn-primary">
             {saving ? (
               <>
                 <Loader2 size={16} className="loader-inline" /> Saving...
               </>
             ) : (
               <>
-                <Save size={16} /> Save Routing Table
+                <Save size={16} /> Save Routes
               </>
             )}
           </button>
         </div>
       </div>
+
+      <ProxyUsersPage notify={notify} />
     </div>
   );
 };

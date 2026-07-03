@@ -9,6 +9,7 @@ import { LoginPage } from './pages/LoginPage.jsx';
 import { RecommendedModels } from './pages/RecommendedModels.jsx';
 import { SettingsPage } from './pages/SettingsPage.jsx';
 import { TrafficRouting } from './pages/TrafficRouting.jsx';
+import { ContainerLogs } from './pages/ContainerLogs.jsx';
 import { useAutoDismiss } from './hooks/useAutoDismiss.js';
 import { fetchOverview, getAuthStatus, getConfig, getErrorDetail, getSettings, login, logout, stopModel } from './lib/api.js';
 
@@ -30,6 +31,7 @@ const App = () => {
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [proxyEnabled, setProxyEnabled] = useState(false);
+  const [vllmAPIKeySet, setVllmAPIKeySet] = useState(false);
 
   const notify = useCallback((message, type = 'success') => {
     setNotice({ message, type });
@@ -143,7 +145,10 @@ const App = () => {
 
     getSettings()
       .then((res) => {
-        if (!cancelled) setProxyEnabled(!!res.data?.proxy_enabled);
+        if (!cancelled) {
+          setProxyEnabled(!!res.data?.proxy_enabled);
+          setVllmAPIKeySet(!!res.data?.vllm_api_key_set);
+        }
       })
       .catch(() => {
         // If settings fetch fails, keep the default (proxy enabled).
@@ -261,11 +266,12 @@ const App = () => {
           />
           <Route
             path="/launch"
-            element={<LaunchModel gpus={gpus} gpuError={gpuError} downloadedModels={downloadedModels} activeModels={activeModels} launchConfig={launchConfig} fetchData={fetchData} notify={notify} />}
+            element={<LaunchModel gpus={gpus} gpuError={gpuError} downloadedModels={downloadedModels} activeModels={activeModels} launchConfig={launchConfig} fetchData={fetchData} notify={notify} vllmAPIKeySet={vllmAPIKeySet} proxyEnabled={proxyEnabled} />}
           />
           <Route path="/recommendations" element={<RecommendedModels downloadedModels={downloadedModels} />} />
-          {proxyEnabled && <Route path="/routing" element={<TrafficRouting />} />}
-          <Route path="/settings" element={<SettingsPage fetchData={fetchData} proxyEnabled={proxyEnabled} />} />
+          {proxyEnabled && <Route path="/routing" element={<TrafficRouting notify={notify} />} />}
+          <Route path="/settings" element={<SettingsPage fetchData={fetchData} notify={notify} proxyEnabled={proxyEnabled} />} />
+          <Route path="/logs" element={<ContainerLogs containerId={new URLSearchParams(window.location.search).get('container_id') || ''} activeModels={activeModels} />} />
         </Routes>
       </Layout>
     );

@@ -1,6 +1,6 @@
 import { HardDrive, Trash2 } from 'lucide-react';
 
-export const CachedModelsCard = ({ deleteCacheError, deletingCache, downloadedModels, requestDeleteDownloadedModel }) => {
+export const CachedModelsCard = ({ deletingCache, downloadedModels, requestDeleteDownloadedModel }) => {
   return (
     <div className="card">
       <div className="card-header">
@@ -8,7 +8,6 @@ export const CachedModelsCard = ({ deleteCacheError, deletingCache, downloadedMo
           <HardDrive size={20} /> Downloaded Models
         </h2>
       </div>
-      {deleteCacheError && <div className="alert alert-danger">{deleteCacheError}</div>}
       <div className="model-list compact-list">
         {downloadedModels.map((model) => (
           <div key={model.name} className="model-item compact-model-item cache-model-item">

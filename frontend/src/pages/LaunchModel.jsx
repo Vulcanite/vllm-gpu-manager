@@ -34,14 +34,7 @@ const normalizeGpuPinning = (selectedIds, availableIds, requestedCount, useAll) 
   return next;
 };
 
-const getKVCacheDTypeBytes = (kvCacheDType, modelDTypeBytes) => {
-  if (kvCacheDType === 'auto') return modelDTypeBytes;
-  return 1;
-};
-
-export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModels, launchConfig, fetchData, notify }) => {
-  const MODEL_VRAM_SAFETY_MARGIN = launchConfig?.model_vram_safety_margin ?? DEFAULT_LAUNCH_CONFIG.model_vram_safety_margin;
-  const DEFAULT_GPU_MEMORY_UTILIZATION = launchConfig?.default_gpu_memory_utilization ?? DEFAULT_LAUNCH_CONFIG.default_gpu_memory_utilization;
+export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModels, launchConfig, fetchData, notify, vllmAPIKeySet = false, proxyEnabled = false }) => {
   const DEFAULT_MAX_MODEL_LEN = launchConfig?.default_max_model_len ?? DEFAULT_LAUNCH_CONFIG.default_max_model_len;
   const KV_CACHE_DTYPE_OPTIONS = launchConfig?.kv_cache_dtype_options?.length
     ? launchConfig.kv_cache_dtype_options
@@ -52,11 +45,14 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     port: '8080',
     gpus: 1,
     gpuIds: [],
-    mem: '0.9',
+    mem: '0.5',
     maxLen: '32768',
     maxNumSeqs: '',
     kvCacheDType: 'auto',
     parser: '',
+    useServerApiKey: false,
+    useCustomServerApiKey: false,
+    serverApiKey: '',
   });
 
   const updateDeployConfig = (field, value) => {
@@ -72,6 +68,9 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const startMaxNumSeqs = deployConfig.maxNumSeqs;
   const startKvCacheDType = deployConfig.kvCacheDType;
   const startParser = deployConfig.parser;
+  const startUseServerApiKey = deployConfig.useServerApiKey;
+  const startUseCustomServerApiKey = deployConfig.useCustomServerApiKey;
+  const startServerApiKey = deployConfig.serverApiKey;
   const [launchError, setLaunchError] = useState('');
   const [launching, setLaunching] = useState(false);
 
@@ -99,7 +98,6 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const [removeError, setRemoveError] = useState('');
   const [removing, setRemoving] = useState(false);
   const [deleteCacheConfirmModel, setDeleteCacheConfirmModel] = useState(null);
-  const [deleteCacheError, setDeleteCacheError] = useState('');
   const [deletingCache, setDeletingCache] = useState(false);
 
   const navigate = useNavigate();
@@ -121,32 +119,35 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   useAutoDismiss(removeError, setRemoveError);
   useAutoDismiss(downloadMessage, setDownloadMessage);
   useAutoDismiss(downloadError, setDownloadError);
-  useAutoDismiss(deleteCacheError, setDeleteCacheError);
 
   useEffect(() => {
-    const model = searchParams.get('model');
-    const download = searchParams.get('download');
-    if (download) {
-      setDownloadName(download);
-    }
-    if (!model) return;
+    const timeout = setTimeout(() => {
+      const model = searchParams.get('model');
+      const download = searchParams.get('download');
+      if (download) {
+        setDownloadName(download);
+      }
+      if (!model) return;
 
-    const gpuCount = Number(searchParams.get('gpus')) || 1;
-    const gpuIds = (searchParams.get('gpu_ids') || '')
-      .split(',')
-      .map((value) => Number(value.trim()))
-      .filter((value) => Number.isInteger(value));
+      const gpuCount = Number(searchParams.get('gpus')) || 1;
+      const gpuIds = (searchParams.get('gpu_ids') || '')
+        .split(',')
+        .map((value) => Number(value.trim()))
+        .filter((value) => Number.isInteger(value));
 
-    setDeployConfig((prev) => ({
-      ...prev,
-      modelName: model,
-      gpus: gpuCount,
-      gpuIds,
-      mem: searchParams.get('mem_util') || prev.mem,
-      maxLen: searchParams.get('max_len') || prev.maxLen,
-      maxNumSeqs: searchParams.get('max_num_seqs') || prev.maxNumSeqs,
-      kvCacheDType: searchParams.get('kv_cache_dtype') || prev.kvCacheDType,
-    }));
+      setDeployConfig((prev) => ({
+        ...prev,
+        modelName: model,
+        gpus: gpuCount,
+        gpuIds,
+        mem: searchParams.get('mem_util') || prev.mem,
+        maxLen: searchParams.get('max_len') || prev.maxLen,
+        maxNumSeqs: searchParams.get('max_num_seqs') || prev.maxNumSeqs,
+        kvCacheDType: searchParams.get('kv_cache_dtype') || prev.kvCacheDType,
+      }));
+    }, 0);
+
+    return () => clearTimeout(timeout);
   }, [searchParams]);
 
   useEffect(() => {
@@ -160,24 +161,6 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       // Progress persistence is best-effort; polling still works without storage.
     }
   }, [activeDownloads]);
-
-  const getKVCacheBytesPerGpu = (selectedModel, requestedGpus, maxModelLen, kvCacheDType) => {
-    if (!selectedModel || !requestedGpus || !maxModelLen) return 0;
-
-    const layers = selectedModel.kv_cache_layers || 0;
-    const keyValueHeads = selectedModel.kv_cache_key_value_heads || 0;
-    const headDim = selectedModel.kv_cache_head_dim || 0;
-    const modelDTypeBytes = selectedModel.kv_cache_dtype_bytes || 0;
-    const dtypeBytes = getKVCacheDTypeBytes(kvCacheDType, modelDTypeBytes);
-
-    if (layers > 0 && keyValueHeads > 0 && headDim > 0 && dtypeBytes > 0) {
-      const keyValueHeadsPerGpu = Math.max(1, Math.ceil(keyValueHeads / requestedGpus));
-      const bytesPerTokenPerGpu = 2 * layers * keyValueHeadsPerGpu * headDim * dtypeBytes;
-      return bytesPerTokenPerGpu * maxModelLen;
-    }
-
-    return 0;
-  };
 
   const handleGpuCountChange = (event) => {
     if (noGpuDetected) {
@@ -246,6 +229,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     if (startParser && !/^[a-zA-Z0-9_-]+$/.test(startParser)) return 'Tool parser must contain only letters, numbers, underscores, and hyphens';
     if (!KV_CACHE_DTYPE_OPTIONS.includes(startKvCacheDType)) return 'KV cache dtype must be auto, fp8, fp8_e5m2, or fp8_e4m3';
     if (!usesAllGpus && selectedGpuIds.length !== gpusToSend) return `Select exactly ${gpusToSend} GPU${gpusToSend === 1 ? '' : 's'} for pinning.`;
+    if (!proxyEnabled && vllmAPIKeySet && startUseServerApiKey && startUseCustomServerApiKey && !startServerApiKey.trim()) return 'Enter a per-server API key or turn off custom API key.';
     return '';
   };
 
@@ -260,6 +244,8 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     }
 
     const gpuIdsParam = usesAllGpus ? 'all' : [...selectedGpuIds].sort((a, b) => a - b).join(',');
+    const effectiveUseServerApiKey = !proxyEnabled && vllmAPIKeySet && startUseServerApiKey;
+    const effectiveServerApiKey = effectiveUseServerApiKey && startUseCustomServerApiKey ? startServerApiKey.trim() : '';
     const payload = {
       model: startModelName,
       port: Number(startPort),
@@ -270,6 +256,8 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       max_num_seqs: startMaxNumSeqs ? startMaxNumSeqs.toString() : '',
       kv_cache_dtype: startKvCacheDType,
       tool_parser: startParser || '',
+      use_api_key: effectiveUseServerApiKey,
+      server_api_key: effectiveServerApiKey,
     };
 
     try {
@@ -317,7 +305,6 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   };
 
   const requestDeleteDownloadedModel = (model) => {
-    setDeleteCacheError('');
     setDeleteCacheConfirmModel(model);
   };
 
@@ -325,7 +312,6 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     if (!deleteCacheConfirmModel) return;
 
     const modelName = deleteCacheConfirmModel.name;
-    setDeleteCacheError('');
     setDeletingCache(true);
     try {
       await deleteDownloadedModel(modelName);
@@ -334,7 +320,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       notify(`Deleted ${modelName} from cache.`);
       fetchData();
     } catch (error) {
-      setDeleteCacheError(getErrorDetail(error, 'Failed to delete downloaded model'));
+      notify(getErrorDetail(error, 'Failed to delete downloaded model'), 'danger');
       setDeleteCacheConfirmModel(null);
     } finally {
       setDeletingCache(false);
@@ -345,23 +331,50 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     event.preventDefault();
     setDownloadMessage('');
     setDownloadError('');
+
+    const trimmedName = downloadName.trim();
+    if (!trimmedName) {
+      return;
+    }
+
+    // Pre-flight: consult the same endpoint the deploy card uses to see
+    // whether the model is already on disk. If it is, we surface a clear
+    // message instead of opening the confirm modal — the user almost
+    // certainly did not intend to re-download. The server enforces the
+    // same check, so this is purely a UX nicety.
     setCheckingInfo(true);
+    try {
+      const infoRes = await getModelInfo(trimmedName);
+      if (infoRes.data?.downloaded) {
+        const cached = infoRes.data.cached_bytes;
+        const sizeText = typeof cached === 'number' && cached > 0
+          ? `${formatBytes(cached)} on disk`
+          : 'already on disk';
+        setDownloadError(`${trimmedName} is ${sizeText}. Delete it from the cache below if you want to re-download.`);
+        return;
+      }
+    } catch (error) {
+      // A network or upstream error from getModelInfo shouldn't block the
+      // user from at least seeing the existing confirm modal — the
+      // server will still refuse with a 409 if the model is present.
+      getErrorDetail(error, '');
+    } finally {
+      setCheckingInfo(false);
+    }
 
     let sizeText = '';
     let sizeBytes = 0;
     try {
-      const infoRes = await getModelInfo(downloadName);
+      const infoRes = await getModelInfo(trimmedName);
       if (infoRes.data?.size_bytes) {
         sizeBytes = infoRes.data.size_bytes;
         sizeText = `Estimated file size: ${formatBytes(infoRes.data.size_bytes)}.`;
       }
     } catch {
       sizeText = 'Model size could not be fetched before download.';
-    } finally {
-      setCheckingInfo(false);
     }
 
-    setDownloadConfirmData({ model: downloadName, sizeText, sizeBytes });
+    setDownloadConfirmData({ model: trimmedName, sizeText, sizeBytes });
   };
 
   const executeDownload = async () => {
@@ -381,7 +394,12 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       setDownloadConfirmData(null);
       fetchData();
     } catch (error) {
-      setDownloadError(getErrorDetail(error, 'Failed to trigger download'));
+      const status = error.response?.status;
+      if (status === 409) {
+        setDownloadError(`${downloadConfirmData.model} is already downloaded. Delete it from the cache below if you want to re-download.`);
+      } else {
+        setDownloadError(getErrorDetail(error, 'Failed to trigger download'));
+      }
       setDownloadConfirmData(null);
     } finally {
       setDownloading(false);
@@ -389,14 +407,16 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   };
 
   return (
-    <div className="dashboard-grid">
-      <div className="stack">
+    <div className="dashboard-grid launch-page-grid">
+      <div className="stack launch-deploy-stack">
         <DeployServerCard
           downloadedModels={downloadedModels}
           gpuList={gpuList}
           gpuUnavailableMessage={gpuUnavailableMessage}
           handleGpuCountChange={handleGpuCountChange}
           handleStart={handleStart}
+          hasGlobalVllmAPIKey={vllmAPIKeySet}
+          proxyEnabled={proxyEnabled}
           kvCacheDTypeOptions={KV_CACHE_DTYPE_OPTIONS}
           launchError={launchError}
           launching={launching}
@@ -404,6 +424,10 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
           noGpuDetected={noGpuDetected}
           onClearGpuPinning={() => updateDeployConfig('gpuIds', [])}
           selectedGpuIds={selectedGpuIds}
+          serverApiKey={startServerApiKey}
+          setServerApiKey={(v) => updateDeployConfig('serverApiKey', v)}
+          setUseServerApiKey={(v) => updateDeployConfig('useServerApiKey', v)}
+          setUseCustomServerApiKey={(v) => updateDeployConfig('useCustomServerApiKey', v)}
           setStartKvCacheDType={(v) => updateDeployConfig('kvCacheDType', v)}
           setStartMaxLen={(v) => updateDeployConfig('maxLen', v)}
           setStartMaxNumSeqs={(v) => updateDeployConfig('maxNumSeqs', v)}
@@ -420,10 +444,36 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
           startModelName={startModelName}
           startParser={startParser}
           startPort={startPort}
+          useServerApiKey={startUseServerApiKey}
+          useCustomServerApiKey={startUseCustomServerApiKey}
           toggleGpu={toggleGpu}
+          toolParserOptions={launchConfig?.tool_parser_options}
           usesAllGpus={usesAllGpus}
         />
+      </div>
 
+      <div className="stack launch-side-stack">
+        <DownloadModelCard
+          activeDownloads={activeDownloads}
+          checkingInfo={checkingInfo}
+          downloadError={downloadError}
+          downloading={downloading}
+          downloadMessage={downloadMessage}
+          downloadName={downloadName}
+          downloadedModels={downloadedModels}
+          handleDownload={handleDownload}
+          setActiveDownloads={setActiveDownloads}
+          setDownloadName={setDownloadName}
+        />
+
+        <CachedModelsCard
+          deletingCache={deletingCache}
+          downloadedModels={downloadedModels}
+          requestDeleteDownloadedModel={requestDeleteDownloadedModel}
+        />
+      </div>
+
+      <div className="launch-servers-row">
         <ActiveContainersCard
           activeModels={activeModels}
           handleRestart={handleRestart}
@@ -435,27 +485,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
           }}
           restartingId={restartingId}
           restartError={restartError}
-        />
-      </div>
-
-      <div className="stack">
-        <DownloadModelCard
-          activeDownloads={activeDownloads}
-          checkingInfo={checkingInfo}
-          downloadError={downloadError}
-          downloading={downloading}
-          downloadMessage={downloadMessage}
-          downloadName={downloadName}
-          handleDownload={handleDownload}
-          setActiveDownloads={setActiveDownloads}
-          setDownloadName={setDownloadName}
-        />
-
-        <CachedModelsCard
-          deleteCacheError={deleteCacheError}
-          deletingCache={deletingCache}
-          downloadedModels={downloadedModels}
-          requestDeleteDownloadedModel={requestDeleteDownloadedModel}
+          proxyEnabled={proxyEnabled}
         />
       </div>
 

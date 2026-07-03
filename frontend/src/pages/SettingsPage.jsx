@@ -1,28 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Activity, Copy, Cpu, KeyRound, RefreshCw, Settings } from 'lucide-react';
+import { Activity, Copy, Cpu, Eye, KeyRound, RefreshCw, Settings } from 'lucide-react';
 
 import { ConfirmModal } from '../components/ConfirmModal.jsx';
-import { useAutoDismiss } from '../hooks/useAutoDismiss.js';
-import { getErrorDetail, getSettings, saveSettings } from '../lib/api.js';
-import { ApiKeyField } from '../components/settings/ApiKeyField.jsx';
+import { getErrorDetail, getSettings, getVllmAPIKey, saveSettings } from '../lib/api.js';
+import { generateVLLMToken } from '../lib/tokens.js';
 import { ResourceMeter } from '../components/settings/ResourceMeter.jsx';
-
-const VLLM_TOKEN_PREFIX = 'vllm_';
-const VLLM_TOKEN_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-
-const generateVLLMToken = () => {
-  const bytes = new Uint8Array(40);
-  crypto.getRandomValues(bytes);
-  const suffix = Array.from(bytes, (byte) => VLLM_TOKEN_CHARS[byte % VLLM_TOKEN_CHARS.length]).join('');
-  return `${VLLM_TOKEN_PREFIX}${suffix}`;
-};
 
 const credentialStatus = (isSet, suffix) => {
   if (!isSet) return 'Not Configured';
   return suffix ? `Configured · ends in …${suffix}` : 'Configured';
 };
 
-export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
+export const SettingsPage = ({ fetchData, notify, proxyEnabled = false }) => {
   const [hfCache, setHfCache] = useState('');
   const [hfToken, setHfToken] = useState('');
   const [hfTokenSet, setHfTokenSet] = useState(false);
@@ -31,24 +20,21 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
   const [vllmAPIKey, setVllmAPIKey] = useState('');
   const [vllmAPIKeySet, setVllmAPIKeySet] = useState(false);
   const [vllmAPIKeySuffix, setVllmAPIKeySuffix] = useState('');
+  const [vllmAPIKeyContainerCount, setVllmAPIKeyContainerCount] = useState(0);
   const [editingVllmAPIKey, setEditingVllmAPIKey] = useState(false);
-  const [inferenceAPIKey, setInferenceAPIKey] = useState('');
-  const [inferenceAPIKeySet, setInferenceAPIKeySet] = useState(false);
-  const [updateInferenceAPIKey, setUpdateInferenceAPIKey] = useState(false);
-  const [clearInferenceAPIKey, setClearInferenceAPIKey] = useState(false);
+  const [viewingVllmAPIKey, setViewingVllmAPIKey] = useState(false);
+  const [revealedVllmAPIKey, setRevealedVllmAPIKey] = useState('');
+  const [revealVllmAPIKeyError, setRevealVllmAPIKeyError] = useState('');
+  const [revealVllmAPIKeyLoading, setRevealVllmAPIKeyLoading] = useState(false);
   const [enableCUDACompatibility, setEnableCUDACompatibility] = useState(false);
   const [hfHubOffline, setHFHubOffline] = useState(false);
+  const [vllmImage, setVllmImage] = useState('');
   const [diskData, setDiskData] = useState(null);
   const [ramData, setRamData] = useState(null);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
   const [generatedVllmToken, setGeneratedVllmToken] = useState('');
   const [pendingCredentialRemoval, setPendingCredentialRemoval] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-
-  useAutoDismiss(message, setMessage);
-  useAutoDismiss(error, setError);
 
   const applySettingsData = (data) => {
     setHfCache(data.hf_cache);
@@ -59,14 +45,12 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
     setVllmAPIKey('');
     setVllmAPIKeySet(Boolean(data.vllm_api_key_set));
     setVllmAPIKeySuffix(data.vllm_api_key_suffix || '');
+    setVllmAPIKeyContainerCount(Number(data.vllm_api_key_container_count) || 0);
     setEditingVllmAPIKey(false);
     setGeneratedVllmToken('');
-    setInferenceAPIKey('');
-    setInferenceAPIKeySet(Boolean(data.inference_api_key_set));
-    setUpdateInferenceAPIKey(false);
-    setClearInferenceAPIKey(false);
     setEnableCUDACompatibility(Boolean(data.enable_cuda_compatibility));
     setHFHubOffline(Boolean(data.hf_hub_offline));
+    setVllmImage(data.vllm_image || '');
     setDiskData(data);
     setRamData(data);
   };
@@ -77,12 +61,11 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
       .then((response) => {
         if (mounted) {
           applySettingsData(response.data);
-          setError('');
         }
       })
       .catch((requestError) => {
         if (mounted) {
-          setError(getErrorDetail(requestError, 'Failed to load settings'));
+          notify(getErrorDetail(requestError, 'Failed to load settings'), 'danger');
         }
       })
       .finally(() => {
@@ -94,7 +77,7 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [notify]);
 
   const baseSettingsPayload = () => ({
     hf_cache: hfCache.trim(),
@@ -106,6 +89,7 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
     clear_inference_api_key: false,
     enable_cuda_compatibility: enableCUDACompatibility,
     hf_hub_offline: hfHubOffline,
+    vllm_image: vllmImage.trim(),
   });
 
   const saveAndRefresh = async (payload, successMessage) => {
@@ -114,10 +98,10 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
       await saveSettings(payload);
       const response = await getSettings();
       applySettingsData(response.data);
-      setMessage(successMessage);
+      notify(successMessage);
       fetchData();
     } catch (requestError) {
-      setError(getErrorDetail(requestError, 'Error saving settings'));
+      notify(getErrorDetail(requestError, 'Error saving settings'), 'danger');
     } finally {
       setSaving(false);
     }
@@ -126,24 +110,8 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
   const handleGeneralSave = async (event) => {
     event.preventDefault();
     const requestedHFCache = hfCache.trim();
-    setMessage('');
-    setError('');
-
-    if (proxyEnabled && updateInferenceAPIKey && !inferenceAPIKey.trim()) {
-      setError('Enter an Inference API key or disable the API key update switch.');
-      return;
-    }
-
-    if (proxyEnabled && updateInferenceAPIKey && /\s/.test(inferenceAPIKey.trim())) {
-      setError('Inference API key cannot contain whitespace.');
-      return;
-    }
 
     const payload = baseSettingsPayload();
-    if (proxyEnabled) {
-      payload.inference_api_key = updateInferenceAPIKey ? inferenceAPIKey.trim() : '';
-      payload.clear_inference_api_key = clearInferenceAPIKey;
-    }
 
     await saveAndRefresh(
       payload,
@@ -153,11 +121,9 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
 
   const handleSaveHfToken = async (event) => {
     event.preventDefault();
-    setMessage('');
-    setError('');
 
     if (!hfToken.trim()) {
-      setError('Enter a Hugging Face token or cancel replacement.');
+      notify('Enter a Hugging Face token or cancel replacement.', 'danger');
       return;
     }
 
@@ -166,16 +132,14 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
 
   const handleSaveVllmAPIKey = async (event) => {
     event.preventDefault();
-    setMessage('');
-    setError('');
 
     if (!vllmAPIKey.trim()) {
-      setError('Enter a vLLM API key or cancel replacement.');
+      notify('Enter a vLLM API key or cancel replacement.', 'danger');
       return;
     }
 
     if (/\s/.test(vllmAPIKey.trim())) {
-      setError('vLLM API key cannot contain whitespace.');
+      notify('vLLM API key cannot contain whitespace.', 'danger');
       return;
     }
 
@@ -192,14 +156,38 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
     navigator.clipboard?.writeText(generatedVllmToken);
   };
 
+  const handleViewVllmAPIKey = async () => {
+    setViewingVllmAPIKey(true);
+    setRevealVllmAPIKeyError('');
+    setRevealVllmAPIKeyLoading(true);
+    try {
+      const response = await getVllmAPIKey();
+      setRevealedVllmAPIKey(response.data?.vllm_api_key || '');
+    } catch (requestError) {
+      setRevealVllmAPIKeyError(getErrorDetail(requestError, 'Failed to load vLLM API key'));
+      setRevealedVllmAPIKey('');
+    } finally {
+      setRevealVllmAPIKeyLoading(false);
+    }
+  };
+
+  const handleCopyRevealedVllmAPIKey = () => {
+    navigator.clipboard?.writeText(revealedVllmAPIKey);
+  };
+
+  const closeVllmAPIKeyModal = () => {
+    setViewingVllmAPIKey(false);
+    setRevealedVllmAPIKey('');
+    setRevealVllmAPIKeyError('');
+    setRevealVllmAPIKeyLoading(false);
+  };
+
   const requestCredentialRemoval = (type) => {
     setPendingCredentialRemoval(type);
   };
 
   const confirmCredentialRemoval = async () => {
     if (!pendingCredentialRemoval) return;
-    setMessage('');
-    setError('');
 
     const payload = baseSettingsPayload();
     if (pendingCredentialRemoval === 'hf') {
@@ -213,6 +201,11 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
     await saveAndRefresh(payload, successMessage);
   };
 
+  const vllmAPIKeyInUse = vllmAPIKeyContainerCount > 0;
+  const vllmRemoveKeyTitle = vllmAPIKeyInUse
+    ? `${vllmAPIKeyContainerCount} existing vLLM container${vllmAPIKeyContainerCount === 1 ? ' is' : 's are'} using this API key. Remove those containers before removing the key.`
+    : 'Remove the stored vLLM API key.';
+
   return (
     <div className="settings-layout">
       <div className="stack">
@@ -222,35 +215,13 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
               <Settings size={18} /> Configuration
             </h2>
           </div>
-          {message && <div className="alert alert-success">{message}</div>}
-          {error && <div className="alert alert-danger">{error}</div>}
           <form onSubmit={handleGeneralSave}>
             <div className="form-group">
               <label className="form-label" htmlFor="hfCache">Hugging Face Home Directory</label>
               <input id="hfCache" type="text" className="form-control" value={hfCache} onChange={(event) => setHfCache(event.target.value)} required disabled={saving || loading} />
               <p className="text-secondary text-sm mt-1">Absolute path containing the Hugging Face hub directory.</p>
             </div>
-
-            {proxyEnabled && (
-              <ApiKeyField
-                label="Inference Reverse Proxy API Key"
-                description={inferenceAPIKeySet ? 'A key is stored. Enable the switch to replace it.' : 'No key stored. Enable the switch to add one.'}
-                placeholder="token-..."
-                htmlFor="inferenceAPIKey"
-                value={inferenceAPIKey}
-                setValue={setInferenceAPIKey}
-                enabled={updateInferenceAPIKey}
-                setEnabled={setUpdateInferenceAPIKey}
-                keySet={inferenceAPIKeySet}
-                clearChecked={clearInferenceAPIKey}
-                setClearChecked={setClearInferenceAPIKey}
-                saving={saving}
-                loading={loading}
-                helpText="Used to protect the public /v1/ inference endpoints."
-              />
-            )}
-
-            <button type="submit" className="btn btn-primary mt-4" disabled={saving || loading}>
+            <button type="submit" className="btn btn-primary mt-2" disabled={saving || loading}>
               {saving ? 'Saving...' : 'Save directory'}
             </button>
           </form>
@@ -295,53 +266,68 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
           </div>
         </div>
 
-        <div className="card settings-card">
-          <div className="card-header">
-            <h2 className="card-title">
-              <KeyRound size={18} /> vLLM API Key
-            </h2>
-          </div>
-
-          <div className="credential-panel no-top-border">
-            <div className="credential-header-row">
-              <div>
-                <label className="form-label">vLLM API Key</label>
-                <div className={`credential-status ${vllmAPIKeySet ? 'active' : ''}`}>{credentialStatus(vllmAPIKeySet, vllmAPIKeySuffix)}</div>
-                <p className="text-secondary text-sm mt-1">Authenticates requests to all new serving containers.</p>
-              </div>
-              <div className="credential-actions">
-                <button className="btn btn-outline" type="button" onClick={() => setEditingVllmAPIKey(true)} disabled={saving || loading || editingVllmAPIKey}>
-                  {vllmAPIKeySet ? 'Replace' : 'Configure'}
-                </button>
-              </div>
+        {!proxyEnabled && (
+          <div className="card settings-card">
+            <div className="card-header">
+              <h2 className="card-title">
+                <KeyRound size={18} /> vLLM API Key
+              </h2>
             </div>
 
-            {editingVllmAPIKey && (
-              <form className="credential-edit-form" onSubmit={handleSaveVllmAPIKey}>
-                <div className="inline-control token-generator-control">
-                  <input id="vllmAPIKey" type="password" className="form-control" value={vllmAPIKey} onChange={(event) => setVllmAPIKey(event.target.value)} placeholder="vllm_..." autoComplete="off" disabled={saving || loading} />
-                  <button className="btn btn-outline" type="button" onClick={handleGenerateVllmAPIKey} disabled={saving || loading}>
-                    <RefreshCw size={14} /> Regenerate
-                  </button>
+            <div className="credential-panel no-top-border">
+              <div className="credential-header-row">
+                <div>
+                  <label className="form-label">vLLM API Key</label>
+                  <div className={`credential-status ${vllmAPIKeySet ? 'active' : ''}`}>{credentialStatus(vllmAPIKeySet, vllmAPIKeySuffix)}</div>
+                  <p className="text-secondary text-sm mt-1">Authenticates requests to all new serving containers.</p>
                 </div>
-                <div className="credential-edit-actions">
-                  <button className="btn btn-primary" type="submit" disabled={saving || loading}>{saving ? 'Saving...' : 'Save'}</button>
-                  <button className="btn btn-outline" type="button" onClick={() => { setEditingVllmAPIKey(false); setVllmAPIKey(''); }} disabled={saving || loading}>Cancel</button>
+                <div className="credential-actions">
+                  {vllmAPIKeySet && (
+                    <button className="btn btn-outline" type="button" onClick={handleViewVllmAPIKey} disabled={saving || loading || revealVllmAPIKeyLoading}>
+                      <Eye size={14} /> View
+                    </button>
+                  )}
+                  {!vllmAPIKeyInUse && (
+                    <button className="btn btn-outline" type="button" onClick={() => setEditingVllmAPIKey(true)} disabled={saving || loading || editingVllmAPIKey}>
+                      {vllmAPIKeySet ? 'Replace' : 'Configure'}
+                    </button>
+                  )}
                 </div>
-                <p className="text-secondary text-sm">Takes effect on next container start.</p>
-              </form>
-            )}
-
-            {vllmAPIKeySet && (
-              <div className="credential-danger-zone">
-                <p className="text-secondary text-sm">Removes authentication from all new containers. Existing running containers are unaffected.</p>
-                <button className="btn btn-danger" type="button" onClick={() => requestCredentialRemoval('vllm')} disabled={saving || loading}>
-                  Remove key
-                </button>
               </div>
-            )}
+
+              {editingVllmAPIKey && (
+                <form className="credential-edit-form" onSubmit={handleSaveVllmAPIKey}>
+                  <div className="inline-control token-generator-control">
+                    <input id="vllmAPIKey" type="password" className="form-control" value={vllmAPIKey} onChange={(event) => setVllmAPIKey(event.target.value)} placeholder="vllm_..." autoComplete="off" disabled={saving || loading} />
+                    <button className="btn btn-outline" type="button" onClick={handleGenerateVllmAPIKey} disabled={saving || loading}>
+                      <RefreshCw size={14} /> Regenerate
+                    </button>
+                  </div>
+                  <div className="credential-edit-actions">
+                    <button className="btn btn-primary" type="submit" disabled={saving || loading}>{saving ? 'Saving...' : 'Save'}</button>
+                    <button className="btn btn-outline" type="button" onClick={() => { setEditingVllmAPIKey(false); setVllmAPIKey(''); }} disabled={saving || loading}>Cancel</button>
+                  </div>
+                  <p className="text-secondary text-sm">Takes effect on next container start.</p>
+                </form>
+              )}
+
+              {vllmAPIKeySet && (
+                <div className="credential-danger-zone">
+                  <p className="text-secondary text-sm">
+                    {vllmAPIKeyInUse
+                      ? `${vllmAPIKeyContainerCount} existing container${vllmAPIKeyContainerCount === 1 ? ' is' : 's are'} using this key. Remove those containers before deleting the stored key.`
+                      : 'Removes authentication from all new containers. Existing running containers are unaffected.'}
+                  </p>
+                  <span className="disabled-tooltip-wrap" title={vllmRemoveKeyTitle}>
+                    <button className="btn btn-danger btn-nowrap" type="button" onClick={() => requestCredentialRemoval('vllm')} disabled={saving || loading || vllmAPIKeyInUse}>
+                      Remove Key
+                    </button>
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       <div className="stack">
@@ -393,6 +379,12 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
               </label>
             </div>
 
+            <div className="form-group mt-4">
+              <label className="form-label" htmlFor="vllmImage">vLLM Docker Image</label>
+              <input id="vllmImage" type="text" className="form-control" value={vllmImage} onChange={(event) => setVllmImage(event.target.value)} placeholder="vllm/vllm-openai:latest" disabled={saving || loading} />
+              <p className="text-secondary text-sm mt-1">Docker image used to launch serving containers and perform downloads. Defaults to <code>vllm/vllm-openai:latest</code>.</p>
+            </div>
+
             <button type="submit" className="btn btn-primary mt-4" disabled={saving || loading}>
               {saving ? 'Saving...' : 'Save environment'}
             </button>
@@ -402,7 +394,7 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
 
       {generatedVllmToken && (
         <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="generated-vllm-key-title">
-          <div className="modal-content">
+          <div className="modal-content api-key-modal-content">
             <h3 id="generated-vllm-key-title">Generated vLLM API Key</h3>
             <div className="modal-body">
               <p>This token has been placed in the vLLM API key field. Save the key below to apply it to new serving containers.</p>
@@ -415,6 +407,32 @@ export const SettingsPage = ({ fetchData, proxyEnabled = false }) => {
             </div>
             <div className="modal-actions">
               <button className="btn btn-primary" type="button" onClick={() => setGeneratedVllmToken('')}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viewingVllmAPIKey && (
+        <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="stored-vllm-key-title">
+          <div className="modal-content api-key-modal-content">
+            <h3 id="stored-vllm-key-title">Stored vLLM API Key</h3>
+            <div className="modal-body">
+              <p>Use this key for requests to containers that were launched with the global vLLM API key.</p>
+              {revealVllmAPIKeyLoading && <p className="text-secondary text-sm">Loading key...</p>}
+              {revealVllmAPIKeyError && <div className="alert alert-danger compact-alert">{revealVllmAPIKeyError}</div>}
+              {!revealVllmAPIKeyLoading && !revealVllmAPIKeyError && (
+                <div className="inline-control generated-token-row">
+                  <div className="generated-token-box">{revealedVllmAPIKey || 'No key configured'}</div>
+                  <button className="btn btn-outline btn-compact" type="button" onClick={handleCopyRevealedVllmAPIKey} disabled={!revealedVllmAPIKey} aria-label="Copy stored vLLM API key">
+                    <Copy size={14} />
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-primary" type="button" onClick={closeVllmAPIKeyModal}>
                 Close
               </button>
             </div>
