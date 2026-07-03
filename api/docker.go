@@ -18,12 +18,19 @@ type ActiveModel struct {
 	GPUIDs        string `json:"gpu_ids"`
 	MemUtil       string `json:"mem_util"`
 	MaxLen        string `json:"max_len"`
+	MaxNumSeqs    string `json:"max_num_seqs"`
 	KVCacheDType  string `json:"kv_cache_dtype"`
 	ToolParser    string `json:"tool_parser"`
 	APIUrl        string `json:"api_url"`
 	IsReady       bool   `json:"is_ready"`
 	Arch          string `json:"arch"`
 	State         string `json:"state"`
+	APIKey        string `json:"-"`
+	// HasServerAPIKey is populated by the dashboard handler so the UI can
+	// distinguish a per-server key from the global one without exposing the
+	// secret value.
+	HasServerAPIKey bool   `json:"has_server_api_key,omitempty"`
+	APIKeyMode      string `json:"api_key_mode,omitempty"`
 }
 
 type DownloadedModel struct {
@@ -61,8 +68,10 @@ const (
 	containerModelLabel   = "vllm-manager.model"
 	containerKindServer   = "server"
 	containerKindDownload = "download"
-	vllmImage             = "vllm/vllm-openai:latest"
+	managerVersion        = "0.1.0"
 )
+
+var VLLMImage = "vllm/vllm-openai:latest"
 
 var invalidDockerNameChars = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)
 
@@ -105,11 +114,20 @@ func sanitizeDockerNamePart(value string) string {
 	return cleaned
 }
 
-func formatBytes(bytes uint64) string {
+// SanitizeDockerNamePart is the exported form of sanitizeDockerNamePart.
+// It is needed by callers outside the api package (e.g. the dashboard
+// handler persisting per-server API keys) that must reproduce the same
+// container name StartModel used.
+func SanitizeDockerNamePart(value string) string {
+	return sanitizeDockerNamePart(value)
+}
+
+func FormatBytes(bytes uint64) string {
 	if bytes == 0 {
 		return "0 B"
 	}
 
+	// Binary (base-2) units: KiB = 1024 bytes, MiB = 1024 KiB, etc.
 	units := []string{"B", "KiB", "MiB", "GiB", "TiB", "PiB"}
 	value := float64(bytes)
 	unitIndex := 0

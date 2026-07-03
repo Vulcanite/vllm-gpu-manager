@@ -1,0 +1,593 @@
+[
+  {
+    "name": "Qwen/Qwen2.5-0.5B-Instruct",
+    "parameter_b": 0.5,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["general", "chat"],
+    "quality": 48
+  },
+  {
+    "name": "Qwen/Qwen2.5-1.5B-Instruct",
+    "parameter_b": 1.5,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["general", "chat", "coding"],
+    "quality": 56
+  },
+  {
+    "name": "Qwen/Qwen2.5-3B-Instruct",
+    "parameter_b": 3,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["general", "chat", "coding"],
+    "quality": 62
+  },
+  {
+    "name": "Qwen/Qwen2.5-7B-Instruct",
+    "parameter_b": 7,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["general", "chat", "coding"],
+    "quality": 76
+  },
+  {
+    "name": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+    "parameter_b": 7,
+    "quantization": "AWQ-4BIT",
+    "context_length": 32768,
+    "use_cases": ["general", "chat", "coding"],
+    "quality": 74
+  },
+  {
+    "name": "Qwen/Qwen2.5-14B-Instruct",
+    "parameter_b": 14,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 84
+  },
+  {
+    "name": "Qwen/Qwen2.5-14B-Instruct-AWQ",
+    "parameter_b": 14,
+    "quantization": "AWQ-4BIT",
+    "context_length": 32768,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 82
+  },
+  {
+    "name": "Qwen/Qwen2.5-32B-Instruct",
+    "parameter_b": 32,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 91
+  },
+  {
+    "name": "Qwen/Qwen2.5-32B-Instruct-AWQ",
+    "parameter_b": 32,
+    "quantization": "AWQ-4BIT",
+    "context_length": 32768,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 89
+  },
+  {
+    "name": "Qwen/Qwen2.5-72B-Instruct",
+    "parameter_b": 72,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 95
+  },
+  {
+    "name": "Qwen/Qwen2.5-72B-Instruct-AWQ",
+    "parameter_b": 72,
+    "quantization": "AWQ-4BIT",
+    "context_length": 32768,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 93
+  },
+  {
+    "name": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
+    "parameter_b": 0.5,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["coding", "general"],
+    "quality": 50
+  },
+  {
+    "name": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+    "parameter_b": 1.5,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["coding", "general"],
+    "quality": 58
+  },
+  {
+    "name": "Qwen/Qwen2.5-Coder-3B-Instruct",
+    "parameter_b": 3,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["coding", "general"],
+    "quality": 67
+  },
+  {
+    "name": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "parameter_b": 7,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["coding", "general"],
+    "quality": 80
+  },
+  {
+    "name": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
+    "parameter_b": 7,
+    "quantization": "AWQ-4BIT",
+    "context_length": 32768,
+    "use_cases": ["coding", "general"],
+    "quality": 78
+  },
+  {
+    "name": "Qwen/Qwen2.5-Coder-14B-Instruct",
+    "parameter_b": 14,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["coding", "general"],
+    "quality": 87
+  },
+  {
+    "name": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+    "parameter_b": 14,
+    "quantization": "AWQ-4BIT",
+    "context_length": 32768,
+    "use_cases": ["coding", "general"],
+    "quality": 85
+  },
+  {
+    "name": "Qwen/Qwen2.5-Coder-32B-Instruct",
+    "parameter_b": 32,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["coding", "reasoning", "general"],
+    "quality": 93
+  },
+  {
+    "name": "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ",
+    "parameter_b": 32,
+    "quantization": "AWQ-4BIT",
+    "context_length": 32768,
+    "use_cases": ["coding", "reasoning", "general"],
+    "quality": 91
+  },
+  {
+    "name": "Qwen/Qwen2.5-Math-7B-Instruct",
+    "parameter_b": 7,
+    "quantization": "BF16",
+    "context_length": 4096,
+    "use_cases": ["reasoning", "general"],
+    "quality": 79
+  },
+  {
+    "name": "Qwen/Qwen2.5-Math-72B-Instruct",
+    "parameter_b": 72,
+    "quantization": "BF16",
+    "context_length": 4096,
+    "use_cases": ["reasoning", "general"],
+    "quality": 94
+  },
+  {
+    "name": "Qwen/Qwen2-VL-2B-Instruct",
+    "parameter_b": 2,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["vision", "general"],
+    "quality": 62
+  },
+  {
+    "name": "Qwen/Qwen2.5-VL-3B-Instruct",
+    "parameter_b": 3,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["vision", "general"],
+    "quality": 70
+  },
+  {
+    "name": "Qwen/Qwen2.5-VL-7B-Instruct",
+    "parameter_b": 7,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["vision", "general"],
+    "quality": 78
+  },
+  {
+    "name": "Qwen/Qwen2.5-VL-32B-Instruct",
+    "parameter_b": 32,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["vision", "reasoning", "general"],
+    "quality": 92
+  },
+  {
+    "name": "Qwen/Qwen3-30B-A3B-Instruct-2507-FP8",
+    "parameter_b": 30,
+    "active_parameter_b": 3,
+    "quantization": "FP8",
+    "context_length": 32768,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 90
+  },
+  {
+    "name": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+    "parameter_b": 30,
+    "active_parameter_b": 3,
+    "quantization": "FP8",
+    "context_length": 32768,
+    "use_cases": ["coding", "reasoning", "general"],
+    "quality": 92
+  },
+  {
+    "name": "meta-llama/Meta-Llama-3-8B-Instruct",
+    "parameter_b": 8,
+    "quantization": "BF16",
+    "context_length": 8192,
+    "use_cases": ["general", "chat"],
+    "quality": 76
+  },
+  {
+    "name": "meta-llama/Meta-Llama-3-70B-Instruct",
+    "parameter_b": 70,
+    "quantization": "BF16",
+    "context_length": 8192,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 94
+  },
+  {
+    "name": "meta-llama/Llama-3.1-8B-Instruct",
+    "parameter_b": 8,
+    "quantization": "BF16",
+    "context_length": 131072,
+    "use_cases": ["general", "chat"],
+    "quality": 78
+  },
+  {
+    "name": "meta-llama/Llama-3.1-70B-Instruct",
+    "parameter_b": 70,
+    "quantization": "BF16",
+    "context_length": 131072,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 96
+  },
+  {
+    "name": "meta-llama/Llama-3.2-1B-Instruct",
+    "parameter_b": 1,
+    "quantization": "BF16",
+    "context_length": 131072,
+    "use_cases": ["general", "chat"],
+    "quality": 54
+  },
+  {
+    "name": "meta-llama/Llama-3.2-3B-Instruct",
+    "parameter_b": 3,
+    "quantization": "BF16",
+    "context_length": 131072,
+    "use_cases": ["general", "chat"],
+    "quality": 63
+  },
+  {
+    "name": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+    "parameter_b": 11,
+    "quantization": "BF16",
+    "context_length": 131072,
+    "use_cases": ["vision", "general", "chat"],
+    "quality": 82
+  },
+  {
+    "name": "meta-llama/Llama-3.2-90B-Vision-Instruct",
+    "parameter_b": 90,
+    "quantization": "BF16",
+    "context_length": 131072,
+    "use_cases": ["vision", "reasoning", "general"],
+    "quality": 94
+  },
+  {
+    "name": "mistralai/Mistral-7B-Instruct-v0.3",
+    "parameter_b": 7,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["general", "chat"],
+    "quality": 73
+  },
+  {
+    "name": "mistralai/Mistral-Nemo-Instruct-2407",
+    "parameter_b": 12,
+    "quantization": "BF16",
+    "context_length": 128000,
+    "use_cases": ["general", "chat"],
+    "quality": 82
+  },
+  {
+    "name": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+    "parameter_b": 46.7,
+    "active_parameter_b": 12.9,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 84
+  },
+  {
+    "name": "mistralai/Mixtral-8x22B-Instruct-v0.1",
+    "parameter_b": 141,
+    "active_parameter_b": 39,
+    "quantization": "BF16",
+    "context_length": 65536,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 93
+  },
+  {
+    "name": "google/gemma-2-2b-it",
+    "parameter_b": 2,
+    "quantization": "BF16",
+    "context_length": 8192,
+    "use_cases": ["general", "chat"],
+    "quality": 58
+  },
+  {
+    "name": "google/gemma-2-9b-it",
+    "parameter_b": 9,
+    "quantization": "BF16",
+    "context_length": 8192,
+    "use_cases": ["general", "chat"],
+    "quality": 79
+  },
+  {
+    "name": "google/gemma-2-27b-it",
+    "parameter_b": 27,
+    "quantization": "BF16",
+    "context_length": 8192,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 88
+  },
+  {
+    "name": "microsoft/Phi-3-mini-4k-instruct",
+    "parameter_b": 3.8,
+    "quantization": "BF16",
+    "context_length": 4096,
+    "use_cases": ["general", "chat", "coding"],
+    "quality": 63
+  },
+  {
+    "name": "microsoft/Phi-3-mini-128k-instruct",
+    "parameter_b": 3.8,
+    "quantization": "BF16",
+    "context_length": 128000,
+    "use_cases": ["general", "chat", "coding"],
+    "quality": 65
+  },
+  {
+    "name": "microsoft/Phi-3-small-128k-instruct",
+    "parameter_b": 7,
+    "quantization": "BF16",
+    "context_length": 128000,
+    "use_cases": ["general", "chat", "coding"],
+    "quality": 71
+  },
+  {
+    "name": "microsoft/Phi-3-medium-128k-instruct",
+    "parameter_b": 14,
+    "quantization": "BF16",
+    "context_length": 128000,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 80
+  },
+  {
+    "name": "microsoft/Phi-3.5-mini-instruct",
+    "parameter_b": 3.8,
+    "quantization": "BF16",
+    "context_length": 128000,
+    "use_cases": ["general", "chat", "coding"],
+    "quality": 69
+  },
+  {
+    "name": "microsoft/Phi-3.5-MoE-instruct",
+    "parameter_b": 42,
+    "active_parameter_b": 6.6,
+    "quantization": "BF16",
+    "context_length": 128000,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 82
+  },
+  {
+    "name": "microsoft/Phi-3.5-vision-instruct",
+    "parameter_b": 4.2,
+    "quantization": "BF16",
+    "context_length": 128000,
+    "use_cases": ["vision", "general", "chat"],
+    "quality": 72
+  },
+  {
+    "name": "deepseek-ai/deepseek-coder-6.7b-instruct",
+    "parameter_b": 6.7,
+    "quantization": "BF16",
+    "context_length": 16384,
+    "use_cases": ["coding", "general"],
+    "quality": 75
+  },
+  {
+    "name": "deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct",
+    "parameter_b": 16,
+    "active_parameter_b": 2.4,
+    "quantization": "BF16",
+    "context_length": 128000,
+    "use_cases": ["coding", "reasoning", "general"],
+    "quality": 86
+  },
+  {
+    "name": "deepseek-ai/DeepSeek-V2-Lite-Chat",
+    "parameter_b": 16,
+    "active_parameter_b": 2.4,
+    "quantization": "BF16",
+    "context_length": 128000,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 83
+  },
+  {
+    "name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+    "parameter_b": 1.5,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["reasoning", "coding", "general"],
+    "quality": 61
+  },
+  {
+    "name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    "parameter_b": 7,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["reasoning", "coding", "general"],
+    "quality": 79
+  },
+  {
+    "name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+    "parameter_b": 14,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["reasoning", "coding", "general"],
+    "quality": 86
+  },
+  {
+    "name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+    "parameter_b": 32,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["reasoning", "coding", "general"],
+    "quality": 94
+  },
+  {
+    "name": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "parameter_b": 8,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["reasoning", "general", "chat"],
+    "quality": 81
+  },
+  {
+    "name": "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+    "parameter_b": 70,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["reasoning", "general", "chat"],
+    "quality": 95
+  },
+  {
+    "name": "codellama/CodeLlama-7b-Instruct-hf",
+    "parameter_b": 7,
+    "quantization": "BF16",
+    "context_length": 16384,
+    "use_cases": ["coding"],
+    "quality": 68
+  },
+  {
+    "name": "codellama/CodeLlama-13b-Instruct-hf",
+    "parameter_b": 13,
+    "quantization": "BF16",
+    "context_length": 16384,
+    "use_cases": ["coding"],
+    "quality": 72
+  },
+  {
+    "name": "codellama/CodeLlama-34b-Instruct-hf",
+    "parameter_b": 34,
+    "quantization": "BF16",
+    "context_length": 16384,
+    "use_cases": ["coding"],
+    "quality": 78
+  },
+  {
+    "name": "codellama/CodeLlama-70b-Instruct-hf",
+    "parameter_b": 70,
+    "quantization": "BF16",
+    "context_length": 16384,
+    "use_cases": ["coding"],
+    "quality": 83
+  },
+  {
+    "name": "NousResearch/Hermes-3-Llama-3.1-8B",
+    "parameter_b": 8,
+    "quantization": "BF16",
+    "context_length": 131072,
+    "use_cases": ["general", "chat", "coding"],
+    "quality": 79
+  },
+  {
+    "name": "NousResearch/Hermes-3-Llama-3.1-70B",
+    "parameter_b": 70,
+    "quantization": "BF16",
+    "context_length": 131072,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 93
+  },
+  {
+    "name": "nvidia/Llama-3.1-Nemotron-70B-Instruct-HF",
+    "parameter_b": 70,
+    "quantization": "BF16",
+    "context_length": 131072,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 94
+  },
+  {
+    "name": "01-ai/Yi-1.5-6B-Chat",
+    "parameter_b": 6,
+    "quantization": "BF16",
+    "context_length": 4096,
+    "use_cases": ["general", "chat"],
+    "quality": 68
+  },
+  {
+    "name": "01-ai/Yi-1.5-9B-Chat",
+    "parameter_b": 9,
+    "quantization": "BF16",
+    "context_length": 4096,
+    "use_cases": ["general", "chat"],
+    "quality": 73
+  },
+  {
+    "name": "01-ai/Yi-1.5-34B-Chat",
+    "parameter_b": 34,
+    "quantization": "BF16",
+    "context_length": 4096,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 85
+  },
+  {
+    "name": "THUDM/glm-4-9b-chat",
+    "parameter_b": 9,
+    "quantization": "BF16",
+    "context_length": 128000,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 80
+  },
+  {
+    "name": "THUDM/glm-4v-9b",
+    "parameter_b": 9,
+    "quantization": "BF16",
+    "context_length": 8192,
+    "use_cases": ["vision", "general", "chat"],
+    "quality": 76
+  },
+  {
+    "name": "internlm/internlm2_5-7b-chat",
+    "parameter_b": 7,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["general", "chat", "coding"],
+    "quality": 74
+  },
+  {
+    "name": "internlm/internlm2_5-20b-chat",
+    "parameter_b": 20,
+    "quantization": "BF16",
+    "context_length": 32768,
+    "use_cases": ["general", "chat", "reasoning"],
+    "quality": 83
+  }
+]

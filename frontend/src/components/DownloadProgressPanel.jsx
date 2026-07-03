@@ -12,20 +12,25 @@ export const DownloadProgressPanel = ({ modelName, expectedSize, onDismiss }) =>
   useEffect(() => {
     if (!modelName) return undefined;
 
+    let interval;
     const fetchProgress = async () => {
       try {
         const response = await getDownloadProgress(modelName);
-        setDownloadedBytes(response.data?.downloaded_bytes || 0);
+        const bytes = response.data?.downloaded_bytes || 0;
+        setDownloadedBytes(bytes);
         setProgressError('');
+        if (expectedSize && expectedSize > 0 && bytes >= expectedSize) {
+          clearInterval(interval);
+        }
       } catch (error) {
         setProgressError(error.response?.data?.detail || error.message || 'Failed to fetch download progress');
       }
     };
 
     fetchProgress();
-    const interval = setInterval(fetchProgress, 2000);
+    interval = setInterval(fetchProgress, 2000);
     return () => clearInterval(interval);
-  }, [modelName]);
+  }, [modelName, expectedSize]);
 
   const hasExpectedSize = expectedSize && expectedSize > 0;
   const percent = hasExpectedSize ? Math.min(100, Math.round((downloadedBytes / expectedSize) * 100)) : 0;

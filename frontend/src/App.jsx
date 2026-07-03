@@ -6,14 +6,18 @@ import { Layout } from './components/Layout.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
 import { LaunchModel } from './pages/LaunchModel.jsx';
 import { LoginPage } from './pages/LoginPage.jsx';
+import { RecommendedModels } from './pages/RecommendedModels.jsx';
 import { SettingsPage } from './pages/SettingsPage.jsx';
+import { TrafficRouting } from './pages/TrafficRouting.jsx';
+import { ContainerLogs } from './pages/ContainerLogs.jsx';
 import { useAutoDismiss } from './hooks/useAutoDismiss.js';
-import { fetchOverview, getAuthStatus, getErrorDetail, login, logout, stopModel } from './lib/api.js';
+import { fetchOverview, getAuthStatus, getConfig, getErrorDetail, getSettings, login, logout, stopModel } from './lib/api.js';
 
 const App = () => {
   const [gpus, setGpus] = useState([]);
   const [activeModels, setActiveModels] = useState([]);
   const [downloadedModels, setDownloadedModels] = useState([]);
+  const [launchConfig, setLaunchConfig] = useState(null);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState('');
   const [gpuError, setGpuError] = useState('');
@@ -26,6 +30,8 @@ const App = () => {
   const [authenticated, setAuthenticated] = useState(false);
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+  const [proxyEnabled, setProxyEnabled] = useState(false);
+  const [vllmAPIKeySet, setVllmAPIKeySet] = useState(false);
 
   const notify = useCallback((message, type = 'success') => {
     setNotice({ message, type });
@@ -104,14 +110,54 @@ const App = () => {
       fetchData();
     }, 0);
     const interval = setInterval(() => {
-      fetchData();
+      if (document.visibilityState === 'visible') {
+        fetchData();
+      }
     }, 5000);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchData();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       clearTimeout(initialLoad);
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [authChecked, authRequired, authenticated, fetchData]);
+
+  useEffect(() => {
+    if (!authChecked || (authRequired && !authenticated)) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    getConfig()
+      .then((res) => {
+        if (!cancelled && res.data) setLaunchConfig(res.data);
+      })
+      .catch(() => {
+        // Static tuning config; LaunchModel falls back to built-in defaults.
+      });
+
+    getSettings()
+      .then((res) => {
+        if (!cancelled) {
+          setProxyEnabled(!!res.data?.proxy_enabled);
+          setVllmAPIKeySet(!!res.data?.vllm_api_key_set);
+        }
+      })
+      .catch(() => {
+        // If settings fetch fails, keep the default (proxy enabled).
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authChecked, authRequired, authenticated]);
 
   useEffect(() => {
     if (!notice) return undefined;
@@ -179,29 +225,29 @@ const App = () => {
     }
   };
 
-  if (!authChecked) {
+  const renderContent = () => {
+    if (!authChecked) {
+      return (
+        <div className="loading-screen">
+          <Loader2 className="loader" size={48} />
+        </div>
+      );
+    }
+
+    if (authRequired && !authenticated) {
+      return <LoginPage error={authError} loading={authLoading} onLogin={handleLogin} />;
+    }
+
+    if (loading && gpus.length === 0 && !fetchError) {
+      return (
+        <div className="loading-screen">
+          <Loader2 className="loader" size={48} />
+        </div>
+      );
+    }
+
     return (
-      <div className="loading-screen">
-        <Loader2 className="loader" size={48} />
-      </div>
-    );
-  }
-
-  if (authRequired && !authenticated) {
-    return <LoginPage error={authError} loading={authLoading} onLogin={handleLogin} />;
-  }
-
-  if (loading && gpus.length === 0 && !fetchError) {
-    return (
-      <div className="loading-screen">
-        <Loader2 className="loader" size={48} />
-      </div>
-    );
-  }
-
-  return (
-    <BrowserRouter>
-      <Layout authRequired={authRequired} notice={notice} systemError={fetchError} onDismissNotice={() => setNotice(null)} onLogout={handleLogout} onRetry={fetchData}>
+      <Layout authRequired={authRequired} notice={notice} systemError={fetchError} onDismissNotice={() => setNotice(null)} onLogout={handleLogout} onRetry={fetchData} proxyEnabled={proxyEnabled}>
         <Routes>
           <Route
             path="/"
@@ -220,13 +266,18 @@ const App = () => {
           />
           <Route
             path="/launch"
-            element={<LaunchModel gpus={gpus} gpuError={gpuError} downloadedModels={downloadedModels} activeModels={activeModels} fetchData={fetchData} notify={notify} />}
+            element={<LaunchModel gpus={gpus} gpuError={gpuError} downloadedModels={downloadedModels} activeModels={activeModels} launchConfig={launchConfig} fetchData={fetchData} notify={notify} vllmAPIKeySet={vllmAPIKeySet} proxyEnabled={proxyEnabled} />}
           />
-          <Route path="/settings" element={<SettingsPage fetchData={fetchData} />} />
+          <Route path="/recommendations" element={<RecommendedModels downloadedModels={downloadedModels} />} />
+          {proxyEnabled && <Route path="/routing" element={<TrafficRouting notify={notify} />} />}
+          <Route path="/settings" element={<SettingsPage fetchData={fetchData} notify={notify} proxyEnabled={proxyEnabled} />} />
+          <Route path="/logs" element={<ContainerLogs containerId={new URLSearchParams(window.location.search).get('container_id') || ''} activeModels={activeModels} />} />
         </Routes>
       </Layout>
-    </BrowserRouter>
-  );
+    );
+  };
+
+  return <BrowserRouter>{renderContent()}</BrowserRouter>;
 };
 
 export default App;

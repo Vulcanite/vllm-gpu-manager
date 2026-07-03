@@ -21,6 +21,7 @@ func TestPrintActiveModelSections(t *testing.T) {
 		GPUs:          "2",
 		MemUtil:       "0.75",
 		MaxLen:        "128000",
+		MaxNumSeqs:    "64",
 		KVCacheDType:  "auto",
 		ToolParser:    "hermes",
 	}})
@@ -32,7 +33,7 @@ func TestPrintActiveModelSections(t *testing.T) {
 		"- Status: running (ready: yes)",
 		"- Serve: http://localhost:8080/v1",
 		"- GPUs: 0,1, tensor parallel 2, memory utilization 0.75",
-		"- Runtime: max length 128000, KV cache auto, parser hermes",
+		"- Runtime: max length 128000, max seqs 64, KV cache auto, parser hermes",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered output missing %q:\n%s", want, rendered)
@@ -72,5 +73,22 @@ func TestGroupCommandsShowScopedHelp(t *testing.T) {
 				t.Fatalf("help output missing %q:\n%s", tt.want, rendered)
 			}
 		})
+	}
+}
+
+func TestRootHelpIncludesDashboardMode(t *testing.T) {
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	cmd := newCLICommand(&out, &errOut)
+	cmd.SetArgs([]string{"--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("help returned error: %v", err)
+	}
+	rendered := out.String()
+	for _, want := range []string{"--dashboard", "--port", "gpu", "model", "settings"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("help output missing %q:\n%s", want, rendered)
+		}
 	}
 }

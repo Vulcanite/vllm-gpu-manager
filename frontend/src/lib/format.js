@@ -1,5 +1,5 @@
 export const formatBytes = (bytes) => {
-  if (bytes === 0 || !bytes) return '0 B';
+  if (!bytes || bytes <= 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));

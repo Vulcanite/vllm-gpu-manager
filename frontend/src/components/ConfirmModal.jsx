@@ -56,7 +56,7 @@ export const ConfirmModal = ({
 
     content.addEventListener('keydown', handleTab);
     return () => content.removeEventListener('keydown', handleTab);
-  }, []);
+  }, [loading]);
 
   // Click on overlay backdrop dismisses
   const handleOverlayClick = useCallback(

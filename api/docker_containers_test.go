@@ -203,3 +203,134 @@ func TestCheckedMulUint64RejectsOverflow(t *testing.T) {
 		t.Fatalf("checkedMulUint64=%d, want 30", got)
 	}
 }
+
+func TestHealthCheckActiveModelsUpdatesReadyAndDefaultMaxLen(t *testing.T) {
+	original := activeModelHealthProbe
+	type probeArgs struct {
+		containerID   string
+		port          string
+		currentMaxLen string
+		apiKey        string
+	}
+	argsCh := make(chan probeArgs, 1)
+	activeModelHealthProbe = func(containerID string, port string, currentMaxLen string, apiKey string) (bool, string) {
+		argsCh <- probeArgs{containerID: containerID, port: port, currentMaxLen: currentMaxLen, apiKey: apiKey}
+		return true, "4096"
+	}
+	t.Cleanup(func() {
+		activeModelHealthProbe = original
+	})
+
+	models := []ActiveModel{{
+		ContainerID: "health-check-test-container",
+		Port:        "12345",
+		State:       "running",
+		MaxLen:      "default",
+	}}
+
+	healthCheckActiveModels(models, "fallback-key")
+
+	args := <-argsCh
+	if args != (probeArgs{containerID: "health-check-test-container", port: "12345", currentMaxLen: "default", apiKey: "fallback-key"}) {
+		t.Fatalf("probe args=%+v, want test container, port, max len, fallback key", args)
+	}
+
+	if !models[0].IsReady {
+		t.Fatal("model was not marked ready")
+	}
+	if models[0].MaxLen != "4096" {
+		t.Fatalf("MaxLen=%q, want 4096", models[0].MaxLen)
+	}
+}
+
+func TestNormalizeModelKey(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "lowercases and trims", in: "  Qwen/Qwen2.5-7B-Instruct  ", want: "qwen/qwen2.5-7b-instruct"},
+		{name: "keeps slashes and dots", in: "meta-llama/Llama-3.1-8B", want: "meta-llama/llama-3.1-8b"},
+		{name: "empty", in: "  ", want: ""},
+		{name: "leading slash invalid", in: "/foo", want: ""},
+		{name: "rejects spaces", in: "foo bar", want: ""},
+		{name: "rejects punctuation", in: "foo!", want: ""},
+		{name: "too long", in: "a" + strings.Repeat("b", 200), want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeModelKey(tc.in); got != tc.want {
+				t.Fatalf("normalizeModelKey(%q)=%q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeModelKeyForMatchIsLoose(t *testing.T) {
+	// The matcher does not enforce the strict character class, so historical
+	// Docker labels with characters we no longer accept on input still match.
+	if got := NormalizeModelKeyForMatch("Qwen/Qwen2.5 7B"); got != "qwen/qwen2.5 7b" {
+		t.Fatalf("NormalizeModelKeyForMatch()=%q, want lowercased trim", got)
+	}
+	if got := NormalizeModelKeyForMatch(""); got != "" {
+		t.Fatalf("NormalizeModelKeyForMatch(empty)=%q, want empty", got)
+	}
+}
+
+func TestAllowedToolParsersRejectsUnknown(t *testing.T) {
+	for _, known := range []string{
+		"hermes", "llama3_json", "mistral", "granite", "granite4", "granite-20b-fc",
+		"internlm", "jamba", "pythonic", "python_tool", "jinja", "guidance",
+		"lm_format_enforcer", "xlam", "qwen2", "qwen3_coder", "qwen3_xml", "llama4_pythonic",
+		"deepseek_v3", "deepseek_v31", "openai", "kimi_k2", "hunyuan_a13b",
+		"cohere_command3", "longcat", "glm45", "glm47", "functiongemma",
+		"olmo3", "gigachat3", "apertus",
+	} {
+		if _, ok := allowedToolParsers[known]; !ok {
+			t.Fatalf("expected %q to be in the allowlist", known)
+		}
+	}
+	for _, unknown := range []string{"hermes; rm -rf /", "../../etc/passwd", "drop-table", ""} {
+		if _, ok := allowedToolParsers[unknown]; ok && unknown != "" {
+			t.Fatalf("expected %q to be rejected", unknown)
+		}
+	}
+}
+
+func TestAllowedToolParserNamesSortedAndUnique(t *testing.T) {
+	names := allowedToolParserNames()
+	if len(names) != len(allowedToolParsers) {
+		t.Fatalf("len(names)=%d, want %d", len(names), len(allowedToolParsers))
+	}
+	for i := 1; i < len(names); i++ {
+		if names[i-1] >= names[i] {
+			t.Fatalf("names not strictly sorted at %d: %q >= %q", i, names[i-1], names[i])
+		}
+	}
+}
+
+func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
+	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", "per-server-key")
+	if err == nil {
+		t.Fatal("StartModel accepted both global and per-server key; want validation error")
+	}
+	if !IsValidationError(err) {
+		t.Fatalf("error type=%T, want ValidationError", err)
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("error=%q, want 'mutually exclusive' message", err.Error())
+	}
+}
+
+func TestStartModelRejectsWhitespaceInPerServerAPIKey(t *testing.T) {
+	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "/tmp/cache", "", "", false, false, "0.0.0.0", "key with space")
+	if err == nil {
+		t.Fatal("StartModel accepted whitespace in per-server key; want validation error")
+	}
+	if !IsValidationError(err) {
+		t.Fatalf("error type=%T, want ValidationError", err)
+	}
+	if !strings.Contains(err.Error(), "per-server API key") {
+		t.Fatalf("error=%q, want 'per-server API key' message", err.Error())
+	}
+}

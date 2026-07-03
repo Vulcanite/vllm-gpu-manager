@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Activity, LogOut, Moon, Play, Settings, Sun, X } from 'lucide-react';
+import { Activity, LogOut, Moon, Play, Settings, Sparkles, Sun, X, Network, FileText } from 'lucide-react';
 
 const NavItem = ({ to, icon, label }) => {
   const location = useLocation();
@@ -14,7 +14,7 @@ const NavItem = ({ to, icon, label }) => {
   );
 };
 
-export const Layout = ({ authRequired = false, children, notice, systemError, onDismissNotice, onLogout, onRetry }) => {
+export const Layout = ({ authRequired = false, children, notice, systemError, onDismissNotice, onLogout, onRetry, proxyEnabled = false }) => {
   const [theme, setTheme] = useState(localStorage.getItem('vllm-theme') || 'dark');
 
   useEffect(() => {
@@ -34,7 +34,10 @@ export const Layout = ({ authRequired = false, children, notice, systemError, on
           </div>
           <nav className="nav-menu">
             <NavItem to="/" icon={<Activity size={20} />} label="Dashboard" />
+            <NavItem to="/recommendations" icon={<Sparkles size={20} />} label="Recommended" />
             <NavItem to="/launch" icon={<Play size={20} />} label="Models" />
+            {proxyEnabled && <NavItem to="/routing" icon={<Network size={20} />} label="Proxy Gateway" />}
+            <NavItem to="/logs" icon={<FileText size={20} />} label="Logs" />
             <NavItem to="/settings" icon={<Settings size={20} />} label="Settings" />
           </nav>
         </div>
@@ -46,22 +49,13 @@ export const Layout = ({ authRequired = false, children, notice, systemError, on
               <span>Sign Out</span>
             </button>
           )}
-          <button onClick={toggleTheme} className="btn btn-outline theme-toggle">
+          <button onClick={toggleTheme} className="btn btn-outline theme-toggle" type="button">
             {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
             <span>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
           </button>
         </div>
       </aside>
       <main className="main-content">
-        {notice && (
-          <div className={`toast toast-${notice.type || 'success'}`}>
-            <span>{notice.message}</span>
-            <button className="icon-button" type="button" onClick={onDismissNotice} aria-label="Dismiss notification">
-              <X size={16} />
-            </button>
-          </div>
-        )}
-
         {systemError && (
           <div className="alert alert-danger alert-row">
             <span>{systemError}</span>
@@ -75,6 +69,15 @@ export const Layout = ({ authRequired = false, children, notice, systemError, on
 
         {children}
       </main>
+
+      {notice && (
+        <div className={`toast toast-popup toast-${notice.type || 'success'}`} role="status" aria-live="polite">
+          <span>{notice.message}</span>
+          <button className="icon-button" type="button" onClick={onDismissNotice} aria-label="Dismiss notification">
+            <X size={16} />
+          </button>
+        </div>
+      )}
     </div>
   );
 };

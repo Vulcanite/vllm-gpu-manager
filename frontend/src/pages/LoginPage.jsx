@@ -18,7 +18,6 @@ export const LoginPage = ({ error, loading, onLogin }) => {
           </div>
           <div>
             <h1>vLLM Manager</h1>
-            <p>Authentication required</p>
           </div>
         </div>
 

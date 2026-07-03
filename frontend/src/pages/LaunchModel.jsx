@@ -1,17 +1,26 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Download, HardDrive, Play, Server, Trash2 } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
+import { ActiveContainersCard } from '../components/launch/ActiveContainersCard.jsx';
+import { CachedModelsCard } from '../components/launch/CachedModelsCard.jsx';
+import { DeployServerCard } from '../components/launch/DeployServerCard.jsx';
+import { DownloadModelCard } from '../components/launch/DownloadModelCard.jsx';
 import { ConfirmModal } from '../components/ConfirmModal.jsx';
-import { DownloadProgressPanel } from '../components/DownloadProgressPanel.jsx';
 import { useAutoDismiss } from '../hooks/useAutoDismiss.js';
 import { deleteDownloadedModel, downloadModel, getErrorDetail, getModelInfo, removeModel, restartModel, startModel } from '../lib/api.js';
 import { formatBytes } from '../lib/format.js';
 
-const MODEL_VRAM_SAFETY_MARGIN = 1.08;
-const DEFAULT_GPU_MEMORY_UTILIZATION = 0.9;
 const ACTIVE_DOWNLOAD_STORAGE_KEY = 'vllm-manager-active-download';
-const KV_CACHE_DTYPE_OPTIONS = ['auto', 'fp8', 'fp8_e5m2', 'fp8_e4m3'];
+
+// Fallback values mirror api.LaunchDefaults(). The live values are fetched from
+// /api/config so this preview cannot drift from the backend VRAM preflight; the
+// constants below only apply if that request has not resolved yet.
+const DEFAULT_LAUNCH_CONFIG = {
+  model_vram_safety_margin: 1.08,
+  default_gpu_memory_utilization: 0.9,
+  default_max_model_len: 32768,
+  kv_cache_dtype_options: ['auto', 'fp8', 'fp8_e5m2', 'fp8_e4m3'],
+};
 
 const normalizeGpuPinning = (selectedIds, availableIds, requestedCount, useAll) => {
   if (useAll) return [];
@@ -25,20 +34,43 @@ const normalizeGpuPinning = (selectedIds, availableIds, requestedCount, useAll) 
   return next;
 };
 
-const getKVCacheDTypeBytes = (kvCacheDType, modelDTypeBytes) => {
-  if (kvCacheDType === 'auto') return modelDTypeBytes;
-  return 1;
-};
+export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModels, launchConfig, fetchData, notify, vllmAPIKeySet = false, proxyEnabled = false }) => {
+  const DEFAULT_MAX_MODEL_LEN = launchConfig?.default_max_model_len ?? DEFAULT_LAUNCH_CONFIG.default_max_model_len;
+  const KV_CACHE_DTYPE_OPTIONS = launchConfig?.kv_cache_dtype_options?.length
+    ? launchConfig.kv_cache_dtype_options
+    : DEFAULT_LAUNCH_CONFIG.kv_cache_dtype_options;
 
-export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModels, fetchData, notify }) => {
-  const [startModelName, setStartModelName] = useState('');
-  const [startPort, setStartPort] = useState(8080);
-  const [startGpus, setStartGpus] = useState(1);
-  const [startGpuIds, setStartGpuIds] = useState([]);
-  const [startMem, setStartMem] = useState(0.9);
-  const [startMaxLen, setStartMaxLen] = useState('');
-  const [startKvCacheDType, setStartKvCacheDType] = useState('auto');
-  const [startParser, setStartParser] = useState('');
+  const [deployConfig, setDeployConfig] = useState({
+    modelName: '',
+    port: '8080',
+    gpus: 1,
+    gpuIds: [],
+    mem: '0.5',
+    maxLen: '32768',
+    maxNumSeqs: '',
+    kvCacheDType: 'auto',
+    parser: '',
+    useServerApiKey: false,
+    useCustomServerApiKey: false,
+    serverApiKey: '',
+  });
+
+  const updateDeployConfig = (field, value) => {
+    setDeployConfig((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const startModelName = deployConfig.modelName;
+  const startPort = deployConfig.port;
+  const startGpus = deployConfig.gpus;
+  const startGpuIds = deployConfig.gpuIds;
+  const startMem = deployConfig.mem;
+  const startMaxLen = deployConfig.maxLen;
+  const startMaxNumSeqs = deployConfig.maxNumSeqs;
+  const startKvCacheDType = deployConfig.kvCacheDType;
+  const startParser = deployConfig.parser;
+  const startUseServerApiKey = deployConfig.useServerApiKey;
+  const startUseCustomServerApiKey = deployConfig.useCustomServerApiKey;
+  const startServerApiKey = deployConfig.serverApiKey;
   const [launchError, setLaunchError] = useState('');
   const [launching, setLaunching] = useState(false);
 
@@ -48,13 +80,16 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const [downloadError, setDownloadError] = useState('');
   const [checkingInfo, setCheckingInfo] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const [activeDownload, setActiveDownload] = useState(() => {
+  const [activeDownloads, setActiveDownloads] = useState(() => {
     try {
       const stored = localStorage.getItem(ACTIVE_DOWNLOAD_STORAGE_KEY);
       const parsed = stored ? JSON.parse(stored) : null;
-      return parsed && typeof parsed.name === 'string' ? parsed : null;
+      if (Array.isArray(parsed)) {
+        return parsed.filter((item) => item && typeof item.name === 'string');
+      }
+      return parsed && typeof parsed.name === 'string' ? [parsed] : [];
     } catch {
-      return null;
+      return [];
     }
   });
   const [restartError, setRestartError] = useState('');
@@ -63,10 +98,10 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const [removeError, setRemoveError] = useState('');
   const [removing, setRemoving] = useState(false);
   const [deleteCacheConfirmModel, setDeleteCacheConfirmModel] = useState(null);
-  const [deleteCacheError, setDeleteCacheError] = useState('');
   const [deletingCache, setDeletingCache] = useState(false);
 
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const gpuList = useMemo(() => gpus || [], [gpus]);
   const noGpuDetected = gpuList.length === 0;
   const gpuUnavailableMessage = gpuError || 'No GPUs detected. Deployment is disabled until nvidia-smi reports at least one GPU.';
@@ -84,92 +119,58 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   useAutoDismiss(removeError, setRemoveError);
   useAutoDismiss(downloadMessage, setDownloadMessage);
   useAutoDismiss(downloadError, setDownloadError);
-  useAutoDismiss(deleteCacheError, setDeleteCacheError);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      const model = searchParams.get('model');
+      const download = searchParams.get('download');
+      if (download) {
+        setDownloadName(download);
+      }
+      if (!model) return;
+
+      const gpuCount = Number(searchParams.get('gpus')) || 1;
+      const gpuIds = (searchParams.get('gpu_ids') || '')
+        .split(',')
+        .map((value) => Number(value.trim()))
+        .filter((value) => Number.isInteger(value));
+
+      setDeployConfig((prev) => ({
+        ...prev,
+        modelName: model,
+        gpus: gpuCount,
+        gpuIds,
+        mem: searchParams.get('mem_util') || prev.mem,
+        maxLen: searchParams.get('max_len') || prev.maxLen,
+        maxNumSeqs: searchParams.get('max_num_seqs') || prev.maxNumSeqs,
+        kvCacheDType: searchParams.get('kv_cache_dtype') || prev.kvCacheDType,
+      }));
+    }, 0);
+
+    return () => clearTimeout(timeout);
+  }, [searchParams]);
 
   useEffect(() => {
     try {
-      if (activeDownload) {
-        localStorage.setItem(ACTIVE_DOWNLOAD_STORAGE_KEY, JSON.stringify(activeDownload));
+      if (activeDownloads.length > 0) {
+        localStorage.setItem(ACTIVE_DOWNLOAD_STORAGE_KEY, JSON.stringify(activeDownloads));
       } else {
         localStorage.removeItem(ACTIVE_DOWNLOAD_STORAGE_KEY);
       }
     } catch {
       // Progress persistence is best-effort; polling still works without storage.
     }
-  }, [activeDownload]);
-
-  const getKVCacheBytesPerGpu = (selectedModel, requestedGpus, maxModelLen, kvCacheDType) => {
-    if (!selectedModel || !requestedGpus || !maxModelLen) return 0;
-
-    const layers = selectedModel.kv_cache_layers || 0;
-    const keyValueHeads = selectedModel.kv_cache_key_value_heads || 0;
-    const headDim = selectedModel.kv_cache_head_dim || 0;
-    const modelDTypeBytes = selectedModel.kv_cache_dtype_bytes || 0;
-    const dtypeBytes = getKVCacheDTypeBytes(kvCacheDType, modelDTypeBytes);
-
-    if (layers > 0 && keyValueHeads > 0 && headDim > 0 && dtypeBytes > 0) {
-      const keyValueHeadsPerGpu = Math.max(1, Math.ceil(keyValueHeads / requestedGpus));
-      const bytesPerTokenPerGpu = 2 * layers * keyValueHeadsPerGpu * headDim * dtypeBytes;
-      return bytesPerTokenPerGpu * maxModelLen;
-    }
-
-    return 0;
-  };
-
-  const vramPreflightError = useMemo(() => {
-    if (noGpuDetected) return '';
-
-    const selectedModel = downloadedModels.find((m) => m.name === startModelName);
-    const modelBytes = selectedModel?.size_bytes || 0;
-    const requestedGpus = Number(startGpus);
-    if (!modelBytes || !requestedGpus || requestedGpus < 1) return '';
-
-    const memUtil = startMem ? Number(startMem) : DEFAULT_GPU_MEMORY_UTILIZATION;
-    if (Number.isNaN(memUtil) || memUtil <= 0 || memUtil > 1.0) return '';
-
-    const selectedGpus = (() => {
-      if (selectedGpuIds.length > 0) {
-        return gpuList.filter((gpu) => selectedGpuIds.includes(gpu.id)).sort((a, b) => a.id - b.id);
-      }
-      return [...gpuList].sort((a, b) => a.id - b.id).slice(0, requestedGpus);
-    })();
-    if (selectedGpus.length !== requestedGpus) return '';
-
-    const modelBytesPerGpu = (modelBytes / requestedGpus) * MODEL_VRAM_SAFETY_MARGIN;
-    const effectiveMaxLen = (() => {
-      if (startMaxLen) {
-        const parsed = Number(startMaxLen);
-        return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
-      }
-      return selectedModel?.default_max_model_len || 0;
-    })();
-    const kvCacheBytesPerGpu = getKVCacheBytesPerGpu(selectedModel, requestedGpus, effectiveMaxLen, startKvCacheDType);
-    const requiredPerGpu = modelBytesPerGpu + kvCacheBytesPerGpu;
-    const limitingGpu = selectedGpus.find((gpu) => {
-      const utilizationBudget = gpu.memory_total * memUtil;
-      const availableBudget = Math.min(gpu.memory_free, utilizationBudget);
-      return requiredPerGpu > availableBudget;
-    });
-
-    if (!limitingGpu) return '';
-
-    const availableBudget = Math.min(limitingGpu.memory_free, limitingGpu.memory_total * memUtil);
-    if (kvCacheBytesPerGpu > 0) {
-      return `${selectedModel.name} needs about ${formatBytes(requiredPerGpu)} per GPU (${formatBytes(modelBytesPerGpu)} model shard plus ${formatBytes(kvCacheBytesPerGpu)} KV cache at max_model_len ${effectiveMaxLen}), but GPU ${limitingGpu.id} only has ${formatBytes(availableBudget)} available within the ${memUtil.toFixed(2)} memory utilization budget.`;
-    }
-    return `${selectedModel.name} needs about ${formatBytes(requiredPerGpu)} per GPU after margin, but GPU ${limitingGpu.id} only has ${formatBytes(availableBudget)} available within the ${memUtil.toFixed(2)} memory utilization budget.`;
-  }, [noGpuDetected, startModelName, startGpus, selectedGpuIds, startMem, startMaxLen, startKvCacheDType, gpuList, downloadedModels]);
+  }, [activeDownloads]);
 
   const handleGpuCountChange = (event) => {
     if (noGpuDetected) {
-      setStartGpuIds([]);
+      updateDeployConfig('gpuIds', []);
       return;
     }
 
     const rawValue = event.target.value;
     if (rawValue === '') {
-      setStartGpus('');
-      setStartGpuIds([]);
+      setDeployConfig((prev) => ({ ...prev, gpus: '', gpuIds: [] }));
       return;
     }
 
@@ -178,15 +179,24 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
 
     const nextCount = Math.min(maxGpus, Math.max(1, Math.trunc(parsed)));
     const nextUsesAll = nextCount >= maxGpus;
-    setStartGpus(nextCount);
-    setStartGpuIds((current) => normalizeGpuPinning(current, availableGpuIds, nextCount, nextUsesAll));
+    setDeployConfig((prev) => ({
+      ...prev,
+      gpus: nextCount,
+      gpuIds: normalizeGpuPinning(prev.gpuIds, availableGpuIds, nextCount, nextUsesAll),
+    }));
   };
 
   const toggleGpu = (id) => {
     if (usesAllGpus) return;
     if (selectedGpuIds.includes(id)) return;
 
-    setStartGpuIds([...selectedGpuIds.slice(0, requestedGpuCount - 1), id]);
+    updateDeployConfig('gpuIds', [...selectedGpuIds.slice(0, requestedGpuCount - 1), id]);
+  };
+
+  const scaleMaxLen = (factor) => {
+    const current = Number(startMaxLen) || DEFAULT_MAX_MODEL_LEN;
+    const next = Math.max(1, Math.round(current * factor));
+    updateDeployConfig('maxLen', String(next));
   };
 
   const validateLaunch = () => {
@@ -209,10 +219,17 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       }
     }
 
-    if (startParser && !/^[a-zA-Z0-9-]+$/.test(startParser)) return 'Tool parser must contain only letters, numbers, and hyphens';
+    if (startMaxNumSeqs) {
+      const maxNumSeqsNum = Number(startMaxNumSeqs);
+      if (Number.isNaN(maxNumSeqsNum) || maxNumSeqsNum <= 0 || !Number.isInteger(maxNumSeqsNum)) {
+        return 'Max num seqs must be a positive integer';
+      }
+    }
+
+    if (startParser && !/^[a-zA-Z0-9_-]+$/.test(startParser)) return 'Tool parser must contain only letters, numbers, underscores, and hyphens';
     if (!KV_CACHE_DTYPE_OPTIONS.includes(startKvCacheDType)) return 'KV cache dtype must be auto, fp8, fp8_e5m2, or fp8_e4m3';
     if (!usesAllGpus && selectedGpuIds.length !== gpusToSend) return `Select exactly ${gpusToSend} GPU${gpusToSend === 1 ? '' : 's'} for pinning.`;
-    if (vramPreflightError) return vramPreflightError;
+    if (!proxyEnabled && vllmAPIKeySet && startUseServerApiKey && startUseCustomServerApiKey && !startServerApiKey.trim()) return 'Enter a per-server API key or turn off custom API key.';
     return '';
   };
 
@@ -227,6 +244,8 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     }
 
     const gpuIdsParam = usesAllGpus ? 'all' : [...selectedGpuIds].sort((a, b) => a - b).join(',');
+    const effectiveUseServerApiKey = !proxyEnabled && vllmAPIKeySet && startUseServerApiKey;
+    const effectiveServerApiKey = effectiveUseServerApiKey && startUseCustomServerApiKey ? startServerApiKey.trim() : '';
     const payload = {
       model: startModelName,
       port: Number(startPort),
@@ -234,8 +253,11 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       gpu_ids: gpuIdsParam,
       mem_util: startMem !== null && startMem !== undefined ? startMem.toString() : '',
       max_len: startMaxLen ? startMaxLen.toString() : '',
+      max_num_seqs: startMaxNumSeqs ? startMaxNumSeqs.toString() : '',
       kv_cache_dtype: startKvCacheDType,
       tool_parser: startParser || '',
+      use_api_key: effectiveUseServerApiKey,
+      server_api_key: effectiveServerApiKey,
     };
 
     try {
@@ -283,7 +305,6 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   };
 
   const requestDeleteDownloadedModel = (model) => {
-    setDeleteCacheError('');
     setDeleteCacheConfirmModel(model);
   };
 
@@ -291,18 +312,15 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     if (!deleteCacheConfirmModel) return;
 
     const modelName = deleteCacheConfirmModel.name;
-    setDeleteCacheError('');
     setDeletingCache(true);
     try {
       await deleteDownloadedModel(modelName);
       setDeleteCacheConfirmModel(null);
-      if (activeDownload?.name === modelName) {
-        setActiveDownload(null);
-      }
+      setActiveDownloads((prev) => prev.filter((item) => item.name !== modelName));
       notify(`Deleted ${modelName} from cache.`);
       fetchData();
     } catch (error) {
-      setDeleteCacheError(getErrorDetail(error, 'Failed to delete downloaded model'));
+      notify(getErrorDetail(error, 'Failed to delete downloaded model'), 'danger');
       setDeleteCacheConfirmModel(null);
     } finally {
       setDeletingCache(false);
@@ -313,23 +331,50 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     event.preventDefault();
     setDownloadMessage('');
     setDownloadError('');
+
+    const trimmedName = downloadName.trim();
+    if (!trimmedName) {
+      return;
+    }
+
+    // Pre-flight: consult the same endpoint the deploy card uses to see
+    // whether the model is already on disk. If it is, we surface a clear
+    // message instead of opening the confirm modal — the user almost
+    // certainly did not intend to re-download. The server enforces the
+    // same check, so this is purely a UX nicety.
     setCheckingInfo(true);
+    try {
+      const infoRes = await getModelInfo(trimmedName);
+      if (infoRes.data?.downloaded) {
+        const cached = infoRes.data.cached_bytes;
+        const sizeText = typeof cached === 'number' && cached > 0
+          ? `${formatBytes(cached)} on disk`
+          : 'already on disk';
+        setDownloadError(`${trimmedName} is ${sizeText}. Delete it from the cache below if you want to re-download.`);
+        return;
+      }
+    } catch (error) {
+      // A network or upstream error from getModelInfo shouldn't block the
+      // user from at least seeing the existing confirm modal — the
+      // server will still refuse with a 409 if the model is present.
+      getErrorDetail(error, '');
+    } finally {
+      setCheckingInfo(false);
+    }
 
     let sizeText = '';
     let sizeBytes = 0;
     try {
-      const infoRes = await getModelInfo(downloadName);
+      const infoRes = await getModelInfo(trimmedName);
       if (infoRes.data?.size_bytes) {
         sizeBytes = infoRes.data.size_bytes;
         sizeText = `Estimated file size: ${formatBytes(infoRes.data.size_bytes)}.`;
       }
     } catch {
       sizeText = 'Model size could not be fetched before download.';
-    } finally {
-      setCheckingInfo(false);
     }
 
-    setDownloadConfirmData({ model: downloadName, sizeText, sizeBytes });
+    setDownloadConfirmData({ model: trimmedName, sizeText, sizeBytes });
   };
 
   const executeDownload = async () => {
@@ -338,17 +383,23 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     setDownloading(true);
     try {
       const res = await downloadModel(downloadConfirmData.model);
-      setActiveDownload({
+      const nextDownload = {
         containerId: res.data?.container_id || '',
         name: downloadConfirmData.model,
         expectedSize: downloadConfirmData.sizeBytes,
-      });
+      };
+      setActiveDownloads((prev) => [nextDownload, ...prev.filter((item) => item.name !== nextDownload.name)]);
       setDownloadMessage('Download started. Progress will update as files appear in the cache.');
       setDownloadName('');
       setDownloadConfirmData(null);
       fetchData();
     } catch (error) {
-      setDownloadError(getErrorDetail(error, 'Failed to trigger download'));
+      const status = error.response?.status;
+      if (status === 409) {
+        setDownloadError(`${downloadConfirmData.model} is already downloaded. Delete it from the cache below if you want to re-download.`);
+      } else {
+        setDownloadError(getErrorDetail(error, 'Failed to trigger download'));
+      }
       setDownloadConfirmData(null);
     } finally {
       setDownloading(false);
@@ -356,203 +407,86 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   };
 
   return (
-    <div className="dashboard-grid">
-      <div className="stack">
-        <div className="card">
-          <div className="card-header">
-            <h2 className="card-title">
-              <Play size={18} /> Deploy Server
-            </h2>
-          </div>
-          {launchError && <div className="alert alert-danger">{launchError}</div>}
-          {noGpuDetected && !launchError && <div className="alert alert-danger">{gpuUnavailableMessage}</div>}
-          {vramPreflightError && !launchError && <div className="alert alert-danger">{vramPreflightError}</div>}
-          <form onSubmit={handleStart}>
-            <div className="form-group">
-              <label className="form-label">Downloaded Model</label>
-              <select className="form-control" value={startModelName} onChange={(event) => setStartModelName(event.target.value)} required>
-                <option value="" disabled>
-                  Select a model
-                </option>
-                {downloadedModels.map((model) => (
-                  <option key={model.name} value={model.name}>
-                    {model.name} ({model.size})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="form-grid">
-              <div className="form-group">
-                <label className="form-label">Port</label>
-                <input type="number" className="form-control" value={startPort} onChange={(event) => setStartPort(event.target.value)} required />
-              </div>
-              <div className="form-group">
-                <label className="form-label">GPUs</label>
-                <input
-                  type="number"
-                  className="form-control"
-                  value={startGpus}
-                  onChange={handleGpuCountChange}
-                  min="1"
-                  max={noGpuDetected ? 1 : maxGpus}
-                  step="1"
-                  disabled={noGpuDetected}
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="form-grid">
-              <div className="form-group">
-                <label className="form-label">GPU Pinning</label>
-                <div className="pill-container">
-                  {noGpuDetected ? (
-                    <span className="text-secondary text-sm">No GPUs detected</span>
-                  ) : usesAllGpus ? (
-                    <button className="pill selected" type="button" onClick={() => setStartGpuIds([])}>
-                      All
-                    </button>
-                  ) : (
-                    gpuList.map((gpu) => (
-                      <button key={gpu.id} className={`pill ${selectedGpuIds.includes(gpu.id) ? 'selected' : ''}`} type="button" onClick={() => toggleGpu(gpu.id)}>
-                        GPU {gpu.id}
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Memory Utilization</label>
-                <input type="text" className="form-control" value={startMem} onChange={(event) => setStartMem(event.target.value)} required />
-              </div>
-            </div>
-
-            <div className="form-grid">
-              <div className="form-group">
-                <label className="form-label">Max Context Length</label>
-                <input type="number" className="form-control" value={startMaxLen} onChange={(event) => setStartMaxLen(event.target.value)} placeholder="Model default" />
-              </div>
-              <div className="form-group">
-                <label className="form-label">KV Cache DType</label>
-                <select className="form-control" value={startKvCacheDType} onChange={(event) => setStartKvCacheDType(event.target.value)}>
-                  <option value="auto">auto</option>
-                  <option value="fp8">fp8</option>
-                  <option value="fp8_e5m2">fp8_e5m2</option>
-                  <option value="fp8_e4m3">fp8_e4m3</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Tool Call Parser</label>
-              <select className="form-control" value={startParser} onChange={(event) => setStartParser(event.target.value)}>
-                <option value="">Disabled</option>
-                <option value="hermes">hermes</option>
-                <option value="llama3_json">llama3_json</option>
-                <option value="mistral">mistral</option>
-              </select>
-            </div>
-
-            <button type="submit" className="btn btn-primary mt-2 full-width" disabled={launching || noGpuDetected || Boolean(vramPreflightError)}>
-              {launching ? 'Deploying...' : 'Deploy Server'}
-            </button>
-          </form>
-        </div>
-
-        <div className="card">
-          <div className="card-header">
-            <h2 className="card-title">
-              <Server size={20} /> Existing Model Containers
-            </h2>
-          </div>
-          {restartError && <div className="alert alert-danger">{restartError}</div>}
-          {removeError && <div className="alert alert-danger">{removeError}</div>}
-          <div className="model-list compact-list">
-            {activeModels.map((model) => (
-              <div key={model.container_id} className="model-item model-item-stacked">
-                <div className="model-title-row">
-                  <span className="model-name model-name-small">{model.model}</span>
-                  <span className="badge badge-active">Port {model.port}</span>
-                </div>
-                <div className="text-secondary text-sm">
-                  GPUs: {model.gpus} | Mem: {model.mem_util} | MaxLen: {model.max_len} | KV: {model.kv_cache_dtype || 'auto'} | Parser: {model.tool_parser}
-                </div>
-                <div className="model-actions-row">
-                  {model.state !== 'running' && (
-                    <button className="btn btn-outline" type="button" onClick={() => handleRestart(model.container_id)} disabled={restartingId === model.container_id}>
-                      {restartingId === model.container_id ? 'Restarting...' : 'Restart'}
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-            {activeModels.length === 0 && <p className="text-secondary text-sm">No existing configurations found.</p>}
-          </div>
-        </div>
+    <div className="dashboard-grid launch-page-grid">
+      <div className="stack launch-deploy-stack">
+        <DeployServerCard
+          downloadedModels={downloadedModels}
+          gpuList={gpuList}
+          gpuUnavailableMessage={gpuUnavailableMessage}
+          handleGpuCountChange={handleGpuCountChange}
+          handleStart={handleStart}
+          hasGlobalVllmAPIKey={vllmAPIKeySet}
+          proxyEnabled={proxyEnabled}
+          kvCacheDTypeOptions={KV_CACHE_DTYPE_OPTIONS}
+          launchError={launchError}
+          launching={launching}
+          maxGpus={maxGpus}
+          noGpuDetected={noGpuDetected}
+          onClearGpuPinning={() => updateDeployConfig('gpuIds', [])}
+          selectedGpuIds={selectedGpuIds}
+          serverApiKey={startServerApiKey}
+          setServerApiKey={(v) => updateDeployConfig('serverApiKey', v)}
+          setUseServerApiKey={(v) => updateDeployConfig('useServerApiKey', v)}
+          setUseCustomServerApiKey={(v) => updateDeployConfig('useCustomServerApiKey', v)}
+          setStartKvCacheDType={(v) => updateDeployConfig('kvCacheDType', v)}
+          setStartMaxLen={(v) => updateDeployConfig('maxLen', v)}
+          setStartMaxNumSeqs={(v) => updateDeployConfig('maxNumSeqs', v)}
+          scaleMaxLen={scaleMaxLen}
+          setStartMem={(v) => updateDeployConfig('mem', v)}
+          setStartModelName={(v) => updateDeployConfig('modelName', v)}
+          setStartParser={(v) => updateDeployConfig('parser', v)}
+          setStartPort={(v) => updateDeployConfig('port', v)}
+          startGpus={startGpus}
+          startKvCacheDType={startKvCacheDType}
+          startMaxLen={startMaxLen}
+          startMaxNumSeqs={startMaxNumSeqs}
+          startMem={startMem}
+          startModelName={startModelName}
+          startParser={startParser}
+          startPort={startPort}
+          useServerApiKey={startUseServerApiKey}
+          useCustomServerApiKey={startUseCustomServerApiKey}
+          toggleGpu={toggleGpu}
+          toolParserOptions={launchConfig?.tool_parser_options}
+          usesAllGpus={usesAllGpus}
+        />
       </div>
 
-      <div className="stack">
-        <div className="card">
-          <div className="card-header">
-            <h2 className="card-title">
-              <Download size={24} /> Download New Model
-            </h2>
-          </div>
-          <p className="text-secondary mb-4 text-sm">Downloads occur in the background via Docker. Progress is estimated from cached bytes on disk.</p>
-          {downloadMessage && <div className="alert alert-success">{downloadMessage}</div>}
-          {downloadError && <div className="alert alert-danger">{downloadError}</div>}
-          <form onSubmit={handleDownload}>
-            <div className="form-group">
-              <label className="form-label">HuggingFace Model ID</label>
-              <div className="inline-control">
-                <input
-                  type="text"
-                  className="form-control"
-                  value={downloadName}
-                  onChange={(event) => setDownloadName(event.target.value)}
-                  placeholder="e.g. meta-llama/Llama-3-8B-Instruct"
-                  required
-                />
-                <button type="submit" className="btn btn-primary" disabled={checkingInfo || downloading}>
-                  <Download size={18} />
-                  {checkingInfo ? 'Checking...' : 'Download'}
-                </button>
-              </div>
-            </div>
-          </form>
-          {activeDownload && (
-            <DownloadProgressPanel
-              key={activeDownload.name}
-              modelName={activeDownload.name}
-              expectedSize={activeDownload.expectedSize}
-              onDismiss={() => setActiveDownload(null)}
-            />
-          )}
-        </div>
+      <div className="stack launch-side-stack">
+        <DownloadModelCard
+          activeDownloads={activeDownloads}
+          checkingInfo={checkingInfo}
+          downloadError={downloadError}
+          downloading={downloading}
+          downloadMessage={downloadMessage}
+          downloadName={downloadName}
+          downloadedModels={downloadedModels}
+          handleDownload={handleDownload}
+          setActiveDownloads={setActiveDownloads}
+          setDownloadName={setDownloadName}
+        />
 
-        <div className="card">
-          <div className="card-header">
-            <h2 className="card-title">
-              <HardDrive size={20} /> Downloaded Models
-            </h2>
-          </div>
-          {deleteCacheError && <div className="alert alert-danger">{deleteCacheError}</div>}
-          <div className="model-list compact-list">
-            {downloadedModels.map((model) => (
-              <div key={model.name} className="model-item compact-model-item cache-model-item">
-                <span className="model-name model-name-small cache-model-name">{model.name}</span>
-                <div className="cache-model-actions">
-                  <span className="badge badge-active">{model.size}</span>
-                  <button className="btn btn-danger btn-compact" type="button" onClick={() => requestDeleteDownloadedModel(model)} disabled={deletingCache}>
-                    <Trash2 size={14} /> Delete
-                  </button>
-                </div>
-              </div>
-            ))}
-            {downloadedModels.length === 0 && <p className="text-secondary text-sm">No models found in cache.</p>}
-          </div>
-        </div>
+        <CachedModelsCard
+          deletingCache={deletingCache}
+          downloadedModels={downloadedModels}
+          requestDeleteDownloadedModel={requestDeleteDownloadedModel}
+        />
+      </div>
+
+      <div className="launch-servers-row">
+        <ActiveContainersCard
+          activeModels={activeModels}
+          handleRestart={handleRestart}
+          removing={removing}
+          removeError={removeError}
+          requestRemove={(containerId) => {
+            setRemoveError('');
+            setRemoveConfirmId(containerId);
+          }}
+          restartingId={restartingId}
+          restartError={restartError}
+          proxyEnabled={proxyEnabled}
+        />
       </div>
 
       {downloadConfirmData && (
