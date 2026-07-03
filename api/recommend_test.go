@@ -4,11 +4,16 @@ import "testing"
 
 func TestRecommendModelsRanksFittingModels(t *testing.T) {
 	stubGPUInfo(t, func() ([]GPUInfo, error) {
+		// MemoryFree is intentionally set to 0 to simulate a host with
+		// other workloads holding VRAM. Recommendations should still
+		// surface because the budget is derived from total VRAM, not
+		// free VRAM. The launch path still gates against MemoryFree in
+		// CheckModelFitsInVRAM.
 		return []GPUInfo{{
 			ID:          0,
 			Name:        "NVIDIA RTX 4090",
 			MemoryTotal: 24 * 1024 * 1024 * 1024,
-			MemoryFree:  22 * 1024 * 1024 * 1024,
+			MemoryFree:  0,
 		}}, nil
 	})
 

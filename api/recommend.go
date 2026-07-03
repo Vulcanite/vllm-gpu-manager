@@ -62,7 +62,6 @@ type recommendGPUGroup struct {
 	Name        string
 	GPUs        []GPUInfo
 	TotalVRAMGB float64
-	MinFreeGB   float64
 	MinTotalGB  float64
 	GPUIDs      []int
 }
@@ -145,14 +144,18 @@ func recommendationGroups(gpus []GPUInfo) []recommendGPUGroup {
 		key := gpu.Name + "\x00" + FormatBytes(gpu.MemoryTotal)
 		group := byKey[key]
 		if group == nil {
-			group = &recommendGPUGroup{Name: gpu.Name, MinFreeGB: bytesToGB(gpu.MemoryFree), MinTotalGB: bytesToGB(gpu.MemoryTotal)}
+			// Recommendation budgets use total VRAM (modulated by mem_util)
+			// rather than currently-free VRAM so that foreign processes
+			// holding memory on the host do not push every model into
+			// "too_tight". The actual launch still gates against free
+			// memory in CheckModelFitsInVRAM; this only affects scoring.
+			group = &recommendGPUGroup{Name: gpu.Name, MinTotalGB: bytesToGB(gpu.MemoryTotal)}
 			byKey[key] = group
 			keys = append(keys, key)
 		}
 		group.GPUs = append(group.GPUs, gpu)
 		group.TotalVRAMGB += bytesToGB(gpu.MemoryTotal)
 		group.GPUIDs = append(group.GPUIDs, gpu.ID)
-		group.MinFreeGB = math.Min(group.MinFreeGB, bytesToGB(gpu.MemoryFree))
 		group.MinTotalGB = math.Min(group.MinTotalGB, bytesToGB(gpu.MemoryTotal))
 	}
 
@@ -201,7 +204,7 @@ func scoreRecommendation(model recommendCatalogModel, group recommendGPUGroup, g
 	weightGB := model.ParameterB * quantBytesPerParam(model.Quantization) * modelVRAMSafetyMargin
 	kvGB := activeB * 0.000008 * float64(maxLen)
 	requiredPerGPU := (weightGB+kvGB)/float64(gpuCount) + recommendOverheadGB
-	budgetPerGPU := math.Min(group.MinFreeGB, group.MinTotalGB*recommendDefaultMemUtil)
+	budgetPerGPU := group.MinTotalGB * recommendDefaultMemUtil
 	fitLevel, fitScore := recommendationFit(requiredPerGPU, budgetPerGPU)
 	useScore := recommendationUseCaseScore(model, useCase)
 	quality := clamp(model.Quality, 0, 100)

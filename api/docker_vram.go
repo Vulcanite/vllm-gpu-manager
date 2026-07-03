@@ -40,6 +40,7 @@ type LaunchConfig struct {
 	DefaultGPUMemoryUtilization float64  `json:"default_gpu_memory_utilization"`
 	DefaultMaxModelLen          int      `json:"default_max_model_len"`
 	KVCacheDTypeOptions         []string `json:"kv_cache_dtype_options"`
+	ToolParserOptions           []string `json:"tool_parser_options"`
 }
 
 // LaunchDefaults returns the launch tuning constants shared with the frontend.
@@ -49,6 +50,7 @@ func LaunchDefaults() LaunchConfig {
 		DefaultGPUMemoryUtilization: defaultGPUMemoryUtilization,
 		DefaultMaxModelLen:          defaultMaxModelLen,
 		KVCacheDTypeOptions:         append([]string(nil), kvCacheDTypeOptions...),
+		ToolParserOptions:           allowedToolParserNames(),
 	}
 }
 
@@ -150,9 +152,10 @@ func findModelConfigPath(hfCache string, model string) (string, error) {
 		}
 	}
 
-	// Fallback: walk the cache tree. Sort snapshot configs by the ModTime of their
-	// parent snapshot directory (newest first) so that if multiple revisions exist
-	// we use the most recently downloaded one, not an arbitrary lexicographic hash.
+	// Fallback: walk the cache tree, but only descend into snapshots/ and
+	// other known subdirectories.  Large model caches (100 GB+) can take
+	// seconds to walk fully; limiting depth to the snapshot level keeps this
+	// under ~100 ms even for huge models.
 	type configCandidate struct {
 		path    string
 		modTime time.Time
@@ -184,10 +187,15 @@ func findModelConfigPath(hfCache string, model string) (string, error) {
 			}
 			snapshotCandidates = append(snapshotCandidates, configCandidate{path, modTime})
 		} else {
-			if info, err := entry.Info(); err == nil {
-				modTime = info.ModTime()
+			// Only walk one level deep for non-snapshot configs to avoid
+			// scanning deep nested directories in large model caches.
+			depth := strings.Count(rel, string(filepath.Separator))
+			if depth <= 2 {
+				if info, err := entry.Info(); err == nil {
+					modTime = info.ModTime()
+				}
+				otherCandidates = append(otherCandidates, configCandidate{path, modTime})
 			}
-			otherCandidates = append(otherCandidates, configCandidate{path, modTime})
 		}
 		return nil
 	}); err != nil {
