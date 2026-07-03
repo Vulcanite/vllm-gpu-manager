@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/glamour"
 	"github.com/spf13/cobra"
@@ -45,7 +46,7 @@ func newCLICommand(out io.Writer, errOut io.Writer) *cobra.Command {
 	cmd.SetErr(errOut)
 	cmd.Flags().Bool("dashboard", false, "run the web dashboard")
 	cmd.Flags().String("port", defaultDashboardPort, "dashboard port")
-	cmd.Flags().Bool("proxy", false, "enable the /v1/ proxy gateway")
+	cmd.Flags().Bool("proxy", false, "enable the /v1/ proxy gateway (always enabled in dashboard mode)")
 	cmd.PersistentFlags().BoolVar(&opts.JSON, "json", false, "print JSON output")
 	cmd.AddCommand(
 		newGPUCommand(opts),
@@ -116,14 +117,7 @@ func newModelCommand(opts *cliOptions) *cobra.Command {
 				return cliModelInfo(args, *opts)
 			},
 		},
-		&cobra.Command{
-			Use:   "download <model>",
-			Short: "Download a model into the configured cache",
-			Args:  cobra.ExactArgs(1),
-			RunE: func(_ *cobra.Command, args []string) error {
-				return cliModelDownload(args, *opts)
-			},
-		},
+		newModelDownloadCommand(opts),
 		&cobra.Command{
 			Use:   "progress <model>",
 			Short: "Show cached bytes for a model download",
@@ -168,11 +162,15 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 	var maxNumSeqs string
 	var kvCacheDType string
 	var toolParser string
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "start <model>",
 		Short: "Start a vLLM OpenAI-compatible server",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
+			if err := guardMutation(force, "model start"); err != nil {
+				return err
+			}
 			if port == 0 {
 				return errors.New("model start requires --port")
 			}
@@ -180,7 +178,7 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 				return errors.New("model start requires --gpus")
 			}
 			settings := getSettings()
-			if err := api.StartModel(args[0], port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, kvCacheDType, toolParser, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, "0.0.0.0"); err != nil {
+			if err := api.StartModel(args[0], port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, kvCacheDType, toolParser, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, "0.0.0.0", ""); err != nil {
 				return err
 			}
 			upsertRoute(args[0], port)
@@ -205,22 +203,28 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 	cmd.Flags().StringVar(&maxNumSeqs, "max-num-seqs", "", "vLLM max number of sequences")
 	cmd.Flags().StringVar(&kvCacheDType, "kv-cache-dtype", "auto", "vLLM KV cache dtype: auto, fp8, fp8_e5m2, fp8_e4m3")
 	cmd.Flags().StringVar(&toolParser, "tool-parser", "", "vLLM tool call parser")
+	cmd.Flags().BoolVar(&force, "force", false, "run the command even if the dashboard is running")
 	return cmd
 }
 
 func newModelStopCommand(opts *cliOptions) *cobra.Command {
 	var port int
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "stop",
 		Short: "Stop the managed vLLM server on a port",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if err := guardMutation(force, "model stop"); err != nil {
+				return err
+			}
 			if port == 0 {
 				return errors.New("model stop requires --port")
 			}
 			if err := api.StopModel(port); err != nil {
 				return err
 			}
+			cleanupModelStateForPort(port)
 			return printMutationResult(*opts, map[string]interface{}{
 				"status": "stopped",
 				"port":   port,
@@ -228,16 +232,21 @@ func newModelStopCommand(opts *cliOptions) *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVar(&port, "port", 0, "port for the vLLM server")
+	cmd.Flags().BoolVar(&force, "force", false, "run the command even if the dashboard is running")
 	return cmd
 }
 
 func newModelRestartCommand(opts *cliOptions) *cobra.Command {
 	var containerID string
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "restart",
 		Short: "Restart a managed container",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if err := guardMutation(force, "model restart"); err != nil {
+				return err
+			}
 			if strings.TrimSpace(containerID) == "" {
 				return errors.New("model restart requires --container-id")
 			}
@@ -251,25 +260,37 @@ func newModelRestartCommand(opts *cliOptions) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&containerID, "container-id", "", "managed container ID")
+	cmd.Flags().BoolVar(&force, "force", false, "run the command even if the dashboard is running")
 	return cmd
 }
 
 func newModelRemoveCommand(opts *cliOptions) *cobra.Command {
 	var containerID string
 	var yes bool
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "remove",
 		Short: "Remove a managed container",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if err := guardMutation(force, "model remove"); err != nil {
+				return err
+			}
 			if strings.TrimSpace(containerID) == "" {
 				return errors.New("model remove requires --container-id")
 			}
 			if err := confirmDestructive(yes, fmt.Sprintf("Remove managed container %s?", containerID)); err != nil {
 				return err
 			}
+			modelState, cleanupState, cleanupErr := api.GetManagedModelByContainerID(containerID)
+			if cleanupErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to resolve managed container %s for state cleanup: %v\n", containerID, cleanupErr)
+			}
 			if err := api.RemoveModel(containerID); err != nil {
 				return err
+			}
+			if cleanupState {
+				cleanupModelStateForActiveModel(modelState)
 			}
 			return printMutationResult(*opts, map[string]interface{}{
 				"status":       "removed",
@@ -279,6 +300,7 @@ func newModelRemoveCommand(opts *cliOptions) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&containerID, "container-id", "", "managed container ID")
 	cmd.Flags().BoolVar(&yes, "yes", false, "skip confirmation prompt")
+	cmd.Flags().BoolVar(&force, "force", false, "run the command even if the dashboard is running")
 	return cmd
 }
 
@@ -294,11 +316,15 @@ func newCacheCommand(opts *cliOptions) *cobra.Command {
 
 func newCacheDeleteCommand(opts *cliOptions) *cobra.Command {
 	var yes bool
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "delete <model>",
 		Short: "Delete a cached model",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
+			if err := guardMutation(force, "cache delete"); err != nil {
+				return err
+			}
 			if err := confirmDestructive(yes, fmt.Sprintf("Delete cached model %s?", args[0])); err != nil {
 				return err
 			}
@@ -312,6 +338,7 @@ func newCacheDeleteCommand(opts *cliOptions) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&yes, "yes", false, "skip confirmation prompt")
+	cmd.Flags().BoolVar(&force, "force", false, "run the command even if the dashboard is running")
 	return cmd
 }
 
@@ -343,11 +370,16 @@ func newSettingsSetCommand(opts *cliOptions) *cobra.Command {
 	var clearVLLMAPIKey bool
 	var enableCUDACompatibility bool
 	var hfHubOffline bool
+	var vllmImage string
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "set",
 		Short: "Update local settings",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := guardMutation(force, "settings set"); err != nil {
+				return err
+			}
 			if strings.TrimSpace(hfCache) == "" {
 				return errors.New("settings set requires --hf-cache")
 			}
@@ -357,16 +389,19 @@ func newSettingsSetCommand(opts *cliOptions) *cobra.Command {
 			if clearVLLMAPIKey && vllmAPIKey != "" {
 				return errors.New("settings set cannot use --vllm-api-key and --clear-vllm-api-key together")
 			}
+			var vllmImagePtr *string
+			if cmd.Flags().Changed("vllm-image") {
+				vllmImagePtr = &vllmImage
+			}
 			settings, err := updateSettings(SettingsUpdate{
 				HFCache:                 hfCache,
 				HFToken:                 hfToken,
 				ClearHFToken:            clearHFToken,
 				VLLMAPIKey:              vllmAPIKey,
 				ClearVLLMAPIKey:         clearVLLMAPIKey,
-				EnableCUDACompatibility: enableCUDACompatibility,
-				SetCUDACompatibility:    cmd.Flags().Changed("vllm-cuda-compatibility"),
-				HFHubOffline:            hfHubOffline,
-				SetHFHubOffline:         cmd.Flags().Changed("hf-hub-offline"),
+				EnableCUDACompatibility: boolPtrIfChanged(cmd.Flags().Changed("vllm-cuda-compatibility"), enableCUDACompatibility),
+				HFHubOffline:            boolPtrIfChanged(cmd.Flags().Changed("hf-hub-offline"), hfHubOffline),
+				VLLMImage:               vllmImagePtr,
 			})
 			if err != nil {
 				return err
@@ -378,6 +413,7 @@ func newSettingsSetCommand(opts *cliOptions) *cobra.Command {
 				"vllm_api_key_set":          settings.VLLMAPIKey != "",
 				"enable_cuda_compatibility": settings.EnableCUDACompatibility,
 				"hf_hub_offline":            settings.HFHubOffline,
+				"vllm_image":                settings.VLLMImage,
 			})
 		},
 	}
@@ -388,6 +424,8 @@ func newSettingsSetCommand(opts *cliOptions) *cobra.Command {
 	cmd.Flags().BoolVar(&clearVLLMAPIKey, "clear-vllm-api-key", false, "clear stored vLLM API key")
 	cmd.Flags().BoolVar(&enableCUDACompatibility, "vllm-cuda-compatibility", false, "set VLLM_ENABLE_CUDA_COMPATIBILITY=1 on new serving containers")
 	cmd.Flags().BoolVar(&hfHubOffline, "hf-hub-offline", false, "set HF_HUB_OFFLINE=1 on new serving containers")
+	cmd.Flags().StringVar(&vllmImage, "vllm-image", "", "vLLM Docker image to use")
+	cmd.Flags().BoolVar(&force, "force", false, "run the command even if the dashboard is running")
 	return cmd
 }
 
@@ -470,24 +508,65 @@ func cliModelInfo(args []string, opts cliOptions) error {
 	if err != nil {
 		return err
 	}
-	if opts.JSON {
-		return printJSON(info)
+	settings := getSettings()
+	downloaded, cachedBytes, cacheErr := api.IsModelDownloaded(args[0], settings.HFCache)
+	if cacheErr != nil {
+		// A misconfigured cache is a problem worth surfacing, but a missing
+		// model on disk is normal. Treat it as a soft signal rather than
+		// failing the whole info command.
+		downloaded = false
+		cachedBytes = 0
 	}
-	printMarkdownTable(os.Stdout, []string{"Model", "Size", "Downloads", "Likes"}, [][]string{{
+	if opts.JSON {
+		return printJSON(map[string]interface{}{
+			"model":         info.Model,
+			"size_bytes":    info.SizeBytes,
+			"downloads":     info.Downloads,
+			"likes":         info.Likes,
+			"downloaded":    downloaded,
+			"cached_bytes":  cachedBytes,
+			"cache_warning": cacheWarning(cacheErr),
+		})
+	}
+	cacheStatus := "no"
+	if downloaded {
+		cacheStatus = fmt.Sprintf("yes (%s)", api.FormatBytes(cachedBytes))
+	}
+	rows := [][]string{{
 		info.Model,
 		api.FormatBytes(uint64(info.SizeBytes)),
 		strconv.Itoa(info.Downloads),
 		strconv.Itoa(info.Likes),
-	}})
+		cacheStatus,
+	}}
+	printMarkdownTable(os.Stdout, []string{"Model", "Size", "Downloads", "Likes", "Cached"}, rows)
 	return nil
 }
+
+func cacheWarning(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+var downloadModelForCLI = api.DownloadModel
 
 func cliModelDownload(args []string, opts cliOptions) error {
 	if len(args) != 1 {
 		return errors.New("usage: model download <model>")
 	}
 	settings := getSettings()
-	containerID, err := api.DownloadModel(args[0], settings.HFCache, settings.HFToken)
+
+	// Pre-flight: surface a clear hint before the API call so the operator
+	// knows what to do next. The API still enforces this server-side, so
+	// this only affects the error message; re-downloading an already-present
+	// model requires `cache delete <model>` first.
+	if downloaded, size, err := api.IsModelDownloaded(args[0], settings.HFCache); err == nil && downloaded {
+		return fmt.Errorf("refused: %s is already downloaded (%s on disk). Run `vllm-manager cache delete %s` first if you want to re-download", args[0], api.FormatBytes(size), args[0])
+	}
+
+	containerID, err := downloadModelForCLI(args[0], settings.HFCache, settings.HFToken)
 	if err != nil {
 		return err
 	}
@@ -496,6 +575,17 @@ func cliModelDownload(args []string, opts cliOptions) error {
 		"model":        args[0],
 		"container_id": containerID,
 	})
+}
+
+func newModelDownloadCommand(opts *cliOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:   "download <model>",
+		Short: "Download a model into the configured cache",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return cliModelDownload(args, *opts)
+		},
+	}
 }
 
 func cliModelProgress(args []string, opts cliOptions) error {
@@ -565,6 +655,7 @@ func cliSettingsGet(args []string, opts cliOptions) error {
 		{"vLLM API Key", setUnset(status.VLLMAPIKeySet)},
 		{"vLLM CUDA Compatibility", enabledDisabled(status.EnableCUDACompatibility)},
 		{"HF Hub Offline", enabledDisabled(status.HFHubOffline)},
+		{"vLLM Docker Image", status.VLLMImage},
 		{"Cache Disk Used", api.FormatBytes(status.DiskUsed)},
 		{"Cache Disk Total", api.FormatBytes(status.DiskTotal)},
 		{"Cache Disk Free", api.FormatBytes(status.DiskFree)},
@@ -777,4 +868,47 @@ func enabledDisabled(value bool) string {
 		return "enabled"
 	}
 	return "disabled"
+}
+
+// boolPtrIfChanged is a small tri-state helper. It returns nil if the user
+// did not touch the flag, and &value otherwise, so the settings update can
+// distinguish "absent" from "false" without a parallel Set* flag.
+func boolPtrIfChanged(changed bool, value bool) *bool {
+	if !changed {
+		return nil
+	}
+	v := value
+	return &v
+}
+
+// dashboardLiveForTest is overridable in tests so CLI guard behaviour can be
+// exercised without spinning up a real dashboard. Production code must leave
+// this nil so the real heartbeat probe runs.
+var dashboardLiveForTest func() bool
+
+// guardMutation refuses to run a mutating CLI command when the dashboard
+// appears to be live, so the two cannot race over the same model/port. The
+// operator can pass --force to bypass the guard.
+func guardMutation(force bool, command string) error {
+	if force {
+		return nil
+	}
+	live := dashboardIsLive
+	if dashboardLiveForTest != nil {
+		live = dashboardLiveForTest
+	}
+	if !live() {
+		return nil
+	}
+	s := getSettings()
+	hb := s.Heartbeat
+	age := "unknown"
+	if hb != nil {
+		age = time.Since(hb.LastSeen).Truncate(time.Second).String()
+	}
+	pid := -1
+	if hb != nil {
+		pid = hb.PID
+	}
+	return fmt.Errorf("refused: dashboard is running (pid %d, last heartbeat %s ago). Stop the dashboard or pass --force (command: %s)", pid, age, command)
 }
