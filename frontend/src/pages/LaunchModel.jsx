@@ -19,7 +19,13 @@ const DEFAULT_LAUNCH_CONFIG = {
   model_vram_safety_margin: 1.08,
   default_gpu_memory_utilization: 0.9,
   default_max_model_len: 32768,
+  hf_cache: '~/.cache/huggingface',
+  vllm_image: 'vllm/vllm-openai:v0.23.0-cu129',
   kv_cache_dtype_options: ['auto', 'fp8', 'fp8_e5m2', 'fp8_e4m3'],
+  tokenizer_mode_options: ['auto', 'hf', 'slow', 'mistral', 'deepseek_v32', 'deepseek_v4'],
+  reasoning_parser_options: ['deepseek_r1', 'deepseek_v4', 'ernie_x1', 'glm45', 'granite', 'hunyuan_a13b', 'mistral', 'openai_gptoss', 'qwen3'],
+  block_size_options: [16, 32, 64, 128],
+  moe_backend_options: ['auto', 'cutlass', 'deepep_high_throughput', 'deepep_low_latency', 'flashinfer', 'flashinfer_all2allv', 'naive', 'pplx', 'triton'],
 };
 
 const normalizeGpuPinning = (selectedIds, availableIds, requestedCount, useAll) => {
@@ -34,11 +40,84 @@ const normalizeGpuPinning = (selectedIds, availableIds, requestedCount, useAll) 
   return next;
 };
 
+const shellQuote = (value) => {
+  const text = String(value ?? '');
+  if (/^[A-Za-z0-9_./:=,@+~-]+$/.test(text)) return text;
+  return `'${text.replaceAll("'", "'\"'\"'")}'`;
+};
+
+const dockerContainerName = (model, port) => {
+  const shortName = String(model || '').split('/').pop() || 'model';
+  const safeName = shortName.toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'model';
+  return `vllm-${safeName}-${port}`;
+};
+
+const buildDockerRunCommand = (payload, { dockerGpuFlag = 'all', hfCache, hostBindIP = '', includeAPIKey = false, vllmImage } = {}) => {
+  const image = vllmImage || DEFAULT_LAUNCH_CONFIG.vllm_image;
+  const cachePath = hfCache || DEFAULT_LAUNCH_CONFIG.hf_cache;
+  const bindIP = hostBindIP || payload.bind_ip || '';
+  const hostPort = bindIP ? `${bindIP}:${payload.port}:${payload.port}` : `${payload.port}:${payload.port}`;
+  const args = [
+    'docker', 'run',
+    '--gpus', dockerGpuFlag,
+    '--name', dockerContainerName(payload.model, payload.port),
+    '--ipc=host',
+    '-p', hostPort,
+    '-v', `${cachePath}:/hf_cache`,
+    '-e', 'HF_HOME=/hf_cache',
+    image,
+    '--model', payload.model,
+    '--host', '0.0.0.0',
+    '--port', String(payload.port),
+    '--tensor-parallel-size', String(payload.gpus),
+    '--gpu-memory-utilization', payload.mem_util,
+    '--enable-prefix-caching',
+  ];
+  if (payload.max_len) args.push('--max-model-len', payload.max_len);
+  if (payload.max_num_seqs) args.push('--max-num-seqs', payload.max_num_seqs);
+  if (payload.kv_cache_dtype && payload.kv_cache_dtype !== 'auto') args.push('--kv-cache-dtype', payload.kv_cache_dtype);
+  if (payload.tool_parser) args.push('--tool-call-parser', payload.tool_parser, '--enable-auto-tool-choice');
+  if (payload.tokenizer_mode && payload.tokenizer_mode !== 'auto') args.push('--tokenizer-mode', payload.tokenizer_mode);
+  if (payload.reasoning_parser) args.push('--reasoning-parser', payload.reasoning_parser);
+  if (payload.trust_remote_code) args.push('--trust-remote-code');
+  if (payload.block_size) args.push('--block-size', payload.block_size);
+  if (payload.moe_backend && payload.moe_backend !== 'auto') args.push('--moe-backend', payload.moe_backend);
+  if (payload.enable_expert_parallel) args.push('--enable-expert-parallel');
+  if (payload.disable_flashinfer_autotune) args.push('--no-enable-flashinfer-autotune');
+  if (payload.speculative_config) args.push('--speculative-config', payload.speculative_config);
+  if (payload.use_api_key) args.push('--api-key', includeAPIKey && payload.server_api_key ? payload.server_api_key : '<redacted>');
+
+  const valueFlags = new Set(['--gpus', '--name', '-p', '-v', '-e', '--model', '--host', '--port', '--tensor-parallel-size', '--gpu-memory-utilization', '--max-model-len', '--max-num-seqs', '--kv-cache-dtype', '--tool-call-parser', '--tokenizer-mode', '--reasoning-parser', '--block-size', '--moe-backend', '--speculative-config', '--api-key']);
+  const lines = [`${args[0]} ${args[1]}`];
+  for (let i = 2; i < args.length; i += 1) {
+    const arg = args[i];
+    if (valueFlags.has(arg) && args[i + 1] !== undefined) {
+      lines.push(`  ${shellQuote(arg)} ${shellQuote(args[i + 1])}`);
+      i += 1;
+    } else {
+      lines.push(`  ${shellQuote(arg)}`);
+    }
+  }
+  return lines.join(' \\\n');
+};
+
 export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModels, launchConfig, fetchData, notify, vllmAPIKeySet = false, proxyEnabled = false }) => {
   const DEFAULT_MAX_MODEL_LEN = launchConfig?.default_max_model_len ?? DEFAULT_LAUNCH_CONFIG.default_max_model_len;
   const KV_CACHE_DTYPE_OPTIONS = launchConfig?.kv_cache_dtype_options?.length
     ? launchConfig.kv_cache_dtype_options
     : DEFAULT_LAUNCH_CONFIG.kv_cache_dtype_options;
+  const TOKENIZER_MODE_OPTIONS = launchConfig?.tokenizer_mode_options?.length
+    ? launchConfig.tokenizer_mode_options
+    : DEFAULT_LAUNCH_CONFIG.tokenizer_mode_options;
+  const REASONING_PARSER_OPTIONS = launchConfig?.reasoning_parser_options?.length
+    ? launchConfig.reasoning_parser_options
+    : DEFAULT_LAUNCH_CONFIG.reasoning_parser_options;
+  const BLOCK_SIZE_OPTIONS = launchConfig?.block_size_options?.length
+    ? launchConfig.block_size_options
+    : DEFAULT_LAUNCH_CONFIG.block_size_options;
+  const MOE_BACKEND_OPTIONS = launchConfig?.moe_backend_options?.length
+    ? launchConfig.moe_backend_options
+    : DEFAULT_LAUNCH_CONFIG.moe_backend_options;
 
   const [deployConfig, setDeployConfig] = useState({
     modelName: '',
@@ -50,6 +129,15 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     maxNumSeqs: '',
     kvCacheDType: 'auto',
     parser: '',
+    tokenizerMode: 'auto',
+    reasoningParser: '',
+    trustRemoteCode: false,
+    blockSize: '16',
+    moeBackend: 'auto',
+    enableExpertParallel: false,
+    disableFlashInferAutotune: false,
+    speculativeConfig: '',
+    bindIP: '',
     useServerApiKey: false,
     useCustomServerApiKey: false,
     serverApiKey: '',
@@ -68,11 +156,22 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const startMaxNumSeqs = deployConfig.maxNumSeqs;
   const startKvCacheDType = deployConfig.kvCacheDType;
   const startParser = deployConfig.parser;
+  const startTokenizerMode = deployConfig.tokenizerMode;
+  const startReasoningParser = deployConfig.reasoningParser;
+  const startTrustRemoteCode = deployConfig.trustRemoteCode;
+  const startBlockSize = deployConfig.blockSize;
+  const startMoeBackend = deployConfig.moeBackend;
+  const startEnableExpertParallel = deployConfig.enableExpertParallel;
+  const startDisableFlashInferAutotune = deployConfig.disableFlashInferAutotune;
+  const startSpeculativeConfig = deployConfig.speculativeConfig;
+  const startBindIP = deployConfig.bindIP;
   const startUseServerApiKey = deployConfig.useServerApiKey;
   const startUseCustomServerApiKey = deployConfig.useCustomServerApiKey;
   const startServerApiKey = deployConfig.serverApiKey;
   const [launchError, setLaunchError] = useState('');
   const [launching, setLaunching] = useState(false);
+  const [launchConfirmData, setLaunchConfirmData] = useState(null);
+  const [deployModalOpen, setDeployModalOpen] = useState(false);
 
   const [downloadConfirmData, setDownloadConfirmData] = useState(null);
   const [downloadName, setDownloadName] = useState('');
@@ -144,7 +243,15 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         maxLen: searchParams.get('max_len') || prev.maxLen,
         maxNumSeqs: searchParams.get('max_num_seqs') || prev.maxNumSeqs,
         kvCacheDType: searchParams.get('kv_cache_dtype') || prev.kvCacheDType,
+        tokenizerMode: searchParams.get('tokenizer_mode') || prev.tokenizerMode,
+        reasoningParser: searchParams.get('reasoning_parser') || prev.reasoningParser,
+        trustRemoteCode: searchParams.get('trust_remote_code') === 'true' || prev.trustRemoteCode,
+        blockSize: searchParams.get('block_size') || prev.blockSize,
+        moeBackend: searchParams.get('moe_backend') || prev.moeBackend,
+        enableExpertParallel: searchParams.get('enable_expert_parallel') === 'true' || prev.enableExpertParallel,
+        disableFlashInferAutotune: searchParams.get('disable_flashinfer_autotune') === 'true' || prev.disableFlashInferAutotune,
       }));
+      setDeployModalOpen(true);
     }, 0);
 
     return () => clearTimeout(timeout);
@@ -227,6 +334,18 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     }
 
     if (startParser && !/^[a-zA-Z0-9_-]+$/.test(startParser)) return 'Tool parser must contain only letters, numbers, underscores, and hyphens';
+    if (!TOKENIZER_MODE_OPTIONS.includes(startTokenizerMode)) return 'Tokenizer mode is not supported by this vLLM Manager build.';
+    if (startReasoningParser && !REASONING_PARSER_OPTIONS.includes(startReasoningParser)) return 'Reasoning parser is not supported by this vLLM Manager build.';
+    if (startBlockSize && !BLOCK_SIZE_OPTIONS.map(String).includes(String(startBlockSize))) return 'Block size must be a supported power of 2.';
+    if (!MOE_BACKEND_OPTIONS.includes(startMoeBackend || 'auto')) return 'MoE backend is not supported by this vLLM Manager build.';
+    if (startSpeculativeConfig.trim()) {
+      try {
+        JSON.parse(startSpeculativeConfig);
+      } catch {
+        return 'Speculative config must be valid JSON.';
+      }
+    }
+    if (!proxyEnabled && startBindIP.trim() && !/^[0-9a-fA-F:.]+$/.test(startBindIP.trim())) return 'Bind IP must be a valid IPv4 or IPv6 address.';
     if (!KV_CACHE_DTYPE_OPTIONS.includes(startKvCacheDType)) return 'KV cache dtype must be auto, fp8, fp8_e5m2, or fp8_e4m3';
     if (!usesAllGpus && selectedGpuIds.length !== gpusToSend) return `Select exactly ${gpusToSend} GPU${gpusToSend === 1 ? '' : 's'} for pinning.`;
     if (!proxyEnabled && vllmAPIKeySet && startUseServerApiKey && startUseCustomServerApiKey && !startServerApiKey.trim()) return 'Enter a per-server API key or turn off custom API key.';
@@ -243,31 +362,60 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       return;
     }
 
+    const gpusToSend = Number(startGpus);
     const gpuIdsParam = usesAllGpus ? 'all' : [...selectedGpuIds].sort((a, b) => a - b).join(',');
     const effectiveUseServerApiKey = !proxyEnabled && vllmAPIKeySet && startUseServerApiKey;
     const effectiveServerApiKey = effectiveUseServerApiKey && startUseCustomServerApiKey ? startServerApiKey.trim() : '';
+    const compactSpeculativeConfig = startSpeculativeConfig.trim() ? JSON.stringify(JSON.parse(startSpeculativeConfig)) : '';
     const payload = {
       model: startModelName,
       port: Number(startPort),
-      gpus: Number(startGpus),
+      gpus: gpusToSend,
       gpu_ids: gpuIdsParam,
       mem_util: startMem !== null && startMem !== undefined ? startMem.toString() : '',
       max_len: startMaxLen ? startMaxLen.toString() : '',
       max_num_seqs: startMaxNumSeqs ? startMaxNumSeqs.toString() : '',
       kv_cache_dtype: startKvCacheDType,
       tool_parser: startParser || '',
+      tokenizer_mode: startTokenizerMode || 'auto',
+      reasoning_parser: startReasoningParser || '',
+      trust_remote_code: Boolean(startTrustRemoteCode),
+      block_size: startBlockSize ? startBlockSize.toString() : '',
+      moe_backend: startMoeBackend || 'auto',
+      enable_expert_parallel: Boolean(startEnableExpertParallel),
+      disable_flashinfer_autotune: Boolean(startDisableFlashInferAutotune),
+      speculative_config: compactSpeculativeConfig,
+      bind_ip: !proxyEnabled ? startBindIP.trim() : '',
       use_api_key: effectiveUseServerApiKey,
       server_api_key: effectiveServerApiKey,
     };
 
+    setLaunchConfirmData({
+      payload,
+      command: buildDockerRunCommand(payload, {
+        dockerGpuFlag: gpuIdsParam === 'all' ? `device=${availableGpuIds.slice(0, gpusToSend).join(',')}` : `device=${gpuIdsParam}`,
+        hfCache: launchConfig?.hf_cache,
+        hostBindIP: proxyEnabled ? '127.0.0.1' : '',
+        vllmImage: launchConfig?.vllm_image,
+      }),
+      gpuIds: gpuIdsParam,
+    });
+    setDeployModalOpen(false);
+  };
+
+  const executeStart = async () => {
+    if (!launchConfirmData) return;
     try {
       setLaunching(true);
-      await startModel(payload);
+      await startModel(launchConfirmData.payload);
       notify('Model starting. It may take a few minutes to be ready.');
+      setLaunchConfirmData(null);
       fetchData();
       navigate('/');
     } catch (error) {
       setLaunchError(getErrorDetail(error, 'Failed to start model'));
+      setLaunchConfirmData(null);
+      setDeployModalOpen(true);
     } finally {
       setLaunching(false);
     }
@@ -343,14 +491,20 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     // certainly did not intend to re-download. The server enforces the
     // same check, so this is purely a UX nicety.
     setCheckingInfo(true);
+    let infoData = null;
     try {
       const infoRes = await getModelInfo(trimmedName);
-      if (infoRes.data?.downloaded) {
-        const cached = infoRes.data.cached_bytes;
+      infoData = infoRes.data || null;
+      if (infoData?.downloaded) {
+        const cached = infoData.cached_bytes;
         const sizeText = typeof cached === 'number' && cached > 0
           ? `${formatBytes(cached)} on disk`
           : 'already on disk';
         setDownloadError(`${trimmedName} is ${sizeText}. Delete it from the cache below if you want to re-download.`);
+        return;
+      }
+      if (infoData?.download_blocked_reason) {
+        setDownloadError(infoData.download_blocked_reason);
         return;
       }
     } catch (error) {
@@ -362,16 +516,17 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       setCheckingInfo(false);
     }
 
-    let sizeText = '';
+    let sizeText;
     let sizeBytes = 0;
-    try {
-      const infoRes = await getModelInfo(trimmedName);
-      if (infoRes.data?.size_bytes) {
-        sizeBytes = infoRes.data.size_bytes;
-        sizeText = `Estimated file size: ${formatBytes(infoRes.data.size_bytes)}.`;
-      }
-    } catch {
+    const warnings = [infoData?.compatibility_warning, infoData?.download_warning].filter(Boolean);
+    if (infoData?.size_bytes) {
+      sizeBytes = infoData.size_bytes;
+      sizeText = `Estimated file size: ${formatBytes(infoData.size_bytes)}.`;
+    } else {
       sizeText = 'Model size could not be fetched before download.';
+    }
+    if (warnings.length > 0) {
+      sizeText = `${sizeText} ${warnings.join(' ')}`;
     }
 
     setDownloadConfirmData({ model: trimmedName, sizeText, sizeBytes });
@@ -408,51 +563,13 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
 
   return (
     <div className="dashboard-grid launch-page-grid">
-      <div className="stack launch-deploy-stack">
-        <DeployServerCard
-          downloadedModels={downloadedModels}
-          gpuList={gpuList}
-          gpuUnavailableMessage={gpuUnavailableMessage}
-          handleGpuCountChange={handleGpuCountChange}
-          handleStart={handleStart}
-          hasGlobalVllmAPIKey={vllmAPIKeySet}
-          proxyEnabled={proxyEnabled}
-          kvCacheDTypeOptions={KV_CACHE_DTYPE_OPTIONS}
-          launchError={launchError}
-          launching={launching}
-          maxGpus={maxGpus}
-          noGpuDetected={noGpuDetected}
-          onClearGpuPinning={() => updateDeployConfig('gpuIds', [])}
-          selectedGpuIds={selectedGpuIds}
-          serverApiKey={startServerApiKey}
-          setServerApiKey={(v) => updateDeployConfig('serverApiKey', v)}
-          setUseServerApiKey={(v) => updateDeployConfig('useServerApiKey', v)}
-          setUseCustomServerApiKey={(v) => updateDeployConfig('useCustomServerApiKey', v)}
-          setStartKvCacheDType={(v) => updateDeployConfig('kvCacheDType', v)}
-          setStartMaxLen={(v) => updateDeployConfig('maxLen', v)}
-          setStartMaxNumSeqs={(v) => updateDeployConfig('maxNumSeqs', v)}
-          scaleMaxLen={scaleMaxLen}
-          setStartMem={(v) => updateDeployConfig('mem', v)}
-          setStartModelName={(v) => updateDeployConfig('modelName', v)}
-          setStartParser={(v) => updateDeployConfig('parser', v)}
-          setStartPort={(v) => updateDeployConfig('port', v)}
-          startGpus={startGpus}
-          startKvCacheDType={startKvCacheDType}
-          startMaxLen={startMaxLen}
-          startMaxNumSeqs={startMaxNumSeqs}
-          startMem={startMem}
-          startModelName={startModelName}
-          startParser={startParser}
-          startPort={startPort}
-          useServerApiKey={startUseServerApiKey}
-          useCustomServerApiKey={startUseCustomServerApiKey}
-          toggleGpu={toggleGpu}
-          toolParserOptions={launchConfig?.tool_parser_options}
-          usesAllGpus={usesAllGpus}
-        />
-      </div>
-
       <div className="stack launch-side-stack">
+        <CachedModelsCard
+          deletingCache={deletingCache}
+          downloadedModels={downloadedModels}
+          requestDeleteDownloadedModel={requestDeleteDownloadedModel}
+        />
+
         <DownloadModelCard
           activeDownloads={activeDownloads}
           checkingInfo={checkingInfo}
@@ -465,18 +582,16 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
           setActiveDownloads={setActiveDownloads}
           setDownloadName={setDownloadName}
         />
-
-        <CachedModelsCard
-          deletingCache={deletingCache}
-          downloadedModels={downloadedModels}
-          requestDeleteDownloadedModel={requestDeleteDownloadedModel}
-        />
       </div>
 
       <div className="launch-servers-row">
         <ActiveContainersCard
           activeModels={activeModels}
           handleRestart={handleRestart}
+          onDeployServer={() => {
+            setLaunchError('');
+            setDeployModalOpen(true);
+          }}
           removing={removing}
           removeError={removeError}
           requestRemove={(containerId) => {
@@ -488,6 +603,113 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
           proxyEnabled={proxyEnabled}
         />
       </div>
+
+      {deployModalOpen && (
+        <ConfirmModal
+          title="Deploy Server"
+          contentClassName="deploy-server-modal"
+          hideActions
+          loading={launching}
+          onCancel={() => {
+            if (!launching) setDeployModalOpen(false);
+          }}
+        >
+          <DeployServerCard
+            downloadedModels={downloadedModels}
+            embedded
+            gpuList={gpuList}
+            gpuUnavailableMessage={gpuUnavailableMessage}
+            handleGpuCountChange={handleGpuCountChange}
+            handleStart={handleStart}
+            hasGlobalVllmAPIKey={vllmAPIKeySet}
+            proxyEnabled={proxyEnabled}
+            kvCacheDTypeOptions={KV_CACHE_DTYPE_OPTIONS}
+            launchError={launchError}
+            launching={launching}
+            maxGpus={maxGpus}
+            noGpuDetected={noGpuDetected}
+            selectedGpuIds={selectedGpuIds}
+            serverApiKey={startServerApiKey}
+            setServerApiKey={(v) => updateDeployConfig('serverApiKey', v)}
+            setStartBlockSize={(v) => updateDeployConfig('blockSize', v)}
+            setStartMoeBackend={(v) => updateDeployConfig('moeBackend', v)}
+            setStartEnableExpertParallel={(v) => updateDeployConfig('enableExpertParallel', v)}
+            setStartDisableFlashInferAutotune={(v) => updateDeployConfig('disableFlashInferAutotune', v)}
+            setStartSpeculativeConfig={(v) => updateDeployConfig('speculativeConfig', v)}
+            setUseServerApiKey={(v) => updateDeployConfig('useServerApiKey', v)}
+            setUseCustomServerApiKey={(v) => updateDeployConfig('useCustomServerApiKey', v)}
+            setStartKvCacheDType={(v) => updateDeployConfig('kvCacheDType', v)}
+            setStartMaxLen={(v) => updateDeployConfig('maxLen', v)}
+            setStartMaxNumSeqs={(v) => updateDeployConfig('maxNumSeqs', v)}
+            scaleMaxLen={scaleMaxLen}
+            setStartMem={(v) => updateDeployConfig('mem', v)}
+            setStartModelName={(v) => updateDeployConfig('modelName', v)}
+            setStartParser={(v) => updateDeployConfig('parser', v)}
+            setStartReasoningParser={(v) => updateDeployConfig('reasoningParser', v)}
+            setStartTokenizerMode={(v) => updateDeployConfig('tokenizerMode', v)}
+            setStartTrustRemoteCode={(v) => updateDeployConfig('trustRemoteCode', v)}
+            setStartBindIP={(v) => updateDeployConfig('bindIP', v)}
+            setStartPort={(v) => updateDeployConfig('port', v)}
+            startBlockSize={startBlockSize}
+            startMoeBackend={startMoeBackend}
+            startEnableExpertParallel={startEnableExpertParallel}
+            startDisableFlashInferAutotune={startDisableFlashInferAutotune}
+            startSpeculativeConfig={startSpeculativeConfig}
+            startGpus={startGpus}
+            startKvCacheDType={startKvCacheDType}
+            startMaxLen={startMaxLen}
+            startMaxNumSeqs={startMaxNumSeqs}
+            startMem={startMem}
+            startModelName={startModelName}
+            startParser={startParser}
+            startReasoningParser={startReasoningParser}
+            startTokenizerMode={startTokenizerMode}
+            startTrustRemoteCode={startTrustRemoteCode}
+            startBindIP={startBindIP}
+            startPort={startPort}
+            useServerApiKey={startUseServerApiKey}
+            useCustomServerApiKey={startUseCustomServerApiKey}
+            blockSizeOptions={BLOCK_SIZE_OPTIONS}
+            moeBackendOptions={MOE_BACKEND_OPTIONS}
+            reasoningParserOptions={REASONING_PARSER_OPTIONS}
+            toggleGpu={toggleGpu}
+            tokenizerModeOptions={TOKENIZER_MODE_OPTIONS}
+            toolParserOptions={launchConfig?.tool_parser_options}
+          />
+        </ConfirmModal>
+      )}
+
+      {launchConfirmData && (
+        <ConfirmModal
+          title="Review Deploy Command"
+          confirmLabel="Deploy Server"
+          contentClassName="deploy-command-modal"
+          loading={launching}
+          onCancel={() => {
+            setLaunchConfirmData(null);
+            setDeployModalOpen(true);
+          }}
+          onConfirm={executeStart}
+        >
+          <div className="deploy-command-summary">
+            <div>
+              <span className="command-summary-label">Model</span>
+              <span>{launchConfirmData.payload.model}</span>
+            </div>
+            <div>
+              <span className="command-summary-label">GPUs</span>
+              <span>{launchConfirmData.gpuIds === 'all' ? 'All selected GPUs' : launchConfirmData.gpuIds}</span>
+            </div>
+            <div>
+              <span className="command-summary-label">Port</span>
+              <span>{launchConfirmData.payload.port}</span>
+            </div>
+          </div>
+          <pre className="deploy-command-preview">
+            <code>{launchConfirmData.command}</code>
+          </pre>
+        </ConfirmModal>
+      )}
 
       {downloadConfirmData && (
         <ConfirmModal

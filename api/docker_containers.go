@@ -216,20 +216,27 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 	}
 
 	model := ActiveModel{
-		ContainerID:   vc.id,
-		ContainerName: vc.name,
-		Model:         vc.name, // fallback
-		Port:          "unknown",
-		GPUs:          "unknown",
-		GPUIDs:        "all",
-		MemUtil:       "unknown",
-		MaxLen:        "default",
-		MaxNumSeqs:    "default",
-		KVCacheDType:  "auto",
-		ToolParser:    "disabled",
-		APIUrl:        "unknown",
-		IsReady:       false,
-		State:         vc.state,
+		ContainerID:               vc.id,
+		ContainerName:             vc.name,
+		Model:                     vc.name, // fallback
+		Port:                      "unknown",
+		GPUs:                      "unknown",
+		GPUIDs:                    "all",
+		MemUtil:                   "unknown",
+		MaxLen:                    "default",
+		MaxNumSeqs:                "default",
+		KVCacheDType:              "auto",
+		ToolParser:                "disabled",
+		TokenizerMode:             "auto",
+		ReasoningParser:           "disabled",
+		TrustRemoteCode:           false,
+		DisableFlashInferAutotune: false,
+		BlockSize:                 "default",
+		BindIP:                    "unknown",
+		MetricsTarget:             "unknown",
+		APIUrl:                    "unknown",
+		IsReady:                   false,
+		State:                     vc.state,
 	}
 
 	if vc.labels[containerModelLabel] != "" {
@@ -261,6 +268,21 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 		if args[i] == "--tool-call-parser" && i+1 < len(args) {
 			model.ToolParser = args[i+1]
 		}
+		if args[i] == "--tokenizer-mode" && i+1 < len(args) {
+			model.TokenizerMode = args[i+1]
+		}
+		if args[i] == "--reasoning-parser" && i+1 < len(args) {
+			model.ReasoningParser = args[i+1]
+		}
+		if args[i] == "--trust-remote-code" {
+			model.TrustRemoteCode = true
+		}
+		if args[i] == "--no-enable-flashinfer-autotune" {
+			model.DisableFlashInferAutotune = true
+		}
+		if args[i] == "--block-size" && i+1 < len(args) {
+			model.BlockSize = args[i+1]
+		}
 		if args[i] == "--api-key" && i+1 < len(args) {
 			model.APIKey = args[i+1]
 		}
@@ -276,6 +298,11 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 	}
 
 	if model.Port != "unknown" {
+		model.BindIP = hostBindIPFromMetadata(metadata, model.Port)
+		if model.BindIP == "" {
+			model.BindIP = "unknown"
+		}
+		model.MetricsTarget = metricsTargetForModel(model.BindIP, model.Port)
 		model.APIUrl = fmt.Sprintf("http://localhost:%s/v1", model.Port)
 
 		// Vision Heuristics.
@@ -288,6 +315,48 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 	}
 
 	return model, true
+}
+
+func hostBindIPFromMetadata(metadata container.InspectResponse, port string) string {
+	if metadata.HostConfig != nil {
+		for _, bindings := range metadata.HostConfig.PortBindings {
+			for _, binding := range bindings {
+				if binding.HostPort == port && binding.HostIP.IsValid() {
+					return binding.HostIP.String()
+				}
+			}
+		}
+	}
+	if metadata.NetworkSettings != nil {
+		for _, bindings := range metadata.NetworkSettings.Ports {
+			for _, binding := range bindings {
+				if binding.HostPort == port {
+					if binding.HostIP.IsValid() {
+						return binding.HostIP.String()
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func metricsTargetForModel(bindIP string, port string) string {
+	bindIP = strings.TrimSpace(bindIP)
+	port = strings.TrimSpace(port)
+	if bindIP == "" || bindIP == "unknown" || port == "" || port == "unknown" {
+		return ""
+	}
+	if addr, err := netip.ParseAddr(bindIP); err == nil {
+		if addr.IsUnspecified() {
+			if addr.Is6() {
+				return net.JoinHostPort("::1", port)
+			}
+			return net.JoinHostPort("127.0.0.1", port)
+		}
+		return net.JoinHostPort(addr.String(), port)
+	}
+	return net.JoinHostPort(bindIP, port)
 }
 
 func activeModelsFromContainers(containers []managedVLLMContainer) []ActiveModel {
@@ -361,6 +430,28 @@ func GetServerContainersUsingAPIKey(apiKey string) ([]ActiveModel, error) {
 		}
 	}
 	return matches, nil
+}
+
+// GetServerAPIKeyByPort returns the --api-key currently configured on the
+// managed server container bound to port. It is used by the proxy for legacy
+// containers that were launched with direct vLLM authentication before proxy
+// mode was enabled.
+func GetServerAPIKeyByPort(port int) (string, error) {
+	if port <= 0 {
+		return "", nil
+	}
+	models, err := activeModelsNoHealth()
+	if err != nil {
+		return "", err
+	}
+	for _, model := range models {
+		modelPort, err := strconv.Atoi(strings.TrimSpace(model.Port))
+		if err != nil || modelPort != port {
+			continue
+		}
+		return strings.TrimSpace(model.APIKey), nil
+	}
+	return "", nil
 }
 
 type activeModelHealthResult struct {
@@ -492,12 +583,9 @@ func GetVLLMContainerNames() ([]string, error) {
 func normalizeHostBindIP(hostBindIP string) (netip.Addr, error) {
 	hostBindIP = strings.TrimSpace(hostBindIP)
 	if hostBindIP == "" {
-		hostBindIP = "127.0.0.1"
+		hostBindIP = "0.0.0.0"
 	}
-	if hostBindIP != "127.0.0.1" && hostBindIP != "0.0.0.0" {
-		return netip.Addr{}, validationError("host bind IP must be 127.0.0.1 or 0.0.0.0")
-	}
-	return netip.MustParseAddr(hostBindIP), nil
+	return ValidateLocalBindIP(hostBindIP)
 }
 
 // allowedToolParsers is the explicit allowlist of vLLM tool-call parsers. vLLM
@@ -535,6 +623,7 @@ var allowedToolParsers = map[string]struct{}{
 	"llama4_pythonic":    {},
 	"deepseek_v3":        {},
 	"deepseek_v31":       {},
+	"deepseek_v4":        {},
 	"openai":             {},
 	"kimi_k2":            {},
 	"hunyuan_a13b":       {},
@@ -558,6 +647,111 @@ func allowedToolParserNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+var tokenizerModeOptions = []string{"auto", "hf", "slow", "mistral", "deepseek_v32", "deepseek_v4"}
+
+var allowedReasoningParsers = map[string]struct{}{
+	"deepseek_r1":   {},
+	"deepseek_v4":   {},
+	"ernie_x1":      {},
+	"glm45":         {},
+	"granite":       {},
+	"hunyuan_a13b":  {},
+	"mistral":       {},
+	"openai_gptoss": {},
+	"qwen3":         {},
+}
+
+func allowedReasoningParserNames() []string {
+	names := make([]string, 0, len(allowedReasoningParsers))
+	for name := range allowedReasoningParsers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+var blockSizeOptions = []int{16, 32, 64, 128}
+
+var moeBackendOptions = []string{
+	"auto",
+	"cutlass",
+	"deepep_high_throughput",
+	"deepep_low_latency",
+	"flashinfer",
+	"flashinfer_all2allv",
+	"naive",
+	"pplx",
+	"triton",
+}
+
+func normalizeTokenizerMode(mode string) (string, error) {
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	if mode == "" {
+		return "auto", nil
+	}
+	for _, option := range tokenizerModeOptions {
+		if mode == option {
+			return mode, nil
+		}
+	}
+	return "", validationError("unsupported tokenizer mode %q; allowed: %s", mode, strings.Join(tokenizerModeOptions, ", "))
+}
+
+func normalizeReasoningParser(parser string) (string, error) {
+	parser = strings.TrimSpace(parser)
+	if parser == "" {
+		return "", nil
+	}
+	if _, ok := allowedReasoningParsers[parser]; !ok {
+		allowed := allowedReasoningParserNames()
+		return "", validationError("unsupported reasoning parser %q; allowed: %s", parser, strings.Join(allowed, ", "))
+	}
+	return parser, nil
+}
+
+func normalizeBlockSize(blockSize string) (string, error) {
+	blockSize = strings.TrimSpace(blockSize)
+	if blockSize == "" {
+		return "", nil
+	}
+	value, err := strconv.Atoi(blockSize)
+	if err != nil || value < 16 {
+		return "", validationError("block size must be a power of 2 and at least 16")
+	}
+	if value&(value-1) != 0 {
+		return "", validationError("block size must be a power of 2")
+	}
+	return strconv.Itoa(value), nil
+}
+
+func normalizeMoeBackend(backend string) (string, error) {
+	backend = strings.TrimSpace(strings.ToLower(backend))
+	if backend == "" {
+		return "auto", nil
+	}
+	for _, option := range moeBackendOptions {
+		if backend == option {
+			return backend, nil
+		}
+	}
+	return "", validationError("unsupported MoE backend %q; allowed: %s", backend, strings.Join(moeBackendOptions, ", "))
+}
+
+func normalizeSpeculativeConfig(config string) (string, error) {
+	config = strings.TrimSpace(config)
+	if config == "" {
+		return "", nil
+	}
+	if !json.Valid([]byte(config)) {
+		return "", validationError("speculative config must be valid JSON")
+	}
+	var compacted bytes.Buffer
+	if err := json.Compact(&compacted, []byte(config)); err != nil {
+		return "", validationError("speculative config must be valid JSON")
+	}
+	return compacted.String(), nil
 }
 
 // normalizeModelKey lowercases the user-visible model identifier and
@@ -604,7 +798,7 @@ func NormalizeModelKeyForMatch(model string) string {
 	return model
 }
 
-func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, kvCacheDType string, toolParser string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, serverAPIKey string) error {
+func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, kvCacheDType string, toolParser string, tokenizerMode string, reasoningParser string, trustRemoteCode bool, blockSize string, moeBackend string, enableExpertParallel bool, disableFlashInferAutotune bool, speculativeConfig string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, serverAPIKey string) error {
 	hfCache = NormalizeHFHome(hfCache)
 	if hfCache == "" {
 		return validationError("hugging face cache directory is required")
@@ -710,6 +904,26 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 			return validationError("unsupported tool parser %q; allowed: %s", toolParser, strings.Join(allowed, ", "))
 		}
 	}
+	tokenizerMode, err = normalizeTokenizerMode(tokenizerMode)
+	if err != nil {
+		return err
+	}
+	reasoningParser, err = normalizeReasoningParser(reasoningParser)
+	if err != nil {
+		return err
+	}
+	blockSize, err = normalizeBlockSize(blockSize)
+	if err != nil {
+		return err
+	}
+	moeBackend, err = normalizeMoeBackend(moeBackend)
+	if err != nil {
+		return err
+	}
+	speculativeConfig, err = normalizeSpeculativeConfig(speculativeConfig)
+	if err != nil {
+		return err
+	}
 
 	// Check if port is already in use and hold the listener until the container
 	// is created.  This eliminates the TOCTOU window where another process could
@@ -717,7 +931,7 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	// creation fails the listener is closed and the port is released; if it
 	// succeeds the listener is closed after the container is started (the
 	// container's own port binding takes over).
-	l, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	l, err := net.Listen("tcp", HostPort(hostBindAddr.String(), port))
 	if err != nil {
 		return validationError("port %d is already in use", port)
 	}
@@ -754,6 +968,12 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	}
 	if err := checkGPUOverlap(activeModelsFromContainers(snapshot), requestedGPUIDs, totalGPUCount, utilization); err != nil {
 		return err
+	}
+
+	if warning, err := CheckModelQuantizationCompatibility(model, hfCache, hfToken, selectedGPUs); err != nil {
+		return err
+	} else if warning != "" {
+		logDockerMessage("WARNING: %s", warning)
 	}
 
 	if err := CheckModelFitsInVRAM(model, hfCache, selectedGPUs, gpus, memUtil, maxLen, kvCacheDType); err != nil {
@@ -806,6 +1026,30 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	}
 	if toolParser != "" {
 		cmd = append(cmd, "--tool-call-parser", toolParser, "--enable-auto-tool-choice")
+	}
+	if tokenizerMode != "auto" {
+		cmd = append(cmd, "--tokenizer-mode", tokenizerMode)
+	}
+	if reasoningParser != "" {
+		cmd = append(cmd, "--reasoning-parser", reasoningParser)
+	}
+	if trustRemoteCode {
+		cmd = append(cmd, "--trust-remote-code")
+	}
+	if blockSize != "" {
+		cmd = append(cmd, "--block-size", blockSize)
+	}
+	if moeBackend != "auto" {
+		cmd = append(cmd, "--moe-backend", moeBackend)
+	}
+	if enableExpertParallel {
+		cmd = append(cmd, "--enable-expert-parallel")
+	}
+	if disableFlashInferAutotune {
+		cmd = append(cmd, "--no-enable-flashinfer-autotune")
+	}
+	if speculativeConfig != "" {
+		cmd = append(cmd, "--speculative-config", speculativeConfig)
 	}
 	if effectiveAPIKey != "" {
 		cmd = append(cmd, "--api-key", effectiveAPIKey)

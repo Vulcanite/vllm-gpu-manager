@@ -29,6 +29,7 @@ export const SettingsPage = ({ fetchData, notify, proxyEnabled = false }) => {
   const [enableCUDACompatibility, setEnableCUDACompatibility] = useState(false);
   const [hfHubOffline, setHFHubOffline] = useState(false);
   const [vllmImage, setVllmImage] = useState('');
+  const [serverBindIP, setServerBindIP] = useState('0.0.0.0');
   const [diskData, setDiskData] = useState(null);
   const [ramData, setRamData] = useState(null);
   const [generatedVllmToken, setGeneratedVllmToken] = useState('');
@@ -51,6 +52,7 @@ export const SettingsPage = ({ fetchData, notify, proxyEnabled = false }) => {
     setEnableCUDACompatibility(Boolean(data.enable_cuda_compatibility));
     setHFHubOffline(Boolean(data.hf_hub_offline));
     setVllmImage(data.vllm_image || '');
+    setServerBindIP(data.server_bind_ip || '0.0.0.0');
     setDiskData(data);
     setRamData(data);
   };
@@ -90,6 +92,7 @@ export const SettingsPage = ({ fetchData, notify, proxyEnabled = false }) => {
     enable_cuda_compatibility: enableCUDACompatibility,
     hf_hub_offline: hfHubOffline,
     vllm_image: vllmImage.trim(),
+    server_bind_ip: serverBindIP.trim(),
   });
 
   const saveAndRefresh = async (payload, successMessage) => {
@@ -381,9 +384,17 @@ export const SettingsPage = ({ fetchData, notify, proxyEnabled = false }) => {
 
             <div className="form-group mt-4">
               <label className="form-label" htmlFor="vllmImage">vLLM Docker Image</label>
-              <input id="vllmImage" type="text" className="form-control" value={vllmImage} onChange={(event) => setVllmImage(event.target.value)} placeholder="vllm/vllm-openai:latest" disabled={saving || loading} />
-              <p className="text-secondary text-sm mt-1">Docker image used to launch serving containers and perform downloads. Defaults to <code>vllm/vllm-openai:latest</code>.</p>
+              <input id="vllmImage" type="text" className="form-control" value={vllmImage} onChange={(event) => setVllmImage(event.target.value)} placeholder="vllm/vllm-openai:v0.23.0-cu129" disabled={saving || loading} />
+              <p className="text-secondary text-sm mt-1">Docker image used to launch serving containers and perform downloads. Defaults to <code>vllm/vllm-openai:v0.23.0-cu129</code>.</p>
             </div>
+
+            {!proxyEnabled && (
+              <div className="form-group mt-4">
+                <label className="form-label" htmlFor="serverBindIP">Default Server Bind IP</label>
+                <input id="serverBindIP" type="text" className="form-control" value={serverBindIP} onChange={(event) => setServerBindIP(event.target.value)} placeholder="0.0.0.0" disabled={saving || loading} />
+                <p className="text-secondary text-sm mt-1">Applies to new direct model servers. Proxy mode keeps model servers on loopback.</p>
+              </div>
+            )}
 
             <button type="submit" className="btn btn-primary mt-4" disabled={saving || loading}>
               {saving ? 'Saving...' : 'Save environment'}

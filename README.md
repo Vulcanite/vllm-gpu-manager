@@ -28,7 +28,7 @@ The manager currently targets:
 - NVIDIA GPUs
 - Docker
 - NVIDIA Container Toolkit
-- Configurable vLLM Docker image (defaults to `vllm/vllm-openai:latest`)
+- Configurable vLLM Docker image (defaults to `vllm/vllm-openai:v0.23.0-cu129`)
 - Hugging Face Hub model cache layout
 - internal/private network usage
 
@@ -62,7 +62,7 @@ Runtime host:
 - `nvidia-smi` available in `PATH`
 - Docker installed and running
 - NVIDIA Container Toolkit configured so Docker supports `--runtime nvidia`
-- Configured vLLM Docker image (defaults to `vllm/vllm-openai:latest`) available locally or pullable by Docker
+- Configured vLLM Docker image (defaults to `vllm/vllm-openai:v0.23.0-cu129`) available locally or pullable by Docker
 - `alpine` image available locally for cached model deletion
 
 Build machine:
@@ -131,6 +131,12 @@ Destructive CLI commands prompt by default. Use `--yes` for non-interactive auto
 ./vllm-manager --dashboard --port 9090
 ```
 
+Bind the dashboard to a specific local interface with `--host`:
+
+```bash
+./vllm-manager --dashboard --host 127.0.0.1 --port 9090
+```
+
 Set `VLLM_MANAGER_PASSWORD` to require browser login before the dashboard can call `/api` endpoints:
 
 ```bash
@@ -141,6 +147,13 @@ Dashboard mode enables the built-in `/v1/` OpenAI-compatible proxy gateway by de
 
 ```bash
 ./vllm-manager --dashboard --port 9090 --no-proxy
+```
+
+Run host checks before setup or after driver/Docker changes:
+
+```bash
+./vllm-manager doctor
+./vllm-manager doctor --json
 ```
 
 Then open:
@@ -188,7 +201,8 @@ Settings are stored in `settings.json` beside the binary.
   },
   "enable_cuda_compatibility": false,
   "hf_hub_offline": false,
-  "vllm_image": "vllm/vllm-openai:latest",
+  "vllm_image": "vllm/vllm-openai:v0.23.0-cu129",
+  "server_bind_ip": "0.0.0.0",
   "routing_table": {
     "Qwen/Qwen2.5-Coder-7B-Instruct": 8080
   }
@@ -203,7 +217,9 @@ Settings are stored in `settings.json` beside the binary.
 
 `server_api_keys` stores optional per-container API key overrides for containers launched outside proxy mode. The keys are indexed by managed container name and are not used as proxy client keys.
 
-`enable_cuda_compatibility` sets `VLLM_ENABLE_CUDA_COMPATIBILITY=1` on newly created serving containers. `hf_hub_offline` sets `HF_HUB_OFFLINE=1` on newly created serving containers and should only be enabled after required models are cached locally. `vllm_image` is optional and specifies the Docker image name and tag used to run serving containers and model downloads (defaults to `vllm/vllm-openai:latest`). When set online, it verifies the tag exists on Docker Hub. Existing containers keep their original environment/image; recreate a container to apply changed settings.
+`enable_cuda_compatibility` sets `VLLM_ENABLE_CUDA_COMPATIBILITY=1` on newly created serving containers. `hf_hub_offline` sets `HF_HUB_OFFLINE=1` on newly created serving containers and should only be enabled after required models are cached locally. `vllm_image` is optional and specifies the Docker image name and tag used to run serving containers and model downloads (defaults to `vllm/vllm-openai:v0.23.0-cu129`). When set online, it verifies the tag exists on Docker Hub. Existing containers keep their original environment/image; recreate a container to apply changed settings.
+
+`server_bind_ip` is the default host IP for direct serving containers outside proxy mode. It must be a valid IPv4 or IPv6 address assigned to the server, or a wildcard/loopback address. In proxy mode, serving containers are always bound to `127.0.0.1`.
 
 Example:
 
@@ -235,6 +251,10 @@ docker run -d --rm \
 ```
 
 The UI shows progress by polling cached bytes on disk through `/api/models/download/progress`. The progress is an estimate based on expected Hugging Face model size and the current cache directory size.
+
+Before a download starts, the backend checks Hugging Face model size metadata against free space on the configured cache filesystem when that metadata is available. Known insufficient disk space blocks the download; unknown model size is allowed with a warning.
+
+GGUF model downloads are blocked. vLLM's GGUF support is experimental and requires a separate plugin, so the manager only supports standard vLLM-compatible Hugging Face model layouts for downloads and launches.
 
 Only one download operation per model/cache path is allowed at a time.
 
@@ -272,7 +292,7 @@ docker run -d \
   --gpu-memory-utilization <mem_util>
 ```
 
-In proxy mode, the host bind IP is `127.0.0.1`, so browsers and external clients reach the model through the manager's `/v1/` proxy. Outside proxy mode, containers bind on `0.0.0.0` for direct access.
+In proxy mode, the host bind IP is `127.0.0.1`, so browsers and external clients reach the model through the manager's `/v1/` proxy. Outside proxy mode, containers bind on `server_bind_ip` by default, or the per-launch `--bind-ip` value if provided.
 
 Optional launch parameters currently exposed by the UI/API:
 
@@ -281,7 +301,20 @@ Optional launch parameters currently exposed by the UI/API:
 - `--kv-cache-dtype`
 - `--tool-call-parser`
 - `--enable-auto-tool-choice`
+- `--tokenizer-mode`
+- `--reasoning-parser`
+- `--trust-remote-code`
+- `--block-size`
+- `--moe-backend`
+- `--enable-expert-parallel`
+- `--speculative-config`
 - `--api-key` when a global vLLM API key or per-server key is configured
+
+Outside proxy mode, the CLI accepts a per-launch bind override:
+
+```bash
+./vllm-manager model start Qwen/Qwen2.5-Coder-7B-Instruct --port 8000 --gpus 1 --bind-ip 192.168.1.20
+```
 
 Managed container restart works for both running and stopped containers. Running containers are restarted through Docker; stopped containers are started with their original image, command, environment, GPU devices, and volume mounts.
 
@@ -294,6 +327,27 @@ Before launching, the backend validates:
 - downloaded model size can fit in the requested GPU budget
 - estimated KV cache can fit for the requested or default max context length
 - KV heads are compatible with the requested tensor parallel size when config data is available
+- known FP8 quantized models only run on selected GPUs with compute capability 8.9 or newer
+
+## Monitoring
+
+Monitoring is optional. The helper script sets up Grafana, Prometheus, and NVIDIA DCGM exporter with Docker Compose:
+
+```bash
+./scripts/setup-monitoring.sh
+```
+
+The setup prompts for Grafana admin username/password, Grafana bind IP/port, HTTPS mode, and certificate handling. Grafana is the only service exposed on the selected network IP. Prometheus and DCGM exporter bind to `127.0.0.1` by default.
+
+Provisioned Grafana dashboards are based on Grafana.com dashboard `22515` for NVIDIA DCGM and dashboard `25263` for vLLM metrics. The bundled JSON is normalized to use the provisioned Prometheus datasource UID `Prometheus`.
+
+Start the dashboard with monitoring target sync enabled:
+
+```bash
+./vllm-manager --dashboard --port 9090 --monitoring --monitoring-targets-file monitoring/runtime/vllm-targets.yml
+```
+
+When `--monitoring` is set, the dashboard mirrors running managed vLLM containers into the Prometheus file-SD target file. Stopped or removed containers are removed from the target file, but Prometheus history remains in the `prometheus-data` Docker volume until the operator explicitly removes that volume.
 
 ## Deleting Cached Models
 

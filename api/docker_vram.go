@@ -39,8 +39,14 @@ type LaunchConfig struct {
 	ModelVRAMSafetyMargin       float64  `json:"model_vram_safety_margin"`
 	DefaultGPUMemoryUtilization float64  `json:"default_gpu_memory_utilization"`
 	DefaultMaxModelLen          int      `json:"default_max_model_len"`
+	HFCache                     string   `json:"hf_cache,omitempty"`
+	VLLMImage                   string   `json:"vllm_image"`
 	KVCacheDTypeOptions         []string `json:"kv_cache_dtype_options"`
 	ToolParserOptions           []string `json:"tool_parser_options"`
+	TokenizerModeOptions        []string `json:"tokenizer_mode_options"`
+	ReasoningParserOptions      []string `json:"reasoning_parser_options"`
+	BlockSizeOptions            []int    `json:"block_size_options"`
+	MoeBackendOptions           []string `json:"moe_backend_options"`
 }
 
 // LaunchDefaults returns the launch tuning constants shared with the frontend.
@@ -49,8 +55,13 @@ func LaunchDefaults() LaunchConfig {
 		ModelVRAMSafetyMargin:       modelVRAMSafetyMargin,
 		DefaultGPUMemoryUtilization: defaultGPUMemoryUtilization,
 		DefaultMaxModelLen:          defaultMaxModelLen,
+		VLLMImage:                   VLLMImage,
 		KVCacheDTypeOptions:         append([]string(nil), kvCacheDTypeOptions...),
 		ToolParserOptions:           allowedToolParserNames(),
+		TokenizerModeOptions:        append([]string(nil), tokenizerModeOptions...),
+		ReasoningParserOptions:      allowedReasoningParserNames(),
+		BlockSizeOptions:            append([]int(nil), blockSizeOptions...),
+		MoeBackendOptions:           append([]string(nil), moeBackendOptions...),
 	}
 }
 

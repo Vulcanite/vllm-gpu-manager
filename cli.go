@@ -46,21 +46,28 @@ func newCLICommand(out io.Writer, errOut io.Writer) *cobra.Command {
 	cmd.SetErr(errOut)
 	cmd.Flags().Bool("dashboard", false, "run the web dashboard")
 	cmd.Flags().String("port", defaultDashboardPort, "dashboard port")
+	cmd.Flags().String("host", "0.0.0.0", "dashboard host bind IP")
 	cmd.Flags().Bool("no-proxy", false, "disable the /v1/ proxy gateway in dashboard mode")
+	cmd.Flags().Bool("monitoring", false, "sync vLLM Prometheus targets while the dashboard is running")
+	cmd.Flags().String("monitoring-targets-file", defaultMonitoringTargetsFile, "Prometheus file-SD targets file for vLLM metrics")
 	cmd.PersistentFlags().BoolVar(&opts.JSON, "json", false, "print JSON output")
 	cmd.AddCommand(
 		newGPUCommand(opts),
 		newModelCommand(opts),
 		newCacheCommand(opts),
 		newSettingsCommand(opts),
+		newDoctorCommand(opts),
 	)
 	cmd.Example = strings.Join([]string{
 		"  vllm-manager gpu list",
+		"  vllm-manager doctor",
 		"  vllm-manager model active",
 		"  vllm-manager model start Qwen/Qwen2.5-7B-Instruct --port 8080 --gpus 1",
 		"  vllm-manager settings get",
 		"  vllm-manager --dashboard --port 9090",
+		"  vllm-manager --dashboard --host 127.0.0.1 --port 9090",
 		"  vllm-manager --dashboard --port 9090 --no-proxy",
+		"  vllm-manager --dashboard --port 9090 --monitoring",
 	}, "\n")
 	return cmd
 }
@@ -162,6 +169,15 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 	var maxNumSeqs string
 	var kvCacheDType string
 	var toolParser string
+	var tokenizerMode string
+	var reasoningParser string
+	var trustRemoteCode bool
+	var blockSize string
+	var moeBackend string
+	var enableExpertParallel bool
+	var disableFlashInferAutotune bool
+	var speculativeConfig string
+	var bindIP string
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "start <model>",
@@ -178,20 +194,34 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 				return errors.New("model start requires --gpus")
 			}
 			settings := getSettings()
-			if err := api.StartModel(args[0], port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, kvCacheDType, toolParser, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, "0.0.0.0", ""); err != nil {
+			hostBindIP := settings.ServerBindIP
+			if strings.TrimSpace(bindIP) != "" {
+				hostBindIP = strings.TrimSpace(bindIP)
+			}
+			if err := api.StartModel(args[0], port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, kvCacheDType, toolParser, tokenizerMode, reasoningParser, trustRemoteCode, blockSize, moeBackend, enableExpertParallel, disableFlashInferAutotune, speculativeConfig, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, ""); err != nil {
 				return err
 			}
 			upsertRoute(args[0], port)
 			return printMutationResult(*opts, map[string]interface{}{
-				"status":         "started",
-				"model":          args[0],
-				"port":           port,
-				"gpus":           gpus,
-				"gpu_ids":        emptyAsDefault(gpuIDs, "auto"),
-				"mem_util":       memUtil,
-				"max_len":        emptyAsDefault(maxLen, "default"),
-				"max_num_seqs":   emptyAsDefault(maxNumSeqs, "default"),
-				"kv_cache_dtype": kvCacheDType,
+				"status":                      "started",
+				"model":                       args[0],
+				"port":                        port,
+				"gpus":                        gpus,
+				"gpu_ids":                     emptyAsDefault(gpuIDs, "auto"),
+				"mem_util":                    memUtil,
+				"max_len":                     emptyAsDefault(maxLen, "default"),
+				"max_num_seqs":                emptyAsDefault(maxNumSeqs, "default"),
+				"kv_cache_dtype":              kvCacheDType,
+				"tool_parser":                 emptyAsDefault(toolParser, "disabled"),
+				"tokenizer_mode":              emptyAsDefault(tokenizerMode, "auto"),
+				"reasoning_parser":            emptyAsDefault(reasoningParser, "disabled"),
+				"trust_remote_code":           trustRemoteCode,
+				"block_size":                  emptyAsDefault(blockSize, "default"),
+				"moe_backend":                 emptyAsDefault(moeBackend, "auto"),
+				"expert_parallel":             enableExpertParallel,
+				"disable_flashinfer_autotune": disableFlashInferAutotune,
+				"speculative_config":          emptyAsDefault(speculativeConfig, "disabled"),
+				"bind_ip":                     hostBindIP,
 			})
 		},
 	}
@@ -203,6 +233,15 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 	cmd.Flags().StringVar(&maxNumSeqs, "max-num-seqs", "", "vLLM max number of sequences")
 	cmd.Flags().StringVar(&kvCacheDType, "kv-cache-dtype", "auto", "vLLM KV cache dtype: auto, fp8, fp8_e5m2, fp8_e4m3")
 	cmd.Flags().StringVar(&toolParser, "tool-parser", "", "vLLM tool call parser")
+	cmd.Flags().StringVar(&tokenizerMode, "tokenizer-mode", "auto", "vLLM tokenizer mode: auto, hf, slow, mistral, deepseek_v32, deepseek_v4")
+	cmd.Flags().StringVar(&reasoningParser, "reasoning-parser", "", "vLLM reasoning parser")
+	cmd.Flags().BoolVar(&trustRemoteCode, "trust-remote-code", false, "allow model repositories to execute custom remote code")
+	cmd.Flags().StringVar(&blockSize, "block-size", "", "vLLM KV cache block size; must be a power of 2")
+	cmd.Flags().StringVar(&moeBackend, "moe-backend", "auto", "vLLM MoE backend")
+	cmd.Flags().BoolVar(&enableExpertParallel, "enable-expert-parallel", false, "enable vLLM expert parallelism")
+	cmd.Flags().BoolVar(&disableFlashInferAutotune, "no-enable-flashinfer-autotune", false, "disable vLLM FlashInfer autotune")
+	cmd.Flags().StringVar(&speculativeConfig, "speculative-config", "", "vLLM speculative decoding config as JSON")
+	cmd.Flags().StringVar(&bindIP, "bind-ip", "", "host IP address for direct server port binding")
 	cmd.Flags().BoolVar(&force, "force", false, "run the command even if the dashboard is running")
 	return cmd
 }
@@ -371,6 +410,7 @@ func newSettingsSetCommand(opts *cliOptions) *cobra.Command {
 	var enableCUDACompatibility bool
 	var hfHubOffline bool
 	var vllmImage string
+	var serverBindIP string
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "set",
@@ -379,9 +419,6 @@ func newSettingsSetCommand(opts *cliOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := guardMutation(force, "settings set"); err != nil {
 				return err
-			}
-			if strings.TrimSpace(hfCache) == "" {
-				return errors.New("settings set requires --hf-cache")
 			}
 			if clearHFToken && hfToken != "" {
 				return errors.New("settings set cannot use --hf-token and --clear-hf-token together")
@@ -393,6 +430,13 @@ func newSettingsSetCommand(opts *cliOptions) *cobra.Command {
 			if cmd.Flags().Changed("vllm-image") {
 				vllmImagePtr = &vllmImage
 			}
+			var serverBindIPPtr *string
+			if cmd.Flags().Changed("server-bind-ip") {
+				serverBindIPPtr = &serverBindIP
+			}
+			if strings.TrimSpace(hfCache) == "" {
+				hfCache = getSettings().HFCache
+			}
 			settings, err := updateSettings(SettingsUpdate{
 				HFCache:                 hfCache,
 				HFToken:                 hfToken,
@@ -402,6 +446,7 @@ func newSettingsSetCommand(opts *cliOptions) *cobra.Command {
 				EnableCUDACompatibility: boolPtrIfChanged(cmd.Flags().Changed("vllm-cuda-compatibility"), enableCUDACompatibility),
 				HFHubOffline:            boolPtrIfChanged(cmd.Flags().Changed("hf-hub-offline"), hfHubOffline),
 				VLLMImage:               vllmImagePtr,
+				ServerBindIP:            serverBindIPPtr,
 			})
 			if err != nil {
 				return err
@@ -414,6 +459,7 @@ func newSettingsSetCommand(opts *cliOptions) *cobra.Command {
 				"enable_cuda_compatibility": settings.EnableCUDACompatibility,
 				"hf_hub_offline":            settings.HFHubOffline,
 				"vllm_image":                settings.VLLMImage,
+				"server_bind_ip":            settings.ServerBindIP,
 			})
 		},
 	}
@@ -425,6 +471,7 @@ func newSettingsSetCommand(opts *cliOptions) *cobra.Command {
 	cmd.Flags().BoolVar(&enableCUDACompatibility, "vllm-cuda-compatibility", false, "set VLLM_ENABLE_CUDA_COMPATIBILITY=1 on new serving containers")
 	cmd.Flags().BoolVar(&hfHubOffline, "hf-hub-offline", false, "set HF_HUB_OFFLINE=1 on new serving containers")
 	cmd.Flags().StringVar(&vllmImage, "vllm-image", "", "vLLM Docker image to use")
+	cmd.Flags().StringVar(&serverBindIP, "server-bind-ip", "", "default host IP for direct vLLM server port binding")
 	cmd.Flags().BoolVar(&force, "force", false, "run the command even if the dashboard is running")
 	return cmd
 }
@@ -656,6 +703,7 @@ func cliSettingsGet(args []string, opts cliOptions) error {
 		{"vLLM CUDA Compatibility", enabledDisabled(status.EnableCUDACompatibility)},
 		{"HF Hub Offline", enabledDisabled(status.HFHubOffline)},
 		{"vLLM Docker Image", status.VLLMImage},
+		{"Server Bind IP", status.ServerBindIP},
 		{"Cache Disk Used", api.FormatBytes(status.DiskUsed)},
 		{"Cache Disk Total", api.FormatBytes(status.DiskTotal)},
 		{"Cache Disk Free", api.FormatBytes(status.DiskFree)},
@@ -749,6 +797,13 @@ func printActiveModelSections(w io.Writer, models []api.ActiveModel) {
 			markdownLine(emptyAsDefault(model.MaxNumSeqs, "default")),
 			markdownLine(emptyAsDefault(model.KVCacheDType, "auto")),
 			markdownLine(model.ToolParser),
+		)
+		fmt.Fprintf(&b, "- Advanced: tokenizer %s, reasoning %s, trust remote code %s, FlashInfer autotune disabled %s, block size %s\n",
+			markdownLine(emptyAsDefault(model.TokenizerMode, "auto")),
+			markdownLine(emptyAsDefault(model.ReasoningParser, "disabled")),
+			yesNo(model.TrustRemoteCode),
+			yesNo(model.DisableFlashInferAutotune),
+			markdownLine(emptyAsDefault(model.BlockSize, "default")),
 		)
 	}
 	renderMarkdown(w, b.String())

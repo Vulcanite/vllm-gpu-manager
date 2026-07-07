@@ -17,15 +17,16 @@ type GPUProcess struct {
 }
 
 type GPUInfo struct {
-	ID             int          `json:"id"`
-	UUID           string       `json:"uuid"`
-	Name           string       `json:"name"`
-	MemoryTotal    uint64       `json:"memory_total"`
-	MemoryUsed     uint64       `json:"memory_used"`
-	MemoryFree     uint64       `json:"memory_free"`
-	MemoryPercent  float64      `json:"memory_percent"`
-	GPUUtilization uint32       `json:"gpu_utilization"`
-	Processes      []GPUProcess `json:"processes,omitempty"`
+	ID                int          `json:"id"`
+	UUID              string       `json:"uuid"`
+	Name              string       `json:"name"`
+	MemoryTotal       uint64       `json:"memory_total"`
+	MemoryUsed        uint64       `json:"memory_used"`
+	MemoryFree        uint64       `json:"memory_free"`
+	MemoryPercent     float64      `json:"memory_percent"`
+	GPUUtilization    uint32       `json:"gpu_utilization"`
+	ComputeCapability string       `json:"compute_capability,omitempty"`
+	Processes         []GPUProcess `json:"processes,omitempty"`
 }
 
 var getGPUInfo = GetGPUInfo
@@ -62,7 +63,7 @@ func GetGPUInfo() ([]GPUInfo, error) {
 
 func queryNvidiaSMI(ctx context.Context) ([]GPUInfo, error) {
 	out, err := exec.CommandContext(ctx, "nvidia-smi",
-		"--query-gpu=index,uuid,name,memory.total,memory.used,memory.free,utilization.gpu",
+		"--query-gpu=index,uuid,name,memory.total,memory.used,memory.free,utilization.gpu,compute_cap",
 		"--format=csv,noheader,nounits").Output()
 	if err != nil {
 		return nil, fmt.Errorf("nvidia-smi failed: %v", err)
@@ -119,6 +120,10 @@ func parseNvidiaSMICSV(out []byte) []GPUInfo {
 		memUsed, _ := strconv.ParseUint(parts[4], 10, 64)
 		memFree, _ := strconv.ParseUint(parts[5], 10, 64)
 		gpuUtil, _ := strconv.ParseUint(parts[6], 10, 32)
+		computeCapability := ""
+		if len(parts) > 7 {
+			computeCapability = strings.TrimSpace(parts[7])
+		}
 
 		// Convert MiB to bytes.
 		memTotalBytes := memTotal * 1024 * 1024
@@ -131,18 +136,38 @@ func parseNvidiaSMICSV(out []byte) []GPUInfo {
 		}
 
 		gpus = append(gpus, GPUInfo{
-			ID:             id,
-			UUID:           uuid,
-			Name:           name,
-			MemoryTotal:    memTotalBytes,
-			MemoryUsed:     memUsedBytes,
-			MemoryFree:     memFreeBytes,
-			MemoryPercent:  memPercent,
-			GPUUtilization: uint32(gpuUtil),
+			ID:                id,
+			UUID:              uuid,
+			Name:              name,
+			MemoryTotal:       memTotalBytes,
+			MemoryUsed:        memUsedBytes,
+			MemoryFree:        memFreeBytes,
+			MemoryPercent:     memPercent,
+			GPUUtilization:    uint32(gpuUtil),
+			ComputeCapability: computeCapability,
 		})
 	}
 
 	return gpus
+}
+
+func (g GPUInfo) ComputeCapabilityAtLeast(major int, minor int) bool {
+	parts := strings.Split(strings.TrimSpace(g.ComputeCapability), ".")
+	if len(parts) < 1 || strings.TrimSpace(parts[0]) == "" {
+		return false
+	}
+	gotMajor, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return false
+	}
+	gotMinor := 0
+	if len(parts) > 1 {
+		gotMinor, _ = strconv.Atoi(parts[1])
+	}
+	if gotMajor != major {
+		return gotMajor > major
+	}
+	return gotMinor >= minor
 }
 
 func parseNvidiaSMIProcessCSV(out []byte) map[string][]GPUProcess {

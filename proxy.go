@@ -18,8 +18,48 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
+
+	"vllm-manager/api"
 )
+
+const upstreamAPIKeyCacheTTL = 5 * time.Second
+
+type upstreamAPIKeyCacheEntry struct {
+	key       string
+	expiresAt time.Time
+}
+
+var (
+	getUpstreamAPIKeyByPort = api.GetServerAPIKeyByPort
+	upstreamAPIKeyCacheMu   sync.Mutex
+	upstreamAPIKeyCache     = map[int]upstreamAPIKeyCacheEntry{}
+)
+
+func legacyUpstreamAPIKeyForPort(port int) (string, error) {
+	if port <= 0 {
+		return "", nil
+	}
+	now := time.Now()
+	upstreamAPIKeyCacheMu.Lock()
+	entry, ok := upstreamAPIKeyCache[port]
+	if ok && now.Before(entry.expiresAt) {
+		upstreamAPIKeyCacheMu.Unlock()
+		return entry.key, nil
+	}
+	upstreamAPIKeyCacheMu.Unlock()
+
+	key, err := getUpstreamAPIKeyByPort(port)
+	if err != nil {
+		return "", err
+	}
+
+	upstreamAPIKeyCacheMu.Lock()
+	upstreamAPIKeyCache[port] = upstreamAPIKeyCacheEntry{key: key, expiresAt: now.Add(upstreamAPIKeyCacheTTL)}
+	upstreamAPIKeyCacheMu.Unlock()
+	return key, nil
+}
 
 func inferenceProxyHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -64,7 +104,11 @@ func inferenceProxyHandler() http.HandlerFunc {
 			return
 		}
 
-		upstreamKey := settings.VLLMAPIKey
+		upstreamKey, err := legacyUpstreamAPIKeyForPort(port)
+		if err != nil {
+			log.Printf("[PROXY] failed to resolve legacy upstream API key for port %d: %v", port, err)
+			upstreamKey = lookupServerAPIKeyByPort(settings.ServerAPIKeys, port)
+		}
 		if upstreamKey != "" {
 			r.Header.Set("Authorization", "Bearer "+upstreamKey)
 		} else {

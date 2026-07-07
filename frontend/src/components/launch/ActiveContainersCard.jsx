@@ -18,7 +18,7 @@ const formatAPIKeyMode = (model) => {
   return 'None';
 };
 
-export const ActiveContainersCard = ({ activeModels, handleRestart, removing, removeError, requestRemove, restartingId, restartError, proxyEnabled = false }) => {
+export const ActiveContainersCard = ({ activeModels, handleRestart, onDeployServer, removing, removeError, requestRemove, restartingId, restartError, proxyEnabled = false }) => {
   const columnCount = proxyEnabled ? 8 : 9;
 
   return (
@@ -27,11 +27,25 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, removing, re
         <h2 className="card-title">
           <Server size={20} /> Existing Model Servers
         </h2>
+        <button className="btn btn-primary" type="button" onClick={onDeployServer}>
+          <Play size={14} /> Deploy Server
+        </button>
       </div>
       {restartError && <div className="alert alert-danger">{restartError}</div>}
       {removeError && <div className="alert alert-danger">{removeError}</div>}
       <div className="active-containers-table-wrap">
-        <table className="active-containers-table">
+        <table className={`active-containers-table ${proxyEnabled ? 'proxy-mode' : 'direct-mode'}`}>
+          <colgroup>
+            <col className="active-containers-col-model" />
+            <col className="active-containers-col-gpu" />
+            <col className="active-containers-col-port" />
+            <col className="active-containers-col-mem" />
+            <col className="active-containers-col-context" />
+            <col className="active-containers-col-tokenizer" />
+            <col className="active-containers-col-reasoning" />
+            {!proxyEnabled && <col className="active-containers-col-api-key" />}
+            <col className="active-containers-col-actions" />
+          </colgroup>
           <thead>
             <tr>
               <th scope="col">Model Name</th>
@@ -39,8 +53,8 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, removing, re
               <th scope="col">Port</th>
               <th scope="col">Max Mem Util</th>
               <th scope="col">Max Context Length</th>
-              <th scope="col">Max Num Seqs</th>
-              <th scope="col">Tool Call</th>
+              <th scope="col">Tokenizer</th>
+              <th scope="col">Reasoning</th>
               {!proxyEnabled && <th scope="col">API Key</th>}
               <th scope="col">Actions</th>
             </tr>
@@ -52,13 +66,13 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, removing, re
               const actionLabel = model.state === 'running' ? 'Restart' : 'Start';
               return (
                 <tr key={model.container_id}>
-                  <td className="active-container-model">{model.model}</td>
+                  <td className="active-container-model" title={model.model}>{model.model}</td>
                   <td>{formatGPUIds(model)}</td>
                   <td>{model.port}</td>
                   <td>{model.mem_util || '-'}</td>
                   <td>{model.max_len || '-'}</td>
-                  <td>{model.max_num_seqs || 'Default'}</td>
-                  <td>{model.tool_parser || 'Disabled'}</td>
+                  <td>{model.tokenizer_mode || 'Auto'}</td>
+                  <td>{model.reasoning_parser || 'Disabled'}</td>
                   {!proxyEnabled && <td>{formatAPIKeyMode(model)}</td>}
                   <td>
                     <div className="active-container-actions">
