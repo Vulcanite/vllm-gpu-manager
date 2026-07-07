@@ -66,7 +66,7 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, onDeployServ
               const actionLabel = model.state === 'running' ? 'Restart' : 'Start';
               return (
                 <tr key={model.container_id}>
-                  <td className="active-container-model" title={model.model}>{model.model}</td>
+                  <td className="active-container-model">{model.model}</td>
                   <td>{formatGPUIds(model)}</td>
                   <td>{model.port}</td>
                   <td>{model.mem_util || '-'}</td>
@@ -80,7 +80,7 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, onDeployServ
                         {actionLabel === 'Restart' ? <RefreshCw size={14} /> : <Play size={14} />}
                         {isRestarting ? 'Restarting...' : actionLabel}
                       </button>
-                      <button className="btn btn-danger" type="button" onClick={() => requestRemove(model.container_id)} disabled={removing || active} title={active ? 'Stop this container before removing it.' : ''}>
+                      <button className="btn btn-danger" type="button" onClick={() => requestRemove(model.container_id)} disabled={removing || active} aria-label={active ? 'Stop this container before removing it.' : `Remove ${model.model}`}>
                         <Trash2 size={14} /> Remove
                       </button>
                     </div>
