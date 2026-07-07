@@ -1,0 +1,52 @@
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: vllm-manager-prometheus
+    network_mode: host
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.listen-address=127.0.0.1:${PROMETHEUS_PORT:-9091}"
+    volumes:
+      - ./runtime/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./runtime:/etc/prometheus/file_sd:ro
+      - prometheus-data:/prometheus
+
+  dcgm-exporter:
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:4.5.3-4.8.2-distroless
+    container_name: vllm-manager-dcgm
+    network_mode: host
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN
+    gpus: all
+    command:
+      - "-a"
+      - "127.0.0.1:${DCGM_PORT:-9400}"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: vllm-manager-grafana
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in monitoring/.env}"
+      GF_SERVER_HTTP_ADDR: "${GRAFANA_BIND_IP:-127.0.0.1}"
+      GF_SERVER_HTTP_PORT: "${GRAFANA_PORT:-3000}"
+      GF_SERVER_PROTOCOL: "${GRAFANA_PROTOCOL:-http}"
+      GF_SERVER_CERT_FILE: "${GRAFANA_CERT_FILE:-}"
+      GF_SERVER_CERT_KEY: "${GRAFANA_CERT_KEY:-}"
+      PROMETHEUS_PORT: "${PROMETHEUS_PORT:-9091}"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./runtime/certs:/etc/grafana/certs:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus-data:
+  grafana-data:

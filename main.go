@@ -39,7 +39,15 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: dashboard mode does not accept CLI commands: %s\n", strings.Join(port.extraArgs, " "))
 			os.Exit(1)
 		}
-		runDashboard(port.value, proxyEnabled)
+		runDashboard(dashboardOptions{
+			Host:         port.host,
+			Port:         port.value,
+			ProxyEnabled: proxyEnabled,
+			Monitoring: monitoringOptions{
+				Enabled:     port.monitoringEnabled,
+				TargetsFile: port.monitoringTargetsFile,
+			},
+		})
 		return
 	}
 
@@ -63,8 +71,11 @@ func shouldRunDashboard(args []string) bool {
 }
 
 type dashboardFlagValues struct {
-	value     string
-	extraArgs []string
+	value                 string
+	host                  string
+	monitoringEnabled     bool
+	monitoringTargetsFile string
+	extraArgs             []string
 }
 
 func parseDashboardFlags(args []string, errOut io.Writer) (dashboardFlagValues, bool, error) {
@@ -72,10 +83,19 @@ func parseDashboardFlags(args []string, errOut io.Writer) (dashboardFlagValues, 
 	fs.SetOutput(errOut)
 	fs.Bool("dashboard", false, "Run the web dashboard")
 	port := fs.String("port", defaultDashboardPort, "Port to run the dashboard on")
+	host := fs.String("host", "0.0.0.0", "Host IP address to bind the dashboard on")
 	noProxy := fs.Bool("no-proxy", false, "disable the OpenAI-compatible proxy gateway on /v1/")
+	monitoring := fs.Bool("monitoring", false, "sync running vLLM servers into the Prometheus file-SD targets file")
+	monitoringTargetsFile := fs.String("monitoring-targets-file", defaultMonitoringTargetsFile, "Prometheus file-SD targets file for vLLM metrics")
 	fs.Usage = func() { printRootHelp(errOut) }
 	if err := fs.Parse(args); err != nil {
 		return dashboardFlagValues{}, false, err
 	}
-	return dashboardFlagValues{value: *port, extraArgs: fs.Args()}, !*noProxy, nil
+	return dashboardFlagValues{
+		value:                 *port,
+		host:                  *host,
+		monitoringEnabled:     *monitoring,
+		monitoringTargetsFile: *monitoringTargetsFile,
+		extraArgs:             fs.Args(),
+	}, !*noProxy, nil
 }

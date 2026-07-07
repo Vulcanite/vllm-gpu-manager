@@ -401,6 +401,19 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 		return "", validationError("%s is already being downloaded by %s", model, containerName)
 	}
 
+	if warning, err := CheckDownloadPreflight(model, hfCache, hfToken); err != nil {
+		return "", err
+	} else if warning != "" {
+		logDockerMessage("WARNING: %s", warning)
+	}
+	if gpus, err := GetGPUInfo(); err == nil {
+		if warning, err := CheckModelQuantizationCompatibility(model, hfCache, hfToken, gpus); err != nil {
+			return "", err
+		} else if warning != "" {
+			logDockerMessage("WARNING: %s", warning)
+		}
+	}
+
 	shortName := model
 	if idx := strings.LastIndex(model, "/"); idx != -1 {
 		shortName = model[idx+1:]
@@ -413,7 +426,11 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 		containerKindLabel:    containerKindDownload,
 		containerModelLabel:   model,
 	}
-	env := []string{"HF_HOME=/hf_cache", "PYTHONUNBUFFERED=1"}
+	env := []string{
+		"HF_HOME=/hf_cache",
+		"MODEL_ID=" + model,
+		"PYTHONUNBUFFERED=1",
+	}
 
 	if hfToken != "" {
 		env = append(env, fmt.Sprintf("HF_TOKEN=%s", hfToken))
@@ -425,13 +442,24 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 			return fmt.Errorf("failed to ensure vLLM image: %v", err)
 		}
 
+		downloadScript := strings.Join([]string{
+			"if command -v hf >/dev/null 2>&1; then",
+			"  exec hf download \"$MODEL_ID\";",
+			"elif command -v huggingface-cli >/dev/null 2>&1; then",
+			"  exec huggingface-cli download \"$MODEL_ID\";",
+			"else",
+			"  echo \"neither hf nor huggingface-cli is available in the vLLM image\" >&2;",
+			"  exit 127;",
+			"fi",
+		}, "\n")
+
 		logDockerAPI(
 			"container create",
 			containerName,
 			"image="+VLLMImage,
 			"network=host",
 			"autoremove=true",
-			"entrypoint=hf",
+			"entrypoint=sh -lc",
 			"bind="+fmt.Sprintf("%s:/hf_cache", hfCache),
 			"cmd=download "+model,
 		)
@@ -439,8 +467,8 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 			Name: containerName,
 			Config: &container.Config{
 				Image:      VLLMImage,
-				Entrypoint: []string{"hf"},
-				Cmd:        []string{"download", model},
+				Entrypoint: []string{"sh", "-lc"},
+				Cmd:        []string{downloadScript},
 				Env:        env,
 				Labels:     labels,
 			},

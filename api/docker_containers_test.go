@@ -282,7 +282,7 @@ func TestAllowedToolParsersRejectsUnknown(t *testing.T) {
 		"hermes", "llama3_json", "mistral", "granite", "granite4", "granite-20b-fc",
 		"internlm", "jamba", "pythonic", "python_tool", "jinja", "guidance",
 		"lm_format_enforcer", "xlam", "qwen2", "qwen3_coder", "qwen3_xml", "llama4_pythonic",
-		"deepseek_v3", "deepseek_v31", "openai", "kimi_k2", "hunyuan_a13b",
+		"deepseek_v3", "deepseek_v31", "deepseek_v4", "openai", "kimi_k2", "hunyuan_a13b",
 		"cohere_command3", "longcat", "glm45", "glm47", "functiongemma",
 		"olmo3", "gigachat3", "apertus",
 	} {
@@ -309,8 +309,127 @@ func TestAllowedToolParserNamesSortedAndUnique(t *testing.T) {
 	}
 }
 
+func TestNormalizeTokenizerMode(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  string
+	}{
+		{value: "", want: "auto"},
+		{value: " auto ", want: "auto"},
+		{value: "hf", want: "hf"},
+		{value: "slow", want: "slow"},
+		{value: "MISTRAL", want: "mistral"},
+		{value: "deepseek_v32", want: "deepseek_v32"},
+		{value: "deepseek_v4", want: "deepseek_v4"},
+	} {
+		got, err := normalizeTokenizerMode(test.value)
+		if err != nil {
+			t.Fatalf("normalizeTokenizerMode(%q) returned error: %v", test.value, err)
+		}
+		if got != test.want {
+			t.Fatalf("normalizeTokenizerMode(%q)=%q, want %q", test.value, got, test.want)
+		}
+	}
+
+	if _, err := normalizeTokenizerMode("unsafe"); err == nil {
+		t.Fatal("normalizeTokenizerMode accepted unsupported value")
+	} else if !IsValidationError(err) {
+		t.Fatalf("error type=%T, want ValidationError", err)
+	}
+}
+
+func TestNormalizeReasoningParser(t *testing.T) {
+	if got, err := normalizeReasoningParser(""); err != nil || got != "" {
+		t.Fatalf("normalizeReasoningParser(empty)=%q, %v; want empty nil", got, err)
+	}
+	if got, err := normalizeReasoningParser("deepseek_v4"); err != nil || got != "deepseek_v4" {
+		t.Fatalf("normalizeReasoningParser(deepseek_v4)=%q, %v; want deepseek_v4 nil", got, err)
+	}
+	if _, err := normalizeReasoningParser("../../etc/passwd"); err == nil {
+		t.Fatal("normalizeReasoningParser accepted unsupported value")
+	} else if !IsValidationError(err) {
+		t.Fatalf("error type=%T, want ValidationError", err)
+	}
+}
+
+func TestNormalizeBlockSize(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  string
+	}{
+		{value: "", want: ""},
+		{value: "16", want: "16"},
+		{value: "128", want: "128"},
+	} {
+		got, err := normalizeBlockSize(test.value)
+		if err != nil {
+			t.Fatalf("normalizeBlockSize(%q) returned error: %v", test.value, err)
+		}
+		if got != test.want {
+			t.Fatalf("normalizeBlockSize(%q)=%q, want %q", test.value, got, test.want)
+		}
+	}
+
+	for _, value := range []string{"0", "-2", "3", "8", "abc"} {
+		if _, err := normalizeBlockSize(value); err == nil {
+			t.Fatalf("normalizeBlockSize(%q) accepted invalid value", value)
+		} else if !IsValidationError(err) {
+			t.Fatalf("error type=%T, want ValidationError", err)
+		}
+	}
+}
+
+func TestNormalizeMoeBackend(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  string
+	}{
+		{value: "", want: "auto"},
+		{value: "auto", want: "auto"},
+		{value: "FlashInfer", want: "flashinfer"},
+		{value: "deepep_low_latency", want: "deepep_low_latency"},
+	} {
+		got, err := normalizeMoeBackend(test.value)
+		if err != nil {
+			t.Fatalf("normalizeMoeBackend(%q) returned error: %v", test.value, err)
+		}
+		if got != test.want {
+			t.Fatalf("normalizeMoeBackend(%q)=%q, want %q", test.value, got, test.want)
+		}
+	}
+
+	if _, err := normalizeMoeBackend("../../etc/passwd"); err == nil {
+		t.Fatal("normalizeMoeBackend accepted unsupported value")
+	} else if !IsValidationError(err) {
+		t.Fatalf("error type=%T, want ValidationError", err)
+	}
+}
+
+func TestNormalizeSpeculativeConfig(t *testing.T) {
+	got, err := normalizeSpeculativeConfig(`{
+		"model": "draft",
+		"num_speculative_tokens": 4
+	}`)
+	if err != nil {
+		t.Fatalf("normalizeSpeculativeConfig returned error: %v", err)
+	}
+	if got != `{"model":"draft","num_speculative_tokens":4}` {
+		t.Fatalf("normalizeSpeculativeConfig compacted to %q", got)
+	}
+
+	if got, err := normalizeSpeculativeConfig(""); err != nil || got != "" {
+		t.Fatalf("normalizeSpeculativeConfig(empty)=%q, %v; want empty nil", got, err)
+	}
+
+	if _, err := normalizeSpeculativeConfig("{invalid"); err == nil {
+		t.Fatal("normalizeSpeculativeConfig accepted invalid JSON")
+	} else if !IsValidationError(err) {
+		t.Fatalf("error type=%T, want ValidationError", err)
+	}
+}
+
 func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", "per-server-key")
+	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", "per-server-key")
 	if err == nil {
 		t.Fatal("StartModel accepted both global and per-server key; want validation error")
 	}
@@ -323,7 +442,7 @@ func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
 }
 
 func TestStartModelRejectsWhitespaceInPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "/tmp/cache", "", "", false, false, "0.0.0.0", "key with space")
+	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, "", "/tmp/cache", "", "", false, false, "0.0.0.0", "key with space")
 	if err == nil {
 		t.Fatal("StartModel accepted whitespace in per-server key; want validation error")
 	}

@@ -18,7 +18,7 @@ const formatAPIKeyMode = (model) => {
   return 'None';
 };
 
-export const ActiveContainersCard = ({ activeModels, handleRestart, removing, removeError, requestRemove, restartingId, restartError, proxyEnabled = false }) => {
+export const ActiveContainersCard = ({ activeModels, handleRestart, onDeployServer, removing, removeError, requestRemove, restartingId, restartError, proxyEnabled = false }) => {
   const columnCount = proxyEnabled ? 8 : 9;
 
   return (
@@ -27,6 +27,9 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, removing, re
         <h2 className="card-title">
           <Server size={20} /> Existing Model Servers
         </h2>
+        <button className="btn btn-primary" type="button" onClick={onDeployServer}>
+          <Play size={14} /> Deploy Server
+        </button>
       </div>
       {restartError && <div className="alert alert-danger">{restartError}</div>}
       {removeError && <div className="alert alert-danger">{removeError}</div>}
@@ -39,8 +42,8 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, removing, re
               <th scope="col">Port</th>
               <th scope="col">Max Mem Util</th>
               <th scope="col">Max Context Length</th>
-              <th scope="col">Max Num Seqs</th>
-              <th scope="col">Tool Call</th>
+              <th scope="col">Tokenizer</th>
+              <th scope="col">Reasoning</th>
               {!proxyEnabled && <th scope="col">API Key</th>}
               <th scope="col">Actions</th>
             </tr>
@@ -57,8 +60,8 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, removing, re
                   <td>{model.port}</td>
                   <td>{model.mem_util || '-'}</td>
                   <td>{model.max_len || '-'}</td>
-                  <td>{model.max_num_seqs || 'Default'}</td>
-                  <td>{model.tool_parser || 'Disabled'}</td>
+                  <td>{model.tokenizer_mode || 'Auto'}</td>
+                  <td>{model.reasoning_parser || 'Disabled'}</td>
                   {!proxyEnabled && <td>{formatAPIKeyMode(model)}</td>}
                   <td>
                     <div className="active-container-actions">

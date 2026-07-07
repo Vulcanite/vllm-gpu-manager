@@ -29,3 +29,8 @@ graphify-out/
 .codex/
 .opencode/
 .cursor/
+
+# Monitoring runtime files and secrets
+monitoring/.env
+monitoring/runtime/*
+!monitoring/runtime/.gitkeep

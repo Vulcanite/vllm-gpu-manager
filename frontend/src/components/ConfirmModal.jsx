@@ -5,7 +5,9 @@ export const ConfirmModal = ({
   children,
   confirmLabel,
   cancelLabel = 'Cancel',
+  contentClassName = '',
   danger = false,
+  hideActions = false,
   loading = false,
   onCancel,
   onConfirm,
@@ -70,17 +72,19 @@ export const ConfirmModal = ({
 
   return (
     <div className="modal-overlay" ref={overlayRef} onClick={handleOverlayClick} role="dialog" aria-modal="true" aria-labelledby="modal-title">
-      <div className="modal-content" ref={contentRef}>
+      <div className={`modal-content ${contentClassName}`.trim()} ref={contentRef}>
         <h3 id="modal-title">{title}</h3>
         <div className="modal-body">{children}</div>
-        <div className="modal-actions">
-          <button className="btn btn-outline" type="button" onClick={onCancel} disabled={loading}>
-            {cancelLabel}
-          </button>
-          <button className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} type="button" onClick={onConfirm} disabled={loading}>
-            {loading ? 'Working...' : confirmLabel}
-          </button>
-        </div>
+        {!hideActions && (
+          <div className="modal-actions">
+            <button className="btn btn-outline" type="button" onClick={onCancel} disabled={loading}>
+              {cancelLabel}
+            </button>
+            <button className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} type="button" onClick={onConfirm} disabled={loading}>
+              {loading ? 'Working...' : confirmLabel}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

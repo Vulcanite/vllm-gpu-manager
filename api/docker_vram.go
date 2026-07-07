@@ -41,6 +41,10 @@ type LaunchConfig struct {
 	DefaultMaxModelLen          int      `json:"default_max_model_len"`
 	KVCacheDTypeOptions         []string `json:"kv_cache_dtype_options"`
 	ToolParserOptions           []string `json:"tool_parser_options"`
+	TokenizerModeOptions        []string `json:"tokenizer_mode_options"`
+	ReasoningParserOptions      []string `json:"reasoning_parser_options"`
+	BlockSizeOptions            []int    `json:"block_size_options"`
+	MoeBackendOptions           []string `json:"moe_backend_options"`
 }
 
 // LaunchDefaults returns the launch tuning constants shared with the frontend.
@@ -51,6 +55,10 @@ func LaunchDefaults() LaunchConfig {
 		DefaultMaxModelLen:          defaultMaxModelLen,
 		KVCacheDTypeOptions:         append([]string(nil), kvCacheDTypeOptions...),
 		ToolParserOptions:           allowedToolParserNames(),
+		TokenizerModeOptions:        append([]string(nil), tokenizerModeOptions...),
+		ReasoningParserOptions:      allowedReasoningParserNames(),
+		BlockSizeOptions:            append([]int(nil), blockSizeOptions...),
+		MoeBackendOptions:           append([]string(nil), moeBackendOptions...),
 	}
 }
 

@@ -38,6 +38,7 @@ type Settings struct {
 	EnableCUDACompatibility bool              `json:"enable_cuda_compatibility"`
 	HFHubOffline            bool              `json:"hf_hub_offline"`
 	VLLMImage               string            `json:"vllm_image"`
+	ServerBindIP            string            `json:"server_bind_ip"`
 	RoutingTable            map[string]int    `json:"routing_table"`
 	ServerAPIKeys           map[string]string `json:"server_api_keys,omitempty"`
 	Heartbeat               *Heartbeat        `json:"heartbeat,omitempty"`
@@ -67,6 +68,7 @@ type SettingsStatus struct {
 	EnableCUDACompatibility  bool     `json:"enable_cuda_compatibility"`
 	HFHubOffline             bool     `json:"hf_hub_offline"`
 	VLLMImage                string   `json:"vllm_image"`
+	ServerBindIP             string   `json:"server_bind_ip"`
 	DiskTotal                uint64   `json:"disk_total"`
 	DiskUsed                 uint64   `json:"disk_used"`
 	DiskFree                 uint64   `json:"disk_free"`
@@ -93,6 +95,7 @@ type SettingsUpdate struct {
 	EnableCUDACompatibility *bool
 	HFHubOffline            *bool
 	VLLMImage               *string
+	ServerBindIP            *string
 }
 
 var (
@@ -107,7 +110,7 @@ func defaultSettings() Settings {
 	if err == nil {
 		defaultCache = home + "/.cache/huggingface"
 	}
-	return Settings{HFCache: defaultCache, RoutingTable: make(map[string]int)}
+	return Settings{HFCache: defaultCache, ServerBindIP: "0.0.0.0", RoutingTable: make(map[string]int)}
 }
 
 func cloneRoutingTable(table map[string]int) map[string]int {
@@ -167,7 +170,10 @@ func normalizeSettings(s Settings) Settings {
 	}
 	s.ProxyUsers = normalizeProxyUsersForStorage(s.ProxyUsers)
 	if strings.TrimSpace(s.VLLMImage) == "" {
-		s.VLLMImage = "vllm/vllm-openai:latest"
+		s.VLLMImage = api.DefaultVLLMImage
+	}
+	if strings.TrimSpace(s.ServerBindIP) == "" {
+		s.ServerBindIP = "0.0.0.0"
 	}
 	api.VLLMImage = s.VLLMImage
 	return s
@@ -289,6 +295,7 @@ func getSettingsStatus() SettingsStatus {
 		EnableCUDACompatibility:  s.EnableCUDACompatibility,
 		HFHubOffline:             s.HFHubOffline,
 		VLLMImage:                s.VLLMImage,
+		ServerBindIP:             s.ServerBindIP,
 		DiskTotal:                total,
 		DiskUsed:                 used,
 		DiskFree:                 free,
@@ -342,6 +349,18 @@ func updateSettings(req SettingsUpdate) (Settings, error) {
 			}
 		}
 	}
+	if req.ServerBindIP != nil {
+		bindIP := strings.TrimSpace(*req.ServerBindIP)
+		if bindIP == "" {
+			bindIP = "0.0.0.0"
+		}
+		addr, err := api.ValidateLocalBindIP(bindIP)
+		if err != nil {
+			return Settings{}, newAppError(http.StatusBadRequest, "%s", err.Error())
+		}
+		normalized := addr.String()
+		req.ServerBindIP = &normalized
+	}
 
 	inferenceAPIKey, err := normalizeVLLMAPIKey(req.InferenceAPIKey)
 	if err != nil {
@@ -378,9 +397,13 @@ func updateSettings(req SettingsUpdate) (Settings, error) {
 		ProxyUsers:              current.ProxyUsers,
 		Heartbeat:               current.Heartbeat,
 		VLLMImage:               current.VLLMImage,
+		ServerBindIP:            current.ServerBindIP,
 	}
 	if req.VLLMImage != nil {
 		s.VLLMImage = *req.VLLMImage
+	}
+	if req.ServerBindIP != nil {
+		s.ServerBindIP = *req.ServerBindIP
 	}
 	if req.ClearHFToken {
 		s.HFToken = ""
