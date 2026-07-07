@@ -65,7 +65,7 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, onDeployServ
                   {!proxyEnabled && <td>{formatAPIKeyMode(model)}</td>}
                   <td>
                     <div className="active-container-actions">
-                      <button className="btn btn-outline" type="button" onClick={() => handleRestart(model.container_id)} disabled={isRestarting}>
+                      <button className={`btn ${actionLabel === 'Start' ? 'btn-success' : 'btn-outline'}`} type="button" onClick={() => handleRestart(model.container_id)} disabled={isRestarting}>
                         {actionLabel === 'Restart' ? <RefreshCw size={14} /> : <Play size={14} />}
                         {isRestarting ? 'Restarting...' : actionLabel}
                       </button>
