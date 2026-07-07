@@ -672,7 +672,7 @@ func allowedReasoningParserNames() []string {
 	return names
 }
 
-var blockSizeOptions = []int{16, 32, 64, 128}
+var blockSizeOptions = []int{16, 32, 64, 128, 256, 512}
 
 var moeBackendOptions = []string{
 	"auto",
