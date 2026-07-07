@@ -30,6 +30,21 @@ func resetSettingsCache(t *testing.T, settings Settings, loaded bool) {
 	})
 }
 
+func stubUpstreamAPIKeyLookup(t *testing.T, fn func(int) (string, error)) {
+	t.Helper()
+	original := getUpstreamAPIKeyByPort
+	getUpstreamAPIKeyByPort = fn
+	upstreamAPIKeyCacheMu.Lock()
+	upstreamAPIKeyCache = map[int]upstreamAPIKeyCacheEntry{}
+	upstreamAPIKeyCacheMu.Unlock()
+	t.Cleanup(func() {
+		getUpstreamAPIKeyByPort = original
+		upstreamAPIKeyCacheMu.Lock()
+		upstreamAPIKeyCache = map[int]upstreamAPIKeyCacheEntry{}
+		upstreamAPIKeyCacheMu.Unlock()
+	})
+}
+
 func TestShouldRunDashboard(t *testing.T) {
 	tests := []struct {
 		name string
@@ -527,7 +542,10 @@ func TestCorsMiddlewareRejectsBadOrigin(t *testing.T) {
 	}
 }
 
-func TestInferenceProxyRewritesAuthorizationForBackend(t *testing.T) {
+func TestInferenceProxyStripsAuthorizationForBackend(t *testing.T) {
+	stubUpstreamAPIKeyLookup(t, func(port int) (string, error) {
+		return "", nil
+	})
 	backendAuth := make(chan string, 1)
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		backendAuth <- r.Header.Get("Authorization")
@@ -542,11 +560,10 @@ func TestInferenceProxyRewritesAuthorizationForBackend(t *testing.T) {
 	}
 	port := backend.URL[idx+1:]
 	resetSettingsCache(t, Settings{
-		HFCache:       t.TempDir(),
-		VLLMAPIKey:    "vllm-secret",
-		ProxyUsers:    []ProxyUser{{Username: "alice", APIKey: "proxy-secret"}},
-		RoutingTable:  map[string]int{"test-model": mustAtoi(t, port)},
-		ServerAPIKeys: map[string]string{"vllm-test-model-" + port: "legacy-server-secret"},
+		HFCache:      t.TempDir(),
+		VLLMAPIKey:   "vllm-secret",
+		ProxyUsers:   []ProxyUser{{Username: "alice", APIKey: "proxy-secret"}},
+		RoutingTable: map[string]int{"test-model": mustAtoi(t, port)},
 	}, true)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model"}`))
@@ -558,8 +575,49 @@ func TestInferenceProxyRewritesAuthorizationForBackend(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status=%d, want %d: %s", rr.Code, http.StatusOK, rr.Body.String())
 	}
-	if got := <-backendAuth; got != "Bearer vllm-secret" {
-		t.Fatalf("backend Authorization=%q, want vLLM key", got)
+	if got := <-backendAuth; got != "" {
+		t.Fatalf("backend Authorization=%q, want stripped header", got)
+	}
+}
+
+func TestInferenceProxyForwardsLegacyContainerAPIKey(t *testing.T) {
+	backendAuth := make(chan string, 1)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendAuth <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer backend.Close()
+
+	idx := strings.LastIndex(backend.URL, ":")
+	if idx == -1 {
+		t.Fatalf("backend URL %q does not contain port", backend.URL)
+	}
+	port := backend.URL[idx+1:]
+	portNum := mustAtoi(t, port)
+	stubUpstreamAPIKeyLookup(t, func(port int) (string, error) {
+		if port != portNum {
+			t.Fatalf("lookup port=%d, want %d", port, portNum)
+		}
+		return "legacy-upstream-secret", nil
+	})
+	resetSettingsCache(t, Settings{
+		HFCache:      t.TempDir(),
+		ProxyUsers:   []ProxyUser{{Username: "alice", APIKey: "proxy-secret"}},
+		RoutingTable: map[string]int{"test-model": portNum},
+	}, true)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model"}`))
+	req.Header.Set("Authorization", "Bearer proxy-secret")
+	rr := httptest.NewRecorder()
+
+	inferenceProxyHandler()(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d: %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := <-backendAuth; got != "Bearer legacy-upstream-secret" {
+		t.Fatalf("backend Authorization=%q, want legacy upstream key", got)
 	}
 }
 

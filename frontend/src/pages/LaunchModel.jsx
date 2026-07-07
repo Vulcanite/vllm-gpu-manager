@@ -356,7 +356,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       enable_expert_parallel: Boolean(startEnableExpertParallel),
       speculative_config: compactSpeculativeConfig,
       bind_ip: !proxyEnabled ? startBindIP.trim() : '',
-      use_api_key: proxyEnabled ? vllmAPIKeySet : effectiveUseServerApiKey,
+      use_api_key: effectiveUseServerApiKey,
       server_api_key: effectiveServerApiKey,
     };
 

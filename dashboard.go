@@ -408,9 +408,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		}
 		serverAPIKey := ""
 		vllmAPIKey := ""
-		if proxyEnabled {
-			vllmAPIKey = settings.VLLMAPIKey
-		} else if req.UseAPIKey {
+		if !proxyEnabled && req.UseAPIKey {
 			serverAPIKey = strings.TrimSpace(req.ServerAPIKey)
 			vllmAPIKey = settings.VLLMAPIKey
 		}

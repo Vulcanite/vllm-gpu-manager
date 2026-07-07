@@ -428,6 +428,28 @@ func GetServerContainersUsingAPIKey(apiKey string) ([]ActiveModel, error) {
 	return matches, nil
 }
 
+// GetServerAPIKeyByPort returns the --api-key currently configured on the
+// managed server container bound to port. It is used by the proxy for legacy
+// containers that were launched with direct vLLM authentication before proxy
+// mode was enabled.
+func GetServerAPIKeyByPort(port int) (string, error) {
+	if port <= 0 {
+		return "", nil
+	}
+	models, err := activeModelsNoHealth()
+	if err != nil {
+		return "", err
+	}
+	for _, model := range models {
+		modelPort, err := strconv.Atoi(strings.TrimSpace(model.Port))
+		if err != nil || modelPort != port {
+			continue
+		}
+		return strings.TrimSpace(model.APIKey), nil
+	}
+	return "", nil
+}
+
 type activeModelHealthResult struct {
 	index  int
 	ready  bool
