@@ -399,17 +399,61 @@ body {
 
 .active-containers-table-wrap {
   overflow-x: auto;
+  position: relative;
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-tertiary) transparent;
 }
 
 .active-containers-table {
-  width: 100%;
-  min-width: 1180px;
+  width: max-content;
+  min-width: 1310px;
+  table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   overflow: hidden;
   background: var(--bg-main);
+}
+
+.active-containers-table.direct-mode {
+  min-width: 1420px;
+}
+
+.active-containers-col-model {
+  width: 340px;
+}
+
+.active-containers-col-gpu {
+  width: 110px;
+}
+
+.active-containers-col-port {
+  width: 80px;
+}
+
+.active-containers-col-mem {
+  width: 130px;
+}
+
+.active-containers-col-context {
+  width: 170px;
+}
+
+.active-containers-col-seqs {
+  width: 140px;
+}
+
+.active-containers-col-tool {
+  width: 150px;
+}
+
+.active-containers-col-api-key {
+  width: 110px;
+}
+
+.active-containers-col-actions {
+  width: 190px;
 }
 
 .active-containers-table th,
@@ -440,10 +484,12 @@ body {
 }
 
 .active-container-model {
-  width: 34%;
   color: var(--text-primary) !important;
   font-weight: 500;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .active-container-actions {
@@ -457,6 +503,38 @@ body {
 .active-containers-table th:last-child,
 .active-containers-table td:last-child {
   text-align: right;
+}
+
+.active-containers-table th:first-child,
+.active-containers-table td:first-child,
+.active-containers-table th:last-child,
+.active-containers-table td:last-child {
+  position: sticky;
+}
+
+.active-containers-table th:first-child,
+.active-containers-table td:first-child {
+  left: 0;
+  z-index: 2;
+  box-shadow: 1px 0 0 var(--border-subtle);
+}
+
+.active-containers-table th:last-child,
+.active-containers-table td:last-child {
+  right: 0;
+  z-index: 3;
+  box-shadow: -1px 0 0 var(--border-subtle);
+}
+
+.active-containers-table th:first-child,
+.active-containers-table th:last-child {
+  z-index: 5;
+  background: var(--bg-card);
+}
+
+.active-containers-table td:first-child,
+.active-containers-table td:last-child {
+  background: var(--bg-main);
 }
 
 .active-containers-empty {

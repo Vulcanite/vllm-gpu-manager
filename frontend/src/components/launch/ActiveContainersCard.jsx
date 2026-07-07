@@ -31,7 +31,18 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, removing, re
       {restartError && <div className="alert alert-danger">{restartError}</div>}
       {removeError && <div className="alert alert-danger">{removeError}</div>}
       <div className="active-containers-table-wrap">
-        <table className="active-containers-table">
+        <table className={`active-containers-table ${proxyEnabled ? 'proxy-mode' : 'direct-mode'}`}>
+          <colgroup>
+            <col className="active-containers-col-model" />
+            <col className="active-containers-col-gpu" />
+            <col className="active-containers-col-port" />
+            <col className="active-containers-col-mem" />
+            <col className="active-containers-col-context" />
+            <col className="active-containers-col-seqs" />
+            <col className="active-containers-col-tool" />
+            {!proxyEnabled && <col className="active-containers-col-api-key" />}
+            <col className="active-containers-col-actions" />
+          </colgroup>
           <thead>
             <tr>
               <th scope="col">Model Name</th>
@@ -66,7 +77,7 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, removing, re
                         {actionLabel === 'Restart' ? <RefreshCw size={14} /> : <Play size={14} />}
                         {isRestarting ? 'Restarting...' : actionLabel}
                       </button>
-                      <button className="btn btn-danger" type="button" onClick={() => requestRemove(model.container_id)} disabled={removing || active} title={active ? 'Stop this container before removing it.' : ''}>
+                      <button className="btn btn-danger" type="button" onClick={() => requestRemove(model.container_id)} disabled={removing || active} aria-label={active ? 'Stop this container before removing it.' : `Remove ${model.model}`}>
                         <Trash2 size={14} /> Remove
                       </button>
                     </div>
