@@ -15,6 +15,7 @@ const FIELD_HELP = {
   blockSize: 'KV cache block size. This manager restricts it to supported powers of two.',
   moeBackend: 'Backend implementation used by vLLM for Mixture-of-Experts models.',
   expertParallel: 'Enable vLLM expert parallelism for MoE models.',
+  disableFlashInferAutotune: 'Pass --no-enable-flashinfer-autotune to skip FlashInfer autotuning during startup.',
   trustRemoteCode: 'Allow model repositories to execute custom Python code inside the vLLM container.',
   speculativeConfig: 'JSON object passed directly to vLLM --speculative-config for speculative decoding.',
   tokenizerMode: 'Tokenizer implementation mode passed to vLLM.',
@@ -101,6 +102,7 @@ export const DeployServerCard = ({
   setServerApiKey,
   setStartBlockSize,
   setStartEnableExpertParallel,
+  setStartDisableFlashInferAutotune,
   setStartMoeBackend,
   setStartSpeculativeConfig,
   setUseServerApiKey,
@@ -125,6 +127,7 @@ export const DeployServerCard = ({
   startBindIP,
   startModelName,
   startEnableExpertParallel,
+  startDisableFlashInferAutotune,
   startMoeBackend,
   startParser,
   startPort,
@@ -337,6 +340,26 @@ export const DeployServerCard = ({
                       type="checkbox"
                       checked={Boolean(startTrustRemoteCode)}
                       onChange={(event) => setStartTrustRemoteCode(event.target.checked)}
+                      disabled={launching}
+                    />
+                    <span className="toggle-track" aria-hidden="true">
+                      <span className="toggle-thumb" />
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="form-group launch-toggle-group">
+                <div className="setting-row launch-setting-row">
+                  <div>
+                    <FieldLabel htmlFor="startDisableFlashInferAutotune" help={FIELD_HELP.disableFlashInferAutotune}>Disable FlashInfer Autotune</FieldLabel>
+                  </div>
+                  <label className="toggle-control" aria-label="Disable FlashInfer autotune for this server">
+                    <input
+                      id="startDisableFlashInferAutotune"
+                      type="checkbox"
+                      checked={Boolean(startDisableFlashInferAutotune)}
+                      onChange={(event) => setStartDisableFlashInferAutotune(event.target.checked)}
                       disabled={launching}
                     />
                     <span className="toggle-track" aria-hidden="true">

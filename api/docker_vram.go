@@ -39,6 +39,8 @@ type LaunchConfig struct {
 	ModelVRAMSafetyMargin       float64  `json:"model_vram_safety_margin"`
 	DefaultGPUMemoryUtilization float64  `json:"default_gpu_memory_utilization"`
 	DefaultMaxModelLen          int      `json:"default_max_model_len"`
+	HFCache                     string   `json:"hf_cache,omitempty"`
+	VLLMImage                   string   `json:"vllm_image"`
 	KVCacheDTypeOptions         []string `json:"kv_cache_dtype_options"`
 	ToolParserOptions           []string `json:"tool_parser_options"`
 	TokenizerModeOptions        []string `json:"tokenizer_mode_options"`
@@ -53,6 +55,7 @@ func LaunchDefaults() LaunchConfig {
 		ModelVRAMSafetyMargin:       modelVRAMSafetyMargin,
 		DefaultGPUMemoryUtilization: defaultGPUMemoryUtilization,
 		DefaultMaxModelLen:          defaultMaxModelLen,
+		VLLMImage:                   VLLMImage,
 		KVCacheDTypeOptions:         append([]string(nil), kvCacheDTypeOptions...),
 		ToolParserOptions:           allowedToolParserNames(),
 		TokenizerModeOptions:        append([]string(nil), tokenizerModeOptions...),

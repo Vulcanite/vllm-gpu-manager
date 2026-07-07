@@ -175,6 +175,7 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 	var blockSize string
 	var moeBackend string
 	var enableExpertParallel bool
+	var disableFlashInferAutotune bool
 	var speculativeConfig string
 	var bindIP string
 	var force bool
@@ -197,29 +198,30 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 			if strings.TrimSpace(bindIP) != "" {
 				hostBindIP = strings.TrimSpace(bindIP)
 			}
-			if err := api.StartModel(args[0], port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, kvCacheDType, toolParser, tokenizerMode, reasoningParser, trustRemoteCode, blockSize, moeBackend, enableExpertParallel, speculativeConfig, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, ""); err != nil {
+			if err := api.StartModel(args[0], port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, kvCacheDType, toolParser, tokenizerMode, reasoningParser, trustRemoteCode, blockSize, moeBackend, enableExpertParallel, disableFlashInferAutotune, speculativeConfig, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, ""); err != nil {
 				return err
 			}
 			upsertRoute(args[0], port)
 			return printMutationResult(*opts, map[string]interface{}{
-				"status":             "started",
-				"model":              args[0],
-				"port":               port,
-				"gpus":               gpus,
-				"gpu_ids":            emptyAsDefault(gpuIDs, "auto"),
-				"mem_util":           memUtil,
-				"max_len":            emptyAsDefault(maxLen, "default"),
-				"max_num_seqs":       emptyAsDefault(maxNumSeqs, "default"),
-				"kv_cache_dtype":     kvCacheDType,
-				"tool_parser":        emptyAsDefault(toolParser, "disabled"),
-				"tokenizer_mode":     emptyAsDefault(tokenizerMode, "auto"),
-				"reasoning_parser":   emptyAsDefault(reasoningParser, "disabled"),
-				"trust_remote_code":  trustRemoteCode,
-				"block_size":         emptyAsDefault(blockSize, "default"),
-				"moe_backend":        emptyAsDefault(moeBackend, "auto"),
-				"expert_parallel":    enableExpertParallel,
-				"speculative_config": emptyAsDefault(speculativeConfig, "disabled"),
-				"bind_ip":            hostBindIP,
+				"status":                      "started",
+				"model":                       args[0],
+				"port":                        port,
+				"gpus":                        gpus,
+				"gpu_ids":                     emptyAsDefault(gpuIDs, "auto"),
+				"mem_util":                    memUtil,
+				"max_len":                     emptyAsDefault(maxLen, "default"),
+				"max_num_seqs":                emptyAsDefault(maxNumSeqs, "default"),
+				"kv_cache_dtype":              kvCacheDType,
+				"tool_parser":                 emptyAsDefault(toolParser, "disabled"),
+				"tokenizer_mode":              emptyAsDefault(tokenizerMode, "auto"),
+				"reasoning_parser":            emptyAsDefault(reasoningParser, "disabled"),
+				"trust_remote_code":           trustRemoteCode,
+				"block_size":                  emptyAsDefault(blockSize, "default"),
+				"moe_backend":                 emptyAsDefault(moeBackend, "auto"),
+				"expert_parallel":             enableExpertParallel,
+				"disable_flashinfer_autotune": disableFlashInferAutotune,
+				"speculative_config":          emptyAsDefault(speculativeConfig, "disabled"),
+				"bind_ip":                     hostBindIP,
 			})
 		},
 	}
@@ -237,6 +239,7 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 	cmd.Flags().StringVar(&blockSize, "block-size", "", "vLLM KV cache block size; must be a power of 2")
 	cmd.Flags().StringVar(&moeBackend, "moe-backend", "auto", "vLLM MoE backend")
 	cmd.Flags().BoolVar(&enableExpertParallel, "enable-expert-parallel", false, "enable vLLM expert parallelism")
+	cmd.Flags().BoolVar(&disableFlashInferAutotune, "no-enable-flashinfer-autotune", false, "disable vLLM FlashInfer autotune")
 	cmd.Flags().StringVar(&speculativeConfig, "speculative-config", "", "vLLM speculative decoding config as JSON")
 	cmd.Flags().StringVar(&bindIP, "bind-ip", "", "host IP address for direct server port binding")
 	cmd.Flags().BoolVar(&force, "force", false, "run the command even if the dashboard is running")
@@ -795,10 +798,11 @@ func printActiveModelSections(w io.Writer, models []api.ActiveModel) {
 			markdownLine(emptyAsDefault(model.KVCacheDType, "auto")),
 			markdownLine(model.ToolParser),
 		)
-		fmt.Fprintf(&b, "- Advanced: tokenizer %s, reasoning %s, trust remote code %s, block size %s\n",
+		fmt.Fprintf(&b, "- Advanced: tokenizer %s, reasoning %s, trust remote code %s, FlashInfer autotune disabled %s, block size %s\n",
 			markdownLine(emptyAsDefault(model.TokenizerMode, "auto")),
 			markdownLine(emptyAsDefault(model.ReasoningParser, "disabled")),
 			yesNo(model.TrustRemoteCode),
+			yesNo(model.DisableFlashInferAutotune),
 			markdownLine(emptyAsDefault(model.BlockSize, "default")),
 		)
 	}

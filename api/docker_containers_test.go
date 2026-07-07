@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/moby/moby/api/types/container"
 )
 
 func stubGPUInfo(t *testing.T, fn func() ([]GPUInfo, error)) {
@@ -110,6 +112,34 @@ func TestIsManagedServerContainerRejectsDownloads(t *testing.T) {
 	}
 	if isManagedServerContainer(map[string]string{managedContainerLabel: "true", containerKindLabel: containerKindDownload}) {
 		t.Fatal("managed download container was accepted as server container")
+	}
+}
+
+func TestBuildActiveModelParsesFlashInferAutotuneFlag(t *testing.T) {
+	model, ok := buildActiveModel(managedVLLMContainer{
+		id:     "container-id",
+		name:   "vllm-test-8080",
+		state:  "running",
+		labels: map[string]string{managedContainerLabel: "true", containerKindLabel: containerKindServer},
+		metadata: container.InspectResponse{
+			Config: &container.Config{
+				Cmd: []string{
+					"--model", "test/model",
+					"--port", "8080",
+					"--trust-remote-code",
+					"--no-enable-flashinfer-autotune",
+				},
+			},
+		},
+	})
+	if !ok {
+		t.Fatal("buildActiveModel rejected managed server container")
+	}
+	if !model.TrustRemoteCode {
+		t.Fatal("TrustRemoteCode=false, want true")
+	}
+	if !model.DisableFlashInferAutotune {
+		t.Fatal("DisableFlashInferAutotune=false, want true")
 	}
 }
 
@@ -429,7 +459,7 @@ func TestNormalizeSpeculativeConfig(t *testing.T) {
 }
 
 func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", "per-server-key")
+	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", "per-server-key")
 	if err == nil {
 		t.Fatal("StartModel accepted both global and per-server key; want validation error")
 	}
@@ -442,7 +472,7 @@ func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
 }
 
 func TestStartModelRejectsWhitespaceInPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, "", "/tmp/cache", "", "", false, false, "0.0.0.0", "key with space")
+	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "", false, false, "0.0.0.0", "key with space")
 	if err == nil {
 		t.Fatal("StartModel accepted whitespace in per-server key; want validation error")
 	}

@@ -10,28 +10,29 @@ import (
 )
 
 type ActiveModel struct {
-	ContainerID     string `json:"container_id"`
-	ContainerName   string `json:"container_name"`
-	Model           string `json:"model"`
-	Port            string `json:"port"`
-	GPUs            string `json:"gpus"`
-	GPUIDs          string `json:"gpu_ids"`
-	MemUtil         string `json:"mem_util"`
-	MaxLen          string `json:"max_len"`
-	MaxNumSeqs      string `json:"max_num_seqs"`
-	KVCacheDType    string `json:"kv_cache_dtype"`
-	ToolParser      string `json:"tool_parser"`
-	TokenizerMode   string `json:"tokenizer_mode"`
-	ReasoningParser string `json:"reasoning_parser"`
-	TrustRemoteCode bool   `json:"trust_remote_code"`
-	BlockSize       string `json:"block_size"`
-	BindIP          string `json:"bind_ip"`
-	MetricsTarget   string `json:"metrics_target"`
-	APIUrl          string `json:"api_url"`
-	IsReady         bool   `json:"is_ready"`
-	Arch            string `json:"arch"`
-	State           string `json:"state"`
-	APIKey          string `json:"-"`
+	ContainerID               string `json:"container_id"`
+	ContainerName             string `json:"container_name"`
+	Model                     string `json:"model"`
+	Port                      string `json:"port"`
+	GPUs                      string `json:"gpus"`
+	GPUIDs                    string `json:"gpu_ids"`
+	MemUtil                   string `json:"mem_util"`
+	MaxLen                    string `json:"max_len"`
+	MaxNumSeqs                string `json:"max_num_seqs"`
+	KVCacheDType              string `json:"kv_cache_dtype"`
+	ToolParser                string `json:"tool_parser"`
+	TokenizerMode             string `json:"tokenizer_mode"`
+	ReasoningParser           string `json:"reasoning_parser"`
+	TrustRemoteCode           bool   `json:"trust_remote_code"`
+	DisableFlashInferAutotune bool   `json:"disable_flashinfer_autotune"`
+	BlockSize                 string `json:"block_size"`
+	BindIP                    string `json:"bind_ip"`
+	MetricsTarget             string `json:"metrics_target"`
+	APIUrl                    string `json:"api_url"`
+	IsReady                   bool   `json:"is_ready"`
+	Arch                      string `json:"arch"`
+	State                     string `json:"state"`
+	APIKey                    string `json:"-"`
 	// HasServerAPIKey is populated by the dashboard handler so the UI can
 	// distinguish a per-server key from the global one without exposing the
 	// secret value.

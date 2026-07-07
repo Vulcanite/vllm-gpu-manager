@@ -19,6 +19,8 @@ const DEFAULT_LAUNCH_CONFIG = {
   model_vram_safety_margin: 1.08,
   default_gpu_memory_utilization: 0.9,
   default_max_model_len: 32768,
+  hf_cache: '~/.cache/huggingface',
+  vllm_image: 'vllm/vllm-openai:v0.23.0-cu129',
   kv_cache_dtype_options: ['auto', 'fp8', 'fp8_e5m2', 'fp8_e4m3'],
   tokenizer_mode_options: ['auto', 'hf', 'slow', 'mistral', 'deepseek_v32', 'deepseek_v4'],
   reasoning_parser_options: ['deepseek_r1', 'deepseek_v4', 'ernie_x1', 'glm45', 'granite', 'hunyuan_a13b', 'mistral', 'openai_gptoss', 'qwen3'],
@@ -40,17 +42,37 @@ const normalizeGpuPinning = (selectedIds, availableIds, requestedCount, useAll) 
 
 const shellQuote = (value) => {
   const text = String(value ?? '');
-  if (/^[A-Za-z0-9_./:=,@+-]+$/.test(text)) return text;
+  if (/^[A-Za-z0-9_./:=,@+~-]+$/.test(text)) return text;
   return `'${text.replaceAll("'", "'\"'\"'")}'`;
 };
 
-const buildVLLMServeCommand = (payload, { includeAPIKey = false } = {}) => {
-  const args = ['vllm', 'serve', payload.model];
-  args.push('--host', '0.0.0.0');
-  args.push('--port', String(payload.port));
-  args.push('--tensor-parallel-size', String(payload.gpus));
-  args.push('--gpu-memory-utilization', payload.mem_util);
-  args.push('--enable-prefix-caching');
+const dockerContainerName = (model, port) => {
+  const shortName = String(model || '').split('/').pop() || 'model';
+  const safeName = shortName.toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'model';
+  return `vllm-${safeName}-${port}`;
+};
+
+const buildDockerRunCommand = (payload, { dockerGpuFlag = 'all', hfCache, hostBindIP = '', includeAPIKey = false, vllmImage } = {}) => {
+  const image = vllmImage || DEFAULT_LAUNCH_CONFIG.vllm_image;
+  const cachePath = hfCache || DEFAULT_LAUNCH_CONFIG.hf_cache;
+  const bindIP = hostBindIP || payload.bind_ip || '';
+  const hostPort = bindIP ? `${bindIP}:${payload.port}:${payload.port}` : `${payload.port}:${payload.port}`;
+  const args = [
+    'docker', 'run',
+    '--gpus', dockerGpuFlag,
+    '--name', dockerContainerName(payload.model, payload.port),
+    '--ipc=host',
+    '-p', hostPort,
+    '-v', `${cachePath}:/hf_cache`,
+    '-e', 'HF_HOME=/hf_cache',
+    image,
+    '--model', payload.model,
+    '--host', '0.0.0.0',
+    '--port', String(payload.port),
+    '--tensor-parallel-size', String(payload.gpus),
+    '--gpu-memory-utilization', payload.mem_util,
+    '--enable-prefix-caching',
+  ];
   if (payload.max_len) args.push('--max-model-len', payload.max_len);
   if (payload.max_num_seqs) args.push('--max-num-seqs', payload.max_num_seqs);
   if (payload.kv_cache_dtype && payload.kv_cache_dtype !== 'auto') args.push('--kv-cache-dtype', payload.kv_cache_dtype);
@@ -61,16 +83,19 @@ const buildVLLMServeCommand = (payload, { includeAPIKey = false } = {}) => {
   if (payload.block_size) args.push('--block-size', payload.block_size);
   if (payload.moe_backend && payload.moe_backend !== 'auto') args.push('--moe-backend', payload.moe_backend);
   if (payload.enable_expert_parallel) args.push('--enable-expert-parallel');
+  if (payload.disable_flashinfer_autotune) args.push('--no-enable-flashinfer-autotune');
   if (payload.speculative_config) args.push('--speculative-config', payload.speculative_config);
   if (payload.use_api_key) args.push('--api-key', includeAPIKey && payload.server_api_key ? payload.server_api_key : '<redacted>');
 
-  const lines = [`${args[0]} ${args[1]} ${shellQuote(args[2])}`];
-  for (let i = 3; i < args.length; i += 2) {
-    if (args[i + 1] === undefined || String(args[i]).startsWith('--enable') || args[i] === '--trust-remote-code') {
-      lines.push(`  ${shellQuote(args[i])}`);
-      i -= 1;
+  const valueFlags = new Set(['--gpus', '--name', '-p', '-v', '-e', '--model', '--host', '--port', '--tensor-parallel-size', '--gpu-memory-utilization', '--max-model-len', '--max-num-seqs', '--kv-cache-dtype', '--tool-call-parser', '--tokenizer-mode', '--reasoning-parser', '--block-size', '--moe-backend', '--speculative-config', '--api-key']);
+  const lines = [`${args[0]} ${args[1]}`];
+  for (let i = 2; i < args.length; i += 1) {
+    const arg = args[i];
+    if (valueFlags.has(arg) && args[i + 1] !== undefined) {
+      lines.push(`  ${shellQuote(arg)} ${shellQuote(args[i + 1])}`);
+      i += 1;
     } else {
-      lines.push(`  ${shellQuote(args[i])} ${shellQuote(args[i + 1])}`);
+      lines.push(`  ${shellQuote(arg)}`);
     }
   }
   return lines.join(' \\\n');
@@ -110,6 +135,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     blockSize: '16',
     moeBackend: 'auto',
     enableExpertParallel: false,
+    disableFlashInferAutotune: false,
     speculativeConfig: '',
     bindIP: '',
     useServerApiKey: false,
@@ -136,6 +162,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const startBlockSize = deployConfig.blockSize;
   const startMoeBackend = deployConfig.moeBackend;
   const startEnableExpertParallel = deployConfig.enableExpertParallel;
+  const startDisableFlashInferAutotune = deployConfig.disableFlashInferAutotune;
   const startSpeculativeConfig = deployConfig.speculativeConfig;
   const startBindIP = deployConfig.bindIP;
   const startUseServerApiKey = deployConfig.useServerApiKey;
@@ -222,6 +249,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         blockSize: searchParams.get('block_size') || prev.blockSize,
         moeBackend: searchParams.get('moe_backend') || prev.moeBackend,
         enableExpertParallel: searchParams.get('enable_expert_parallel') === 'true' || prev.enableExpertParallel,
+        disableFlashInferAutotune: searchParams.get('disable_flashinfer_autotune') === 'true' || prev.disableFlashInferAutotune,
       }));
       setDeployModalOpen(true);
     }, 0);
@@ -334,6 +362,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       return;
     }
 
+    const gpusToSend = Number(startGpus);
     const gpuIdsParam = usesAllGpus ? 'all' : [...selectedGpuIds].sort((a, b) => a - b).join(',');
     const effectiveUseServerApiKey = !proxyEnabled && vllmAPIKeySet && startUseServerApiKey;
     const effectiveServerApiKey = effectiveUseServerApiKey && startUseCustomServerApiKey ? startServerApiKey.trim() : '';
@@ -341,7 +370,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     const payload = {
       model: startModelName,
       port: Number(startPort),
-      gpus: Number(startGpus),
+      gpus: gpusToSend,
       gpu_ids: gpuIdsParam,
       mem_util: startMem !== null && startMem !== undefined ? startMem.toString() : '',
       max_len: startMaxLen ? startMaxLen.toString() : '',
@@ -354,6 +383,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       block_size: startBlockSize ? startBlockSize.toString() : '',
       moe_backend: startMoeBackend || 'auto',
       enable_expert_parallel: Boolean(startEnableExpertParallel),
+      disable_flashinfer_autotune: Boolean(startDisableFlashInferAutotune),
       speculative_config: compactSpeculativeConfig,
       bind_ip: !proxyEnabled ? startBindIP.trim() : '',
       use_api_key: effectiveUseServerApiKey,
@@ -362,7 +392,12 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
 
     setLaunchConfirmData({
       payload,
-      command: buildVLLMServeCommand(payload),
+      command: buildDockerRunCommand(payload, {
+        dockerGpuFlag: gpuIdsParam === 'all' ? `device=${availableGpuIds.slice(0, gpusToSend).join(',')}` : `device=${gpuIdsParam}`,
+        hfCache: launchConfig?.hf_cache,
+        hostBindIP: proxyEnabled ? '127.0.0.1' : '',
+        vllmImage: launchConfig?.vllm_image,
+      }),
       gpuIds: gpuIdsParam,
     });
     setDeployModalOpen(false);
@@ -529,6 +564,12 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   return (
     <div className="dashboard-grid launch-page-grid">
       <div className="stack launch-side-stack">
+        <CachedModelsCard
+          deletingCache={deletingCache}
+          downloadedModels={downloadedModels}
+          requestDeleteDownloadedModel={requestDeleteDownloadedModel}
+        />
+
         <DownloadModelCard
           activeDownloads={activeDownloads}
           checkingInfo={checkingInfo}
@@ -540,12 +581,6 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
           handleDownload={handleDownload}
           setActiveDownloads={setActiveDownloads}
           setDownloadName={setDownloadName}
-        />
-
-        <CachedModelsCard
-          deletingCache={deletingCache}
-          downloadedModels={downloadedModels}
-          requestDeleteDownloadedModel={requestDeleteDownloadedModel}
         />
       </div>
 
@@ -599,6 +634,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             setStartBlockSize={(v) => updateDeployConfig('blockSize', v)}
             setStartMoeBackend={(v) => updateDeployConfig('moeBackend', v)}
             setStartEnableExpertParallel={(v) => updateDeployConfig('enableExpertParallel', v)}
+            setStartDisableFlashInferAutotune={(v) => updateDeployConfig('disableFlashInferAutotune', v)}
             setStartSpeculativeConfig={(v) => updateDeployConfig('speculativeConfig', v)}
             setUseServerApiKey={(v) => updateDeployConfig('useServerApiKey', v)}
             setUseCustomServerApiKey={(v) => updateDeployConfig('useCustomServerApiKey', v)}
@@ -617,6 +653,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             startBlockSize={startBlockSize}
             startMoeBackend={startMoeBackend}
             startEnableExpertParallel={startEnableExpertParallel}
+            startDisableFlashInferAutotune={startDisableFlashInferAutotune}
             startSpeculativeConfig={startSpeculativeConfig}
             startGpus={startGpus}
             startKvCacheDType={startKvCacheDType}

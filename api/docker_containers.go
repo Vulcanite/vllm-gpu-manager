@@ -216,26 +216,27 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 	}
 
 	model := ActiveModel{
-		ContainerID:     vc.id,
-		ContainerName:   vc.name,
-		Model:           vc.name, // fallback
-		Port:            "unknown",
-		GPUs:            "unknown",
-		GPUIDs:          "all",
-		MemUtil:         "unknown",
-		MaxLen:          "default",
-		MaxNumSeqs:      "default",
-		KVCacheDType:    "auto",
-		ToolParser:      "disabled",
-		TokenizerMode:   "auto",
-		ReasoningParser: "disabled",
-		TrustRemoteCode: false,
-		BlockSize:       "default",
-		BindIP:          "unknown",
-		MetricsTarget:   "unknown",
-		APIUrl:          "unknown",
-		IsReady:         false,
-		State:           vc.state,
+		ContainerID:               vc.id,
+		ContainerName:             vc.name,
+		Model:                     vc.name, // fallback
+		Port:                      "unknown",
+		GPUs:                      "unknown",
+		GPUIDs:                    "all",
+		MemUtil:                   "unknown",
+		MaxLen:                    "default",
+		MaxNumSeqs:                "default",
+		KVCacheDType:              "auto",
+		ToolParser:                "disabled",
+		TokenizerMode:             "auto",
+		ReasoningParser:           "disabled",
+		TrustRemoteCode:           false,
+		DisableFlashInferAutotune: false,
+		BlockSize:                 "default",
+		BindIP:                    "unknown",
+		MetricsTarget:             "unknown",
+		APIUrl:                    "unknown",
+		IsReady:                   false,
+		State:                     vc.state,
 	}
 
 	if vc.labels[containerModelLabel] != "" {
@@ -275,6 +276,9 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 		}
 		if args[i] == "--trust-remote-code" {
 			model.TrustRemoteCode = true
+		}
+		if args[i] == "--no-enable-flashinfer-autotune" {
+			model.DisableFlashInferAutotune = true
 		}
 		if args[i] == "--block-size" && i+1 < len(args) {
 			model.BlockSize = args[i+1]
@@ -794,7 +798,7 @@ func NormalizeModelKeyForMatch(model string) string {
 	return model
 }
 
-func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, kvCacheDType string, toolParser string, tokenizerMode string, reasoningParser string, trustRemoteCode bool, blockSize string, moeBackend string, enableExpertParallel bool, speculativeConfig string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, serverAPIKey string) error {
+func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, kvCacheDType string, toolParser string, tokenizerMode string, reasoningParser string, trustRemoteCode bool, blockSize string, moeBackend string, enableExpertParallel bool, disableFlashInferAutotune bool, speculativeConfig string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, serverAPIKey string) error {
 	hfCache = NormalizeHFHome(hfCache)
 	if hfCache == "" {
 		return validationError("hugging face cache directory is required")
@@ -1040,6 +1044,9 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	}
 	if enableExpertParallel {
 		cmd = append(cmd, "--enable-expert-parallel")
+	}
+	if disableFlashInferAutotune {
+		cmd = append(cmd, "--no-enable-flashinfer-autotune")
 	}
 	if speculativeConfig != "" {
 		cmd = append(cmd, "--speculative-config", speculativeConfig)

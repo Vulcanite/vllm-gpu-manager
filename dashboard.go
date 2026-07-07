@@ -281,7 +281,9 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 	}
 
 	mux.HandleFunc("/api/config", apiHandler(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, api.LaunchDefaults())
+		config := api.LaunchDefaults()
+		config.HFCache = getSettings().HFCache
+		writeJSON(w, config)
 	}))
 
 	mux.HandleFunc("/api/recommendations", apiHandler(func(w http.ResponseWriter, r *http.Request) {
@@ -362,32 +364,33 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			return
 		}
 		var req struct {
-			Model             string `json:"model"`
-			Port              int    `json:"port"`
-			GPUs              int    `json:"gpus"`
-			GPUIDs            string `json:"gpu_ids"`
-			MemUtil           string `json:"mem_util"`
-			MaxLen            string `json:"max_len"`
-			MaxNumSeqs        string `json:"max_num_seqs"`
-			KVCacheDType      string `json:"kv_cache_dtype"`
-			ToolParser        string `json:"tool_parser"`
-			TokenizerMode     string `json:"tokenizer_mode"`
-			ReasoningParser   string `json:"reasoning_parser"`
-			TrustRemoteCode   bool   `json:"trust_remote_code"`
-			BlockSize         string `json:"block_size"`
-			MoeBackend        string `json:"moe_backend"`
-			ExpertParallel    bool   `json:"enable_expert_parallel"`
-			SpeculativeConfig string `json:"speculative_config"`
-			BindIP            string `json:"bind_ip"`
-			UseAPIKey         bool   `json:"use_api_key"`
-			ServerAPIKey      string `json:"server_api_key"`
+			Model                     string `json:"model"`
+			Port                      int    `json:"port"`
+			GPUs                      int    `json:"gpus"`
+			GPUIDs                    string `json:"gpu_ids"`
+			MemUtil                   string `json:"mem_util"`
+			MaxLen                    string `json:"max_len"`
+			MaxNumSeqs                string `json:"max_num_seqs"`
+			KVCacheDType              string `json:"kv_cache_dtype"`
+			ToolParser                string `json:"tool_parser"`
+			TokenizerMode             string `json:"tokenizer_mode"`
+			ReasoningParser           string `json:"reasoning_parser"`
+			TrustRemoteCode           bool   `json:"trust_remote_code"`
+			BlockSize                 string `json:"block_size"`
+			MoeBackend                string `json:"moe_backend"`
+			ExpertParallel            bool   `json:"enable_expert_parallel"`
+			DisableFlashInferAutotune bool   `json:"disable_flashinfer_autotune"`
+			SpeculativeConfig         string `json:"speculative_config"`
+			BindIP                    string `json:"bind_ip"`
+			UseAPIKey                 bool   `json:"use_api_key"`
+			ServerAPIKey              string `json:"server_api_key"`
 		}
 		if !decodeJSONBody(w, r, &req) {
 			return
 		}
 
-		log.Printf("[API] /api/models/start requested! Model=%s Port=%d GPUs=%d GPUIDs=%s MemUtil=%s MaxLen=%s MaxNumSeqs=%s KVCacheDType=%s Parser=%s TokenizerMode=%s ReasoningParser=%s TrustRemoteCode=%t BlockSize=%s MoeBackend=%s ExpertParallel=%t SpeculativeConfigSet=%t\n",
-			req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, strings.TrimSpace(req.SpeculativeConfig) != "")
+		log.Printf("[API] /api/models/start requested! Model=%s Port=%d GPUs=%d GPUIDs=%s MemUtil=%s MaxLen=%s MaxNumSeqs=%s KVCacheDType=%s Parser=%s TokenizerMode=%s ReasoningParser=%s TrustRemoteCode=%t BlockSize=%s MoeBackend=%s ExpertParallel=%t DisableFlashInferAutotune=%t SpeculativeConfigSet=%t\n",
+			req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, strings.TrimSpace(req.SpeculativeConfig) != "")
 
 		_, err := api.RequireDetectedGPUs()
 		if err != nil {
@@ -415,7 +418,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		if serverAPIKey != "" {
 			vllmAPIKey = ""
 		}
-		if err := api.StartModel(req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.SpeculativeConfig, settings.HFCache, settings.HFToken, vllmAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, serverAPIKey); err != nil {
+		if err := api.StartModel(req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, req.SpeculativeConfig, settings.HFCache, settings.HFToken, vllmAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, serverAPIKey); err != nil {
 			writeAPIError(w, err)
 			return
 		}

@@ -34,7 +34,18 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, onDeployServ
       {restartError && <div className="alert alert-danger">{restartError}</div>}
       {removeError && <div className="alert alert-danger">{removeError}</div>}
       <div className="active-containers-table-wrap">
-        <table className="active-containers-table">
+        <table className={`active-containers-table ${proxyEnabled ? 'proxy-mode' : 'direct-mode'}`}>
+          <colgroup>
+            <col className="active-containers-col-model" />
+            <col className="active-containers-col-gpu" />
+            <col className="active-containers-col-port" />
+            <col className="active-containers-col-mem" />
+            <col className="active-containers-col-context" />
+            <col className="active-containers-col-tokenizer" />
+            <col className="active-containers-col-reasoning" />
+            {!proxyEnabled && <col className="active-containers-col-api-key" />}
+            <col className="active-containers-col-actions" />
+          </colgroup>
           <thead>
             <tr>
               <th scope="col">Model Name</th>
@@ -55,7 +66,7 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, onDeployServ
               const actionLabel = model.state === 'running' ? 'Restart' : 'Start';
               return (
                 <tr key={model.container_id}>
-                  <td className="active-container-model">{model.model}</td>
+                  <td className="active-container-model" title={model.model}>{model.model}</td>
                   <td>{formatGPUIds(model)}</td>
                   <td>{model.port}</td>
                   <td>{model.mem_util || '-'}</td>

@@ -1,14 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Loader2, Network, Save, Trash2 } from 'lucide-react';
-import { getRoutingTable, saveRoutingTable } from '../lib/api';
+import { Network } from 'lucide-react';
+import { getRoutingTable } from '../lib/api';
 import { ProxyUsersPage } from './ProxyUsersPage.jsx';
 
 export const TrafficRouting = ({ notify }) => {
   const [routes, setRoutes] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -29,37 +27,6 @@ export const TrafficRouting = ({ notify }) => {
       cancelled = true;
     };
   }, []);
-
-  const handleSave = async () => {
-    try {
-      setSaving(true);
-      setError(null);
-      setSuccess(false);
-
-      const table = {};
-      routes.forEach((route) => {
-        if (route.model.trim() && route.port) {
-          table[route.model.trim()] = Number(route.port);
-        }
-      });
-
-      await saveRoutingTable(table);
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
-    } catch {
-      setError('Failed to save routing table.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const removeRoute = (index) => {
-    setRoutes(routes.filter((_, i) => i !== index));
-  };
-
-  const updateRoute = (index, field, value) => {
-    setRoutes(routes.map((route, i) => (i === index ? { ...route, [field]: value } : route)));
-  };
 
   if (loading) {
     return (
@@ -84,7 +51,6 @@ export const TrafficRouting = ({ notify }) => {
         </div>
 
         {error && <div className="alert alert-danger">{error}</div>}
-        {success && <div className="alert alert-success">Routing table saved successfully!</div>}
 
         {routes.length === 0 && (
           <div className="routing-empty-state">
@@ -97,46 +63,17 @@ export const TrafficRouting = ({ notify }) => {
             {routes.map((route, i) => (
               <div key={i} className="model-item cache-model-item routing-row">
                 <div className="routing-model-field">
-                  <input
-                    type="text"
-                    value={route.model}
-                    onChange={(e) => updateRoute(i, 'model', e.target.value)}
-                    placeholder="Model String (e.g. Qwen/Qwen2.5-VL-72B-Instruct)"
-                    className="form-control"
-                  />
+                  <span className="routing-field-label">Model</span>
+                  <span className="routing-field-value" title={route.model}>{route.model}</span>
                 </div>
                 <div className="routing-port-field">
-                  <input
-                    type="number"
-                    value={route.port}
-                    onChange={(e) => updateRoute(i, 'port', e.target.value)}
-                    placeholder="Target Port (e.g. 8082)"
-                    className="form-control"
-                  />
-                </div>
-                <div className="cache-model-actions">
-                  <button type="button" onClick={() => removeRoute(i)} className="icon-button text-red" aria-label="Remove route">
-                    <Trash2 size={16} />
-                  </button>
+                  <span className="routing-field-label">Port</span>
+                  <span className="routing-port-value">{route.port}</span>
                 </div>
               </div>
             ))}
           </div>
         )}
-
-        <div className="routing-actions">
-          <button type="button" onClick={handleSave} disabled={saving} className="btn btn-primary">
-            {saving ? (
-              <>
-                <Loader2 size={16} className="loader-inline" /> Saving...
-              </>
-            ) : (
-              <>
-                <Save size={16} /> Save Routes
-              </>
-            )}
-          </button>
-        </div>
       </div>
 
       <ProxyUsersPage notify={notify} />

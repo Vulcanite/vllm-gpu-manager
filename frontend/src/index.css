@@ -314,26 +314,40 @@ body {
 }
 
 .routing-model-field {
-  flex: 2;
+  flex: 1 1 24rem;
   min-width: 0;
 }
 
 .routing-port-field {
-  flex: 1;
-  min-width: 160px;
+  flex: 0 0 7rem;
+  min-width: 0;
 }
 
-.routing-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin-top: 1rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--border-subtle);
+.routing-field-label {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--text-tertiary);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+  text-transform: uppercase;
 }
 
-.routing-actions .btn-primary {
-  margin-left: auto;
+.routing-field-value,
+.routing-port-value {
+  display: block;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.86rem;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.routing-port-value {
+  color: var(--text-secondary);
 }
 
 .resource-grid {
@@ -416,6 +430,74 @@ body {
   background: var(--bg-main);
 }
 
+.active-containers-col-model {
+  width: 30%;
+}
+
+.active-containers-col-gpu {
+  width: 8%;
+}
+
+.active-containers-col-port {
+  width: 6%;
+}
+
+.active-containers-col-mem {
+  width: 9%;
+}
+
+.active-containers-col-context {
+  width: 11%;
+}
+
+.active-containers-col-tokenizer {
+  width: 8%;
+}
+
+.active-containers-col-reasoning {
+  width: 8%;
+}
+
+.active-containers-col-api-key {
+  width: 7%;
+}
+
+.active-containers-col-actions {
+  width: 13%;
+}
+
+.active-containers-table.proxy-mode .active-containers-col-model {
+  width: 36%;
+}
+
+.active-containers-table.proxy-mode .active-containers-col-gpu {
+  width: 9%;
+}
+
+.active-containers-table.proxy-mode .active-containers-col-port {
+  width: 7%;
+}
+
+.active-containers-table.proxy-mode .active-containers-col-mem {
+  width: 10%;
+}
+
+.active-containers-table.proxy-mode .active-containers-col-context {
+  width: 12%;
+}
+
+.active-containers-table.proxy-mode .active-containers-col-tokenizer {
+  width: 7%;
+}
+
+.active-containers-table.proxy-mode .active-containers-col-reasoning {
+  width: 7%;
+}
+
+.active-containers-table.proxy-mode .active-containers-col-actions {
+  width: 12%;
+}
+
 .active-containers-table th,
 .active-containers-table td {
   padding: 0.85rem 1rem;
@@ -444,10 +526,12 @@ body {
 }
 
 .active-container-model {
-  width: 30%;
   color: var(--text-primary) !important;
   font-weight: 500;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .active-container-actions {
