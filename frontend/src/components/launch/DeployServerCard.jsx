@@ -29,6 +29,14 @@ const FIELD_HELP = {
 };
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const MEMORY_UTIL_STEP = 0.05;
+const MIN_MEMORY_UTIL = 0.05;
+const MAX_MEMORY_UTIL = 1;
+
+const formatMemoryUtil = (value) => {
+  const rounded = Math.round(value * 100) / 100;
+  return rounded.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+};
 
 const FieldLabel = ({ children, help, htmlFor }) => {
   const [tooltip, setTooltip] = useState(null);
@@ -60,7 +68,6 @@ const FieldLabel = ({ children, help, htmlFor }) => {
         type="button"
         className="field-info"
         aria-label={`${children}: ${help}`}
-        title={help}
         onBlur={hideTooltip}
         onClick={showTooltip}
         onMouseEnter={showTooltip}
@@ -165,6 +172,30 @@ export const DeployServerCard = ({
     setServerApiKey(generateVLLMToken());
   };
 
+  const currentGpuCount = Number(startGpus) || 1;
+  const canDecreaseGpus = !noGpuDetected && currentGpuCount > 1;
+  const canIncreaseGpus = !noGpuDetected && currentGpuCount < maxGpus;
+  const setGpuCount = (value) => {
+    handleGpuCountChange({ target: { value: String(value) } });
+  };
+  const decreaseGpus = () => {
+    if (!canDecreaseGpus) return;
+    setGpuCount(currentGpuCount - 1);
+  };
+  const increaseGpus = () => {
+    if (!canIncreaseGpus) return;
+    setGpuCount(currentGpuCount + 1);
+  };
+
+  const currentMem = Number(startMem);
+  const normalizedMem = Number.isNaN(currentMem) ? 0.5 : currentMem;
+  const canDecreaseMem = normalizedMem > MIN_MEMORY_UTIL;
+  const canIncreaseMem = normalizedMem < MAX_MEMORY_UTIL;
+  const stepMemoryUtil = (direction) => {
+    const next = clamp(normalizedMem + (MEMORY_UTIL_STEP * direction), MIN_MEMORY_UTIL, MAX_MEMORY_UTIL);
+    setStartMem(formatMemoryUtil(next));
+  };
+
   const currentBlockSizeIndex = blockSizeOptions.findIndex((option) => String(option) === String(startBlockSize));
   const canDecreaseBlockSize = startBlockSize !== '' && currentBlockSizeIndex > 0;
   const canIncreaseBlockSize = startBlockSize === '' || currentBlockSizeIndex < blockSizeOptions.length - 1;
@@ -214,18 +245,26 @@ export const DeployServerCard = ({
           </div>
           <div className="form-group">
             <FieldLabel htmlFor="startGpus" help={FIELD_HELP.gpus}>GPUs</FieldLabel>
-            <input
-              id="startGpus"
-              type="number"
-              className="form-control"
-              value={startGpus}
-              onChange={handleGpuCountChange}
-              min="1"
-              max={noGpuDetected ? 1 : maxGpus}
-              step="1"
-              disabled={noGpuDetected}
-              required
-            />
+            <div className="inline-control gpu-count-control">
+              <button className="btn btn-outline btn-compact" type="button" onClick={decreaseGpus} disabled={!canDecreaseGpus}>
+                -
+              </button>
+              <input
+                id="startGpus"
+                type="number"
+                className="form-control"
+                value={startGpus}
+                onChange={handleGpuCountChange}
+                min="1"
+                max={noGpuDetected ? 1 : maxGpus}
+                step="1"
+                disabled={noGpuDetected}
+                required
+              />
+              <button className="btn btn-outline btn-compact" type="button" onClick={increaseGpus} disabled={!canIncreaseGpus}>
+                +
+              </button>
+            </div>
           </div>
         </div>
 
@@ -248,7 +287,24 @@ export const DeployServerCard = ({
           )}
           <div className="form-group">
             <FieldLabel htmlFor="startMem" help={FIELD_HELP.memory}>Memory Utilization</FieldLabel>
-            <input id="startMem" type="text" className="form-control" value={startMem} onChange={(event) => setStartMem(event.target.value)} required />
+            <div className="inline-control memory-util-control">
+              <button className="btn btn-outline btn-compact" type="button" onClick={() => stepMemoryUtil(-1)} disabled={!canDecreaseMem}>
+                -
+              </button>
+              <input
+                id="startMem"
+                type="number"
+                className="form-control"
+                value={startMem}
+                onChange={(event) => setStartMem(event.target.value)}
+                max={MAX_MEMORY_UTIL}
+                step="any"
+                required
+              />
+              <button className="btn btn-outline btn-compact" type="button" onClick={() => stepMemoryUtil(1)} disabled={!canIncreaseMem}>
+                +
+              </button>
+            </div>
           </div>
         </div>
 
@@ -257,11 +313,19 @@ export const DeployServerCard = ({
             <FieldLabel htmlFor="startMaxLen" help={FIELD_HELP.maxLen}>Max Context Length</FieldLabel>
             <div className="inline-control max-len-control">
               <button className="btn btn-outline btn-compact" type="button" onClick={() => scaleMaxLen(0.5)}>
-                /2
+                -
               </button>
-              <input id="startMaxLen" type="number" className="form-control" value={startMaxLen} onChange={(event) => setStartMaxLen(event.target.value)} min="1" />
+              <input
+                id="startMaxLen"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                className="form-control"
+                value={startMaxLen}
+                onChange={(event) => setStartMaxLen(event.target.value)}
+              />
               <button className="btn btn-outline btn-compact" type="button" onClick={() => scaleMaxLen(2)}>
-                x2
+                +
               </button>
             </div>
           </div>
@@ -270,7 +334,7 @@ export const DeployServerCard = ({
             <input
               id="startMaxNumSeqs"
               type="number"
-              className="form-control"
+              className="form-control no-native-spinner"
               value={startMaxNumSeqs}
               onChange={(event) => setStartMaxNumSeqs(event.target.value)}
               min="1"

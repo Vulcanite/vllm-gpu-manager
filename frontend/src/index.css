@@ -423,55 +423,15 @@ body {
 }
 
 .active-containers-table {
-  width: 100%;
-  min-width: 1320px;
-  table-layout: fixed;
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
   border-collapse: separate;
   border-spacing: 0;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   overflow: hidden;
   background: var(--bg-main);
-}
-
-.active-containers-table.direct-mode {
-  min-width: 1440px;
-}
-
-.active-containers-col-model {
-  width: 340px;
-}
-
-.active-containers-col-gpu {
-  width: 110px;
-}
-
-.active-containers-col-port {
-  width: 80px;
-}
-
-.active-containers-col-mem {
-  width: 130px;
-}
-
-.active-containers-col-context {
-  width: 170px;
-}
-
-.active-containers-col-tokenizer {
-  width: 140px;
-}
-
-.active-containers-col-reasoning {
-  width: 150px;
-}
-
-.active-containers-col-api-key {
-  width: 120px;
-}
-
-.active-containers-col-actions {
-  width: 200px;
 }
 
 .active-containers-table th,
@@ -495,6 +455,7 @@ body {
 .active-containers-table td {
   color: var(--text-secondary);
   font-size: 0.86rem;
+  white-space: nowrap;
 }
 
 .active-containers-table tr:last-child td {
@@ -504,6 +465,7 @@ body {
 .active-container-model {
   color: var(--text-primary) !important;
   font-weight: 500;
+  max-width: 420px;
   overflow: hidden;
   overflow-wrap: normal;
   text-overflow: ellipsis;
@@ -513,14 +475,14 @@ body {
 .active-container-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 0.5rem;
   white-space: nowrap;
 }
 
 .active-containers-table th:last-child,
 .active-containers-table td:last-child {
-  text-align: right;
+  text-align: left;
 }
 
 .active-containers-table th:first-child,
@@ -1236,18 +1198,39 @@ body {
   flex: 1;
 }
 
-.max-len-control .btn {
-  flex-shrink: 0;
-  min-width: 3rem;
-}
-
+.max-len-control .btn,
+.gpu-count-control .btn,
+.memory-util-control .btn,
 .block-size-control .btn {
   flex-shrink: 0;
   width: 2.5rem;
 }
 
+.max-len-control .form-control,
+.gpu-count-control .form-control,
+.memory-util-control .form-control,
 .block-size-control .form-control {
   text-align: center;
+}
+
+.max-len-control input[type='number'],
+.gpu-count-control input[type='number'],
+.memory-util-control input[type='number'],
+.no-native-spinner[type='number'] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.max-len-control input[type='number']::-webkit-outer-spin-button,
+.max-len-control input[type='number']::-webkit-inner-spin-button,
+.gpu-count-control input[type='number']::-webkit-outer-spin-button,
+.gpu-count-control input[type='number']::-webkit-inner-spin-button,
+.memory-util-control input[type='number']::-webkit-outer-spin-button,
+.memory-util-control input[type='number']::-webkit-inner-spin-button,
+.no-native-spinner[type='number']::-webkit-outer-spin-button,
+.no-native-spinner[type='number']::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
 }
 
 .code-textarea {

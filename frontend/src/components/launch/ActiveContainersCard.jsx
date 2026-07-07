@@ -35,17 +35,6 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, onDeployServ
       {removeError && <div className="alert alert-danger">{removeError}</div>}
       <div className="active-containers-table-wrap">
         <table className={`active-containers-table ${proxyEnabled ? 'proxy-mode' : 'direct-mode'}`}>
-          <colgroup>
-            <col className="active-containers-col-model" />
-            <col className="active-containers-col-gpu" />
-            <col className="active-containers-col-port" />
-            <col className="active-containers-col-mem" />
-            <col className="active-containers-col-context" />
-            <col className="active-containers-col-tokenizer" />
-            <col className="active-containers-col-reasoning" />
-            {!proxyEnabled && <col className="active-containers-col-api-key" />}
-            <col className="active-containers-col-actions" />
-          </colgroup>
           <thead>
             <tr>
               <th scope="col">Model Name</th>

@@ -24,7 +24,7 @@ const DEFAULT_LAUNCH_CONFIG = {
   kv_cache_dtype_options: ['auto', 'fp8', 'fp8_e5m2', 'fp8_e4m3'],
   tokenizer_mode_options: ['auto', 'hf', 'slow', 'mistral', 'deepseek_v32', 'deepseek_v4'],
   reasoning_parser_options: ['deepseek_r1', 'deepseek_v4', 'ernie_x1', 'glm45', 'granite', 'hunyuan_a13b', 'mistral', 'openai_gptoss', 'qwen3'],
-  block_size_options: [16, 32, 64, 128],
+  block_size_options: [16, 32, 64, 128, 256, 512],
   moe_backend_options: ['auto', 'cutlass', 'deepep_high_throughput', 'deepep_low_latency', 'flashinfer', 'flashinfer_all2allv', 'naive', 'pplx', 'triton'],
 };
 
