@@ -327,7 +327,7 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			recorder.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
 		recorder.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
-		recorder.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding")
+		recorder.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-Requested-With")
 		if r.Method == "OPTIONS" {
 			recorder.WriteHeader(http.StatusOK)
 			return

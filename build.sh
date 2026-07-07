@@ -4,7 +4,7 @@ set -e
 echo "Building React Frontend..."
 cd frontend
 rm -rf dist
-npm install
+npm ci
 npm run build
 cd ..
 

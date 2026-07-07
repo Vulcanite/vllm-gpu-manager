@@ -92,24 +92,35 @@ func TestParseDashboardFlagsProxyDefaults(t *testing.T) {
 		name      string
 		args      []string
 		wantPort  string
+		wantHost  string
 		wantProxy bool
 	}{
 		{
 			name:      "proxy enabled by default",
 			args:      []string{"--dashboard"},
 			wantPort:  defaultDashboardPort,
+			wantHost:  "127.0.0.1",
 			wantProxy: true,
 		},
 		{
 			name:      "custom port keeps proxy enabled",
 			args:      []string{"--dashboard", "--port", "9443"},
 			wantPort:  "9443",
+			wantHost:  "127.0.0.1",
+			wantProxy: true,
+		},
+		{
+			name:      "custom host overrides loopback default",
+			args:      []string{"--dashboard", "--host", "0.0.0.0"},
+			wantPort:  defaultDashboardPort,
+			wantHost:  "0.0.0.0",
 			wantProxy: true,
 		},
 		{
 			name:      "no proxy disables gateway",
 			args:      []string{"--dashboard", "--no-proxy"},
 			wantPort:  defaultDashboardPort,
+			wantHost:  "127.0.0.1",
 			wantProxy: false,
 		},
 	}
@@ -122,6 +133,9 @@ func TestParseDashboardFlagsProxyDefaults(t *testing.T) {
 			}
 			if values.value != tt.wantPort {
 				t.Fatalf("port=%q, want %q", values.value, tt.wantPort)
+			}
+			if values.host != tt.wantHost {
+				t.Fatalf("host=%q, want %q", values.host, tt.wantHost)
 			}
 			if proxyEnabled != tt.wantProxy {
 				t.Fatalf("proxyEnabled=%v, want %v", proxyEnabled, tt.wantProxy)

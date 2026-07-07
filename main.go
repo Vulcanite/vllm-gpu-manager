@@ -83,7 +83,7 @@ func parseDashboardFlags(args []string, errOut io.Writer) (dashboardFlagValues, 
 	fs.SetOutput(errOut)
 	fs.Bool("dashboard", false, "Run the web dashboard")
 	port := fs.String("port", defaultDashboardPort, "Port to run the dashboard on")
-	host := fs.String("host", "0.0.0.0", "Host IP address to bind the dashboard on")
+	host := fs.String("host", "127.0.0.1", "Host IP address to bind the dashboard on")
 	noProxy := fs.Bool("no-proxy", false, "disable the OpenAI-compatible proxy gateway on /v1/")
 	monitoring := fs.Bool("monitoring", false, "sync running vLLM servers into the Prometheus file-SD targets file")
 	monitoringTargetsFile := fs.String("monitoring-targets-file", defaultMonitoringTargetsFile, "Prometheus file-SD targets file for vLLM metrics")

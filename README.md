@@ -74,7 +74,7 @@ Build machine:
 
 ```bash
 cd frontend
-npm install
+npm ci
 cd ..
 
 ./build.sh
@@ -131,10 +131,10 @@ Destructive CLI commands prompt by default. Use `--yes` for non-interactive auto
 ./vllm-manager --dashboard --port 9090
 ```
 
-Bind the dashboard to a specific local interface with `--host`:
+By default, the dashboard binds to `127.0.0.1`. Bind the dashboard to a specific interface with `--host`:
 
 ```bash
-./vllm-manager --dashboard --host 127.0.0.1 --port 9090
+./vllm-manager --dashboard --host 0.0.0.0 --port 9090
 ```
 
 Set `VLLM_MANAGER_PASSWORD` to require browser login before the dashboard can call `/api` endpoints:
