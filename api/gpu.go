@@ -73,24 +73,12 @@ func queryNvidiaSMI(ctx context.Context) ([]GPUInfo, error) {
 
 func queryNvidiaSMIProcesses(ctx context.Context) map[string][]GPUProcess {
 	procsByUUID := make(map[string][]GPUProcess)
-	// Some driver versions reject the bare "compute-apps" query when no
-	// processes are running. `--query-compute-apps=...` is the documented
-	// modern form; fall back to it if the simple form returns nothing
-	// parseable.
-	queries := []string{
-		"--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
+	out, err := exec.CommandContext(ctx, "nvidia-smi", "--query-compute-apps=gpu_uuid,pid,process_name,used_memory", "--format=csv,noheader,nounits").Output()
+	if err != nil {
+		return procsByUUID
 	}
-	for _, q := range queries {
-		out, err := exec.CommandContext(ctx, "nvidia-smi", q, "--format=csv,noheader,nounits").Output()
-		if err != nil {
-			return procsByUUID
-		}
-		if parsed := parseNvidiaSMIProcessCSV(out); len(parsed) > 0 || len(out) == 0 {
-			for uuid, list := range parsed {
-				procsByUUID[uuid] = list
-			}
-			return procsByUUID
-		}
+	for uuid, list := range parseNvidiaSMIProcessCSV(out) {
+		procsByUUID[uuid] = list
 	}
 	return procsByUUID
 }

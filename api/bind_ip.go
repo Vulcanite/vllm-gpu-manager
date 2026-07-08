@@ -53,35 +53,15 @@ func ValidateLocalBindIP(value string) (netip.Addr, error) {
 }
 
 func addrPrefixFromNetAddr(value net.Addr) (netip.Prefix, bool) {
-	switch typed := value.(type) {
-	case *net.IPNet:
-		prefix, ok := netip.AddrFromSlice(typed.IP)
-		if !ok {
-			return netip.Prefix{}, false
-		}
-		ones, bits := typed.Mask.Size()
-		if bits == 0 {
-			bits = prefix.BitLen()
-			ones = bits
-		}
-		return netip.PrefixFrom(prefix, ones), true
-	case *net.IPAddr:
-		addr, ok := netip.AddrFromSlice(typed.IP)
-		if !ok {
-			return netip.Prefix{}, false
-		}
-		return netip.PrefixFrom(addr, addr.BitLen()), true
-	default:
-		prefix, err := netip.ParsePrefix(value.String())
-		if err == nil {
-			return prefix, true
-		}
-		addr, err := netip.ParseAddr(value.String())
-		if err != nil {
-			return netip.Prefix{}, false
-		}
-		return netip.PrefixFrom(addr, addr.BitLen()), true
+	text := strings.TrimSpace(value.String())
+	if prefix, err := netip.ParsePrefix(text); err == nil {
+		return prefix, true
 	}
+	addr, err := netip.ParseAddr(text)
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	return netip.PrefixFrom(addr, addr.BitLen()), true
 }
 
 func HostPort(host string, port int) string {

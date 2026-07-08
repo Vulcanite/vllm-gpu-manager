@@ -32,25 +32,14 @@ func GetModelDirectorySize(model, hfCache string) (uint64, error) {
 		return 0, fmt.Errorf("HF cache path not configured")
 	}
 
-	modelPath := filepath.Join(hubPath, modelCacheDirName(model))
-
-	var totalSize int64
-	err := filepath.Walk(modelPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return err
-		}
-		if !info.IsDir() {
-			totalSize += info.Size()
-		}
-		return nil
-	})
+	size, err := calculateDirectorySize(filepath.Join(hubPath, modelCacheDirName(model)))
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
 	if err != nil {
 		return 0, err
 	}
-	return uint64(totalSize), nil
+	return size, nil
 }
 
 func calculateDirectorySize(path string) (uint64, error) {
@@ -319,18 +308,6 @@ func GetDownloadedModels(hfCache string) ([]DownloadedModel, error) {
 	return models, nil
 }
 
-// hubModelDirName converts a user-visible model identifier
-// ("Qwen/Qwen2.5-7B-Instruct") into the directory name used by the
-// Hugging Face hub cache ("models--Qwen--Qwen2.5-7B-Instruct"). It is the
-// inverse of the conversion done in GetDownloadedModels.
-func hubModelDirName(model string) string {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return ""
-	}
-	return "models--" + strings.ReplaceAll(model, "/", "--")
-}
-
 // IsModelDownloaded reports whether a model identifier is already present in
 // the configured Hugging Face cache. It returns (true, on-disk size in bytes,
 // nil) on a hit, (false, 0, nil) on a miss, and an error only if the cache
@@ -346,7 +323,7 @@ func IsModelDownloaded(model string, hfCache string) (bool, uint64, error) {
 		// the empty string. That's a misconfiguration, not a normal miss.
 		return false, 0, fmt.Errorf("hugging face cache directory is required")
 	}
-	dirName := hubModelDirName(model)
+	dirName := modelCacheDirName(model)
 	if dirName == "" || dirName == "models--" {
 		return false, 0, nil
 	}

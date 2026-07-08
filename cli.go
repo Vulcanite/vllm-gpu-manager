@@ -723,11 +723,7 @@ func confirmDestructive(yes bool, prompt string) error {
 }
 
 func isTerminal(file *os.File) bool {
-	info, err := file.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(file.Fd()))
 }
 
 func printMutationResult(opts cliOptions, fields map[string]interface{}) error {
