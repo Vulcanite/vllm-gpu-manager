@@ -49,6 +49,8 @@ export const fetchOverview = async () => {
 
 export const startModel = (payload) => axios.post(`${API_BASE}/models/start`, payload);
 
+export const importModelCommand = (command) => axios.post(`${API_BASE}/models/import-command`, { command });
+
 export const stopModel = (port) => axios.post(`${API_BASE}/models/stop`, { port });
 
 export const restartModel = (containerId) => {

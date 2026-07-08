@@ -18,6 +18,7 @@ const FIELD_HELP = {
   disableFlashInferAutotune: 'Pass --no-enable-flashinfer-autotune to skip FlashInfer autotuning during startup.',
   trustRemoteCode: 'Allow model repositories to execute custom Python code inside the vLLM container.',
   speculativeConfig: 'JSON object passed directly to vLLM --speculative-config for speculative decoding.',
+  extraVLLMArgs: 'Validated vLLM flags imported from a command that do not have dedicated fields yet.',
   tokenizerMode: 'Tokenizer implementation mode passed to vLLM.',
   reasoningParser: 'Parser used by vLLM to extract reasoning content from supported model outputs.',
   toolParser: 'Parser used by vLLM to convert model tool-call text into structured tool calls.',
@@ -101,6 +102,7 @@ export const DeployServerCard = ({
   launchError,
   launching,
   maxGpus,
+  modelLocked = false,
   noGpuDetected,
   proxyEnabled = false,
   scaleMaxLen,
@@ -135,6 +137,7 @@ export const DeployServerCard = ({
   startModelName,
   startEnableExpertParallel,
   startDisableFlashInferAutotune,
+  startExtraVLLMArgs,
   startMoeBackend,
   startParser,
   startPort,
@@ -142,6 +145,7 @@ export const DeployServerCard = ({
   startSpeculativeConfig,
   startTokenizerMode,
   startTrustRemoteCode,
+  submitLabel = 'Deploy Server',
   useServerApiKey,
   useCustomServerApiKey,
   blockSizeOptions,
@@ -173,6 +177,7 @@ export const DeployServerCard = ({
   };
 
   const currentGpuCount = Number(startGpus) || 1;
+  const selectedModelIsMissing = startModelName && !downloadedModels.some((model) => model.name === startModelName);
   const canDecreaseGpus = !noGpuDetected && currentGpuCount > 1;
   const canIncreaseGpus = !noGpuDetected && currentGpuCount < maxGpus;
   const setGpuCount = (value) => {
@@ -226,10 +231,15 @@ export const DeployServerCard = ({
       <form onSubmit={handleStart}>
         <div className="form-group">
           <FieldLabel htmlFor="startModelName" help={FIELD_HELP.model}>Downloaded Model</FieldLabel>
-          <select id="startModelName" className="form-control" value={startModelName} onChange={(event) => setStartModelName(event.target.value)} required>
+          <select id="startModelName" className="form-control" value={startModelName} onChange={(event) => setStartModelName(event.target.value)} disabled={modelLocked || launching} required>
             <option value="" disabled>
               Select a model
             </option>
+            {selectedModelIsMissing && (
+              <option value={startModelName}>
+                {startModelName}
+              </option>
+            )}
             {downloadedModels.map((model) => (
               <option key={model.name} value={model.name}>
                 {model.name} ({model.size})
@@ -448,6 +458,20 @@ export const DeployServerCard = ({
               />
             </div>
 
+            {Array.isArray(startExtraVLLMArgs) && startExtraVLLMArgs.length > 0 && (
+              <div className="form-group">
+                <FieldLabel htmlFor="startExtraVLLMArgs" help={FIELD_HELP.extraVLLMArgs}>Extra vLLM Args</FieldLabel>
+                <textarea
+                  id="startExtraVLLMArgs"
+                  className="form-control code-textarea"
+                  value={startExtraVLLMArgs.join('\n')}
+                  readOnly
+                  rows={Math.min(6, Math.max(2, startExtraVLLMArgs.length))}
+                  spellCheck="false"
+                />
+              </div>
+            )}
+
             <div className="form-grid">
               <div className="form-group">
                 <FieldLabel htmlFor="startTokenizerMode" help={FIELD_HELP.tokenizerMode}>Tokenizer Mode</FieldLabel>
@@ -614,7 +638,7 @@ export const DeployServerCard = ({
         )}
 
         <button type="submit" className="btn btn-primary mt-2 full-width" disabled={launching || noGpuDetected}>
-          {launching ? 'Deploying...' : 'Deploy Server'}
+          {launching ? (submitLabel === 'Update Server' ? 'Updating...' : 'Deploying...') : submitLabel}
         </button>
       </form>
     </div>

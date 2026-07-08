@@ -11,6 +11,7 @@ export const ConfirmModal = ({
   loading = false,
   onCancel,
   onConfirm,
+  titleAction = null,
 }) => {
   const overlayRef = useRef(null);
   const contentRef = useRef(null);
@@ -73,7 +74,10 @@ export const ConfirmModal = ({
   return (
     <div className="modal-overlay" ref={overlayRef} onClick={handleOverlayClick} role="dialog" aria-modal="true" aria-labelledby="modal-title">
       <div className={`modal-content ${contentClassName}`.trim()} ref={contentRef}>
-        <h3 id="modal-title">{title}</h3>
+        <div className="modal-header">
+          <h3 id="modal-title">{title}</h3>
+          {titleAction}
+        </div>
         <div className="modal-body">{children}</div>
         {!hideActions && (
           <div className="modal-actions">

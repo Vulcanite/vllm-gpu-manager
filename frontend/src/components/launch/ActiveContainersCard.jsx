@@ -1,4 +1,4 @@
-import { Play, RefreshCw, Server, Trash2 } from 'lucide-react';
+import { Pencil, Play, RefreshCw, Server, Trash2 } from 'lucide-react';
 
 const formatGPUIds = (model) => {
   const gpuIds = String(model.gpu_ids || '').trim();
@@ -18,7 +18,7 @@ const formatAPIKeyMode = (model) => {
   return 'None';
 };
 
-export const ActiveContainersCard = ({ activeModels, handleRestart, onDeployServer, removing, removeError, requestRemove, restartingId, restartError, proxyEnabled = false }) => {
+export const ActiveContainersCard = ({ activeModels, handleRestart, onDeployServer, onEditModel, removing, removeError, requestRemove, restartingId, restartError, proxyEnabled = false }) => {
   const columnCount = proxyEnabled ? 8 : 9;
 
   return (
@@ -65,6 +65,11 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, onDeployServ
                   {!proxyEnabled && <td>{formatAPIKeyMode(model)}</td>}
                   <td>
                     <div className="active-container-actions">
+                      {!active && (
+                        <button className="btn btn-outline" type="button" onClick={() => onEditModel(model)}>
+                          <Pencil size={14} /> Edit
+                        </button>
+                      )}
                       <button className={`btn ${actionLabel === 'Start' ? 'btn-success' : 'btn-outline'}`} type="button" onClick={() => handleRestart(model.container_id)} disabled={isRestarting}>
                         {actionLabel === 'Restart' ? <RefreshCw size={14} /> : <Play size={14} />}
                         {isRestarting ? 'Restarting...' : actionLabel}
