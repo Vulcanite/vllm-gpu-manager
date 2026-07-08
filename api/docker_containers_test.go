@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -140,6 +141,149 @@ func TestBuildActiveModelParsesFlashInferAutotuneFlag(t *testing.T) {
 	}
 	if !model.DisableFlashInferAutotune {
 		t.Fatal("DisableFlashInferAutotune=false, want true")
+	}
+}
+
+func TestBuildActiveModelParsesAdvancedEditFields(t *testing.T) {
+	model, ok := buildActiveModel(managedVLLMContainer{
+		id:     "container-id",
+		name:   "vllm-test-8080",
+		state:  "exited",
+		labels: map[string]string{managedContainerLabel: "true", containerKindLabel: containerKindServer},
+		metadata: container.InspectResponse{
+			Config: &container.Config{
+				Cmd: []string{
+					"--model", "test/model",
+					"--port", "8080",
+					"--moe-backend", "flashinfer",
+					"--enable-expert-parallel",
+					"--speculative-config", `{"method":"dspark"}`,
+					"--served-model-name", "alias",
+					"--enable-chunked-prefill",
+				},
+			},
+		},
+	})
+	if !ok {
+		t.Fatal("buildActiveModel rejected managed server container")
+	}
+	if model.MoeBackend != "flashinfer" {
+		t.Fatalf("MoeBackend=%q, want flashinfer", model.MoeBackend)
+	}
+	if !model.ExpertParallel {
+		t.Fatal("ExpertParallel=false, want true")
+	}
+	if model.SpeculativeConfig != `{"method":"dspark"}` {
+		t.Fatalf("SpeculativeConfig=%q", model.SpeculativeConfig)
+	}
+	wantExtra := []string{"--served-model-name", "alias", "--enable-chunked-prefill"}
+	if !reflect.DeepEqual(model.ExtraVLLMArgs, wantExtra) {
+		t.Fatalf("ExtraVLLMArgs=%v, want %v", model.ExtraVLLMArgs, wantExtra)
+	}
+}
+
+func TestBuildActiveModelUsesLaunchSpecLabelsForEditMetadata(t *testing.T) {
+	spec := LaunchSpec{
+		Model:                     "label/model",
+		Port:                      9090,
+		GPUs:                      2,
+		GPUIDs:                    "0,1",
+		MemUtil:                   "0.85",
+		MaxLen:                    "32768",
+		MaxNumSeqs:                "8",
+		KVCacheDType:              "fp8",
+		ToolParser:                "deepseek_v4",
+		TokenizerMode:             "deepseek_v4",
+		ReasoningParser:           "deepseek_v4",
+		TrustRemoteCode:           true,
+		BlockSize:                 "256",
+		MoeBackend:                "flashinfer",
+		ExpertParallel:            true,
+		DisableFlashInferAutotune: true,
+		SpeculativeConfig:         `{"method":"dspark"}`,
+		BindIP:                    "127.0.0.1",
+		ExtraVLLMArgs:             []string{"--served-model-name", "alias"},
+	}
+	specBytes, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatalf("marshal launch spec: %v", err)
+	}
+
+	model, ok := buildActiveModel(managedVLLMContainer{
+		id:    "container-id",
+		name:  "vllm-test-9090",
+		state: "exited",
+		labels: map[string]string{
+			managedContainerLabel:           "true",
+			containerKindLabel:              containerKindServer,
+			containerExposureLabel:          ContainerExposureProxy,
+			containerLaunchSpecVersionLabel: LaunchSpecVersion,
+			containerLaunchSpecLabel:        string(specBytes),
+		},
+		metadata: container.InspectResponse{
+			Config: &container.Config{
+				Cmd: []string{
+					"--model", "arg/model",
+					"--port", "8080",
+					"--tensor-parallel-size", "1",
+					"--served-model-name", "from-args",
+				},
+			},
+		},
+	})
+	if !ok {
+		t.Fatal("buildActiveModel rejected managed server container")
+	}
+	if model.LaunchSpec == nil {
+		t.Fatal("LaunchSpec=nil, want parsed launch spec")
+	}
+	if model.Exposure != ContainerExposureProxy {
+		t.Fatalf("Exposure=%q, want proxy", model.Exposure)
+	}
+	if model.Model != spec.Model || model.Port != "9090" || model.GPUs != "2" {
+		t.Fatalf("model fields=%q/%q/%q, want launch spec values", model.Model, model.Port, model.GPUs)
+	}
+	if !reflect.DeepEqual(model.LaunchSpec.ExtraVLLMArgs, spec.ExtraVLLMArgs) {
+		t.Fatalf("LaunchSpec.ExtraVLLMArgs=%v, want %v", model.LaunchSpec.ExtraVLLMArgs, spec.ExtraVLLMArgs)
+	}
+	if !reflect.DeepEqual(model.ExtraVLLMArgs, spec.ExtraVLLMArgs) {
+		t.Fatalf("ExtraVLLMArgs=%v, want launch spec extras only", model.ExtraVLLMArgs)
+	}
+}
+
+func TestServerContainerLabelsIncludeExposureAndLaunchSpec(t *testing.T) {
+	spec := LaunchSpec{
+		Model:         "test/model",
+		Port:          8082,
+		GPUs:          2,
+		GPUIDs:        "0,1",
+		MemUtil:       "0.9",
+		MaxLen:        "32768",
+		KVCacheDType:  "auto",
+		TokenizerMode: "auto",
+		MoeBackend:    "auto",
+		BindIP:        "127.0.0.1",
+		ExtraVLLMArgs: []string{"--served-model-name", "alias"},
+	}
+	labels, err := serverContainerLabels(spec.Model, ContainerExposureProxy, spec)
+	if err != nil {
+		t.Fatalf("serverContainerLabels returned error: %v", err)
+	}
+	if labels[containerExposureLabel] != ContainerExposureProxy {
+		t.Fatalf("exposure label=%q, want proxy", labels[containerExposureLabel])
+	}
+	if labels[containerLaunchSpecVersionLabel] != LaunchSpecVersion {
+		t.Fatalf("launch spec version=%q, want %q", labels[containerLaunchSpecVersionLabel], LaunchSpecVersion)
+	}
+	var got LaunchSpec
+	if err := json.Unmarshal([]byte(labels[containerLaunchSpecLabel]), &got); err != nil {
+		t.Fatalf("launch spec label is not valid JSON: %v", err)
+	}
+	if !reflect.DeepEqual(got, spec) {
+		t.Fatalf("launch spec=%+v, want %+v", got, spec)
+	}
+	if strings.Contains(labels[containerLaunchSpecLabel], "api_key") || strings.Contains(labels[containerLaunchSpecLabel], "secret") {
+		t.Fatalf("launch spec label appears to contain secret material: %s", labels[containerLaunchSpecLabel])
 	}
 }
 
@@ -459,7 +603,7 @@ func TestNormalizeSpeculativeConfig(t *testing.T) {
 }
 
 func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", "per-server-key")
+	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", ContainerExposureDirect, "per-server-key", nil)
 	if err == nil {
 		t.Fatal("StartModel accepted both global and per-server key; want validation error")
 	}
@@ -472,7 +616,7 @@ func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
 }
 
 func TestStartModelRejectsWhitespaceInPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "", false, false, "0.0.0.0", "key with space")
+	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "", false, false, "0.0.0.0", ContainerExposureDirect, "key with space", nil)
 	if err == nil {
 		t.Fatal("StartModel accepted whitespace in per-server key; want validation error")
 	}

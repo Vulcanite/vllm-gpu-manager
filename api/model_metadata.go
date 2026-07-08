@@ -78,7 +78,7 @@ func CheckDownloadPreflight(model string, hfCache string, hfToken string) (strin
 	if isGGUFModelInfo(info) {
 		return "", validationError("GGUF models are not supported by vllm-manager downloads; vLLM GGUF support is experimental and requires a separate plugin")
 	}
-	free, err := freeBytesForPath(NormalizeHFHome(hfCache))
+	free, err := FreeBytesForPath(NormalizeHFHome(hfCache))
 	if err != nil {
 		return "", fmt.Errorf("failed to check free space for Hugging Face cache: %v", err)
 	}
@@ -95,7 +95,7 @@ func CheckDownloadPreflight(model string, hfCache string, hfToken string) (strin
 	return "", nil
 }
 
-func freeBytesForPath(path string) (uint64, error) {
+func FreeBytesForPath(path string) (uint64, error) {
 	if strings.TrimSpace(path) == "" {
 		return 0, validationError("path is required")
 	}

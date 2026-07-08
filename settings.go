@@ -223,14 +223,6 @@ func getSettings() Settings {
 	return cloneSettings(settingsCache)
 }
 
-// readSettingsSnapshot returns a copy of the current settings without going
-// through the load-once promotion. Used by the dashboard heartbeat refresher
-// when the file is the source of truth and we want to avoid touching the
-// process state.
-func readSettingsSnapshot() Settings {
-	return getSettings()
-}
-
 func saveSettings(s Settings) error {
 	settingsCacheMu.Lock()
 	defer settingsCacheMu.Unlock()
@@ -246,9 +238,6 @@ func saveSettingsLocked(s Settings) error {
 		return err
 	}
 	if err := os.WriteFile(settingsFile, data, 0600); err != nil {
-		return err
-	}
-	if err := os.Chmod(settingsFile, 0600); err != nil {
 		return err
 	}
 	settingsCache = s
@@ -306,12 +295,6 @@ func getSettingsStatus() SettingsStatus {
 		ServerAPIKeyNames:        sortedServerAPIKeyNames(s.ServerAPIKeys),
 		ProxyUserCount:           len(s.ProxyUsers),
 	}
-}
-
-func getSettingsStatusWithProxy(proxyEnabled bool) SettingsStatus {
-	status := getSettingsStatus()
-	status.ProxyEnabled = proxyEnabled
-	return status
 }
 
 func updateSettings(req SettingsUpdate) (Settings, error) {
@@ -745,16 +728,12 @@ func cleanupModelStateForContainerID(containerID string) {
 	cleanupModelStateForActiveModel(model)
 }
 
-func validRoutingPort(port int) bool {
-	return port >= 1 && port <= 65535
-}
-
 func parseActiveModelPort(model api.ActiveModel) (int, bool) {
 	if model.State != "running" || model.Port == "unknown" {
 		return 0, false
 	}
 	port, err := strconv.Atoi(model.Port)
-	if err != nil || !validRoutingPort(port) {
+	if err != nil || port < 1 || port > 65535 {
 		return 0, false
 	}
 	return port, true
@@ -816,12 +795,21 @@ func replaceRoutingTable(table map[string]int) error {
 // reconcileRoutingTable queries Docker for running vLLM containers and rebuilds
 // the routing table from that live set. This picks up already-running models
 // after a restart and prunes stale entries for stopped or removed containers.
-func reconcileRoutingTable() {
+func reconcileRoutingTable(exposure string) {
 	settings := getSettings()
 	models, err := api.GetActiveModels(settings.VLLMAPIKey)
 	if err != nil {
 		log.Printf("[SETTINGS] failed to reconcile routing table: %v", err)
 		return
+	}
+	if strings.TrimSpace(exposure) != "" {
+		filtered := make([]api.ActiveModel, 0, len(models))
+		for _, model := range models {
+			if model.Exposure == exposure && model.LaunchSpec != nil {
+				filtered = append(filtered, model)
+			}
+		}
+		models = filtered
 	}
 	if err := replaceRoutingTable(buildRoutingTableFromActiveModels(models)); err != nil {
 		log.Printf("[SETTINGS] failed to persist reconciled routing table: %v", err)
@@ -845,9 +833,6 @@ func writeHeartbeat(pid int, seen time.Time) error {
 		return err
 	}
 	if err := os.WriteFile(settingsFile, data, 0600); err != nil {
-		return err
-	}
-	if err := os.Chmod(settingsFile, 0600); err != nil {
 		return err
 	}
 	return nil

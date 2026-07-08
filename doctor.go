@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"vllm-manager/api"
@@ -124,7 +123,7 @@ func runDoctor() doctorReport {
 		} else {
 			add("HF cache writable", doctorPass, "cache directory is writable", true)
 		}
-		if free, err := freeBytes(settings.HFCache); err != nil {
+		if free, err := api.FreeBytesForPath(settings.HFCache); err != nil {
 			add("HF cache free space", doctorWarn, err.Error(), false)
 		} else {
 			add("HF cache free space", doctorPass, api.FormatBytes(free)+" available", false)
@@ -176,14 +175,6 @@ func checkWritable(dir string) error {
 	name := f.Name()
 	_ = f.Close()
 	return os.Remove(name)
-}
-
-func freeBytes(path string) (uint64, error) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
-		return 0, err
-	}
-	return stat.Bavail * uint64(stat.Bsize), nil
 }
 
 func checkSettingsPermissions(checks *[]doctorCheck) {

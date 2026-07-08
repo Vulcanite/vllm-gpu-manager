@@ -243,7 +243,7 @@ func DeleteDownloadedModel(model string, hfCache string) error {
 			return fmt.Errorf("failed to ensure alpine image: %v", err)
 		}
 
-		containerName := fmt.Sprintf("vllm-cache-delete-%s-%d", sanitizeDockerNamePart(modelDirName), time.Now().Unix())
+		containerName := fmt.Sprintf("vllm-cache-delete-%s-%d", SanitizeDockerNamePart(modelDirName), time.Now().Unix())
 		logDockerAPI("container create", containerName, "image=alpine", "bind="+fmt.Sprintf("%s:/target", hubPath))
 		created, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
 			Name: containerName,
@@ -418,7 +418,7 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 	if idx := strings.LastIndex(model, "/"); idx != -1 {
 		shortName = model[idx+1:]
 	}
-	containerName := fmt.Sprintf("vllm-download-%s-%d", sanitizeDockerNamePart(shortName), time.Now().Unix())
+	containerName := fmt.Sprintf("vllm-download-%s-%d", SanitizeDockerNamePart(shortName), time.Now().Unix())
 
 	labels := map[string]string{
 		"app":                 "vllm-manager",

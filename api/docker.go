@@ -10,34 +10,63 @@ import (
 )
 
 type ActiveModel struct {
-	ContainerID               string `json:"container_id"`
-	ContainerName             string `json:"container_name"`
-	Model                     string `json:"model"`
-	Port                      string `json:"port"`
-	GPUs                      string `json:"gpus"`
-	GPUIDs                    string `json:"gpu_ids"`
-	MemUtil                   string `json:"mem_util"`
-	MaxLen                    string `json:"max_len"`
-	MaxNumSeqs                string `json:"max_num_seqs"`
-	KVCacheDType              string `json:"kv_cache_dtype"`
-	ToolParser                string `json:"tool_parser"`
-	TokenizerMode             string `json:"tokenizer_mode"`
-	ReasoningParser           string `json:"reasoning_parser"`
-	TrustRemoteCode           bool   `json:"trust_remote_code"`
-	DisableFlashInferAutotune bool   `json:"disable_flashinfer_autotune"`
-	BlockSize                 string `json:"block_size"`
-	BindIP                    string `json:"bind_ip"`
-	MetricsTarget             string `json:"metrics_target"`
-	APIUrl                    string `json:"api_url"`
-	IsReady                   bool   `json:"is_ready"`
-	Arch                      string `json:"arch"`
-	State                     string `json:"state"`
-	APIKey                    string `json:"-"`
+	ContainerID               string      `json:"container_id"`
+	ContainerName             string      `json:"container_name"`
+	Model                     string      `json:"model"`
+	Port                      string      `json:"port"`
+	GPUs                      string      `json:"gpus"`
+	GPUIDs                    string      `json:"gpu_ids"`
+	MemUtil                   string      `json:"mem_util"`
+	MaxLen                    string      `json:"max_len"`
+	MaxNumSeqs                string      `json:"max_num_seqs"`
+	KVCacheDType              string      `json:"kv_cache_dtype"`
+	ToolParser                string      `json:"tool_parser"`
+	TokenizerMode             string      `json:"tokenizer_mode"`
+	ReasoningParser           string      `json:"reasoning_parser"`
+	TrustRemoteCode           bool        `json:"trust_remote_code"`
+	DisableFlashInferAutotune bool        `json:"disable_flashinfer_autotune"`
+	BlockSize                 string      `json:"block_size"`
+	MoeBackend                string      `json:"moe_backend"`
+	ExpertParallel            bool        `json:"enable_expert_parallel"`
+	SpeculativeConfig         string      `json:"speculative_config"`
+	ExtraVLLMArgs             []string    `json:"extra_vllm_args"`
+	BindIP                    string      `json:"bind_ip"`
+	MetricsTarget             string      `json:"metrics_target"`
+	APIUrl                    string      `json:"api_url"`
+	Exposure                  string      `json:"exposure,omitempty"`
+	LaunchSpecVersion         string      `json:"launch_spec_version,omitempty"`
+	LaunchSpec                *LaunchSpec `json:"launch_spec,omitempty"`
+	IsReady                   bool        `json:"is_ready"`
+	Arch                      string      `json:"arch"`
+	State                     string      `json:"state"`
+	APIKey                    string      `json:"-"`
 	// HasServerAPIKey is populated by the dashboard handler so the UI can
 	// distinguish a per-server key from the global one without exposing the
 	// secret value.
 	HasServerAPIKey bool   `json:"has_server_api_key,omitempty"`
 	APIKeyMode      string `json:"api_key_mode,omitempty"`
+}
+
+type LaunchSpec struct {
+	Model                     string   `json:"model"`
+	Port                      int      `json:"port"`
+	GPUs                      int      `json:"gpus"`
+	GPUIDs                    string   `json:"gpu_ids"`
+	MemUtil                   string   `json:"mem_util"`
+	MaxLen                    string   `json:"max_len"`
+	MaxNumSeqs                string   `json:"max_num_seqs"`
+	KVCacheDType              string   `json:"kv_cache_dtype"`
+	ToolParser                string   `json:"tool_parser"`
+	TokenizerMode             string   `json:"tokenizer_mode"`
+	ReasoningParser           string   `json:"reasoning_parser"`
+	TrustRemoteCode           bool     `json:"trust_remote_code"`
+	BlockSize                 string   `json:"block_size"`
+	MoeBackend                string   `json:"moe_backend"`
+	ExpertParallel            bool     `json:"enable_expert_parallel"`
+	DisableFlashInferAutotune bool     `json:"disable_flashinfer_autotune"`
+	SpeculativeConfig         string   `json:"speculative_config"`
+	BindIP                    string   `json:"bind_ip"`
+	ExtraVLLMArgs             []string `json:"extra_vllm_args"`
 }
 
 type DownloadedModel struct {
@@ -70,12 +99,18 @@ func IsValidationError(err error) bool {
 }
 
 const (
-	managedContainerLabel = "vllm-manager.managed"
-	containerKindLabel    = "vllm-manager.kind"
-	containerModelLabel   = "vllm-manager.model"
-	containerKindServer   = "server"
-	containerKindDownload = "download"
-	managerVersion        = "0.1.0"
+	managedContainerLabel           = "vllm-manager.managed"
+	containerKindLabel              = "vllm-manager.kind"
+	containerModelLabel             = "vllm-manager.model"
+	containerExposureLabel          = "vllm-manager.exposure"
+	containerLaunchSpecVersionLabel = "vllm-manager.launch_spec_version"
+	containerLaunchSpecLabel        = "vllm-manager.launch_spec"
+	containerKindServer             = "server"
+	containerKindDownload           = "download"
+	ContainerExposureProxy          = "proxy"
+	ContainerExposureDirect         = "direct"
+	LaunchSpecVersion               = "1"
+	managerVersion                  = "0.1.0"
 )
 
 const DefaultVLLMImage = "vllm/vllm-openai:v0.23.0-cu129"
@@ -114,21 +149,15 @@ func getModelOperationLock(hfCache string, model string) *sync.Mutex {
 	return lock.(*sync.Mutex)
 }
 
-func sanitizeDockerNamePart(value string) string {
+// SanitizeDockerNamePart returns a Docker-name-safe fragment for model-derived
+// container names.
+func SanitizeDockerNamePart(value string) string {
 	cleaned := invalidDockerNameChars.ReplaceAllString(value, "-")
 	cleaned = strings.Trim(cleaned, "-_.")
 	if cleaned == "" {
 		return "model"
 	}
 	return cleaned
-}
-
-// SanitizeDockerNamePart is the exported form of sanitizeDockerNamePart.
-// It is needed by callers outside the api package (e.g. the dashboard
-// handler persisting per-server API keys) that must reproduce the same
-// container name StartModel used.
-func SanitizeDockerNamePart(value string) string {
-	return sanitizeDockerNamePart(value)
 }
 
 func FormatBytes(bytes uint64) string {
