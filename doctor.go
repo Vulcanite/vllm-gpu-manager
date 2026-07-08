@@ -205,12 +205,18 @@ func checkSettingsPermissions(checks *[]doctorCheck) {
 }
 
 func checkDashboardCerts(checks *[]doctorCheck) {
-	if _, err := os.Stat("server.crt"); err != nil {
-		*checks = append(*checks, doctorCheck{Name: "dashboard certificate", Status: doctorWarn, Detail: "server.crt missing; dashboard will generate a self-signed cert", Require: false})
+	_, certErr := os.Stat("server.crt")
+	_, keyErr := os.Stat("server.key")
+	if os.IsNotExist(certErr) && os.IsNotExist(keyErr) {
+		*checks = append(*checks, doctorCheck{Name: "dashboard TLS files", Status: doctorPass, Detail: "not present; only needed when starting dashboard with --https", Require: false})
 		return
 	}
-	if _, err := os.Stat("server.key"); err != nil {
-		*checks = append(*checks, doctorCheck{Name: "dashboard private key", Status: doctorWarn, Detail: "server.key missing; dashboard will generate a self-signed key", Require: false})
+	if certErr != nil {
+		*checks = append(*checks, doctorCheck{Name: "dashboard certificate", Status: doctorWarn, Detail: "server.crt missing; --https will generate a self-signed cert", Require: false})
+		return
+	}
+	if keyErr != nil {
+		*checks = append(*checks, doctorCheck{Name: "dashboard private key", Status: doctorWarn, Detail: "server.key missing; --https will generate a self-signed key", Require: false})
 		return
 	}
 	*checks = append(*checks, doctorCheck{Name: "dashboard TLS files", Status: doctorPass, Detail: "server.crt and server.key exist", Require: false})

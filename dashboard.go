@@ -23,6 +23,7 @@ const dashboardShutdownTimeout = 10 * time.Second
 type dashboardOptions struct {
 	Host         string
 	Port         string
+	HTTPSEnabled bool
 	ProxyEnabled bool
 	Monitoring   monitoringOptions
 }
@@ -788,11 +789,15 @@ func runDashboard(opts dashboardOptions) {
 		fmt.Println("Dashboard authentication enabled via VLLM_MANAGER_PASSWORD")
 	}
 
+	scheme := "http"
+	if opts.HTTPSEnabled {
+		scheme = "https"
 	if err := ensureCerts("server.crt", "server.key"); err != nil {
 		log.Fatalf("failed to generate TLS certificates: %v", err)
+		}
 	}
 
-	fmt.Printf("Starting vllm-manager server on %s (HTTPS)\n", server.Addr)
+	fmt.Printf("Starting vllm-manager server on %s (%s)\n", server.Addr, strings.ToUpper(scheme))
 	if msg := monitoringStartMessage(opts.Monitoring); msg != "" {
 		fmt.Println(msg)
 	}
@@ -808,7 +813,11 @@ func runDashboard(opts dashboardOptions) {
 
 	errCh := make(chan error, 1)
 	go func() {
+		if opts.HTTPSEnabled {
 		errCh <- server.ListenAndServeTLS("server.crt", "server.key")
+			return
+		}
+		errCh <- server.ListenAndServe()
 	}()
 
 	signals := make(chan os.Signal, 1)
