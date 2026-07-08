@@ -326,7 +326,7 @@ Before launching, the backend validates:
 - combined `gpu_memory_utilization` on any selected GPU does not exceed 100%
 - downloaded model size can fit in the requested GPU budget
 - estimated KV cache can fit for the requested or default max context length
-- KV heads are compatible with the requested tensor parallel size when config data is available
+- KV heads are compatible with the requested tensor parallel size for generic GQA/MQA models when config data is available
 - known FP8 quantized models only run on selected GPUs with compute capability 8.9 or newer
 
 ## Monitoring

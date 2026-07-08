@@ -42,6 +42,19 @@ func tinyVRAMConfig(maxLen int) string {
 	}`
 }
 
+func deepSeekV4VRAMConfig(maxLen int) string {
+	return `{
+		"model_type": "deepseek_v4",
+		"num_hidden_layers": 43,
+		"num_attention_heads": 64,
+		"num_key_value_heads": 1,
+		"hidden_size": 4096,
+		"head_dim": 512,
+		"torch_dtype": "bfloat16",
+		"max_position_embeddings": ` + strconv.Itoa(maxLen) + `
+	}`
+}
+
 func TestCheckModelFitsInVRAMAllowsSmallModel(t *testing.T) {
 	hfCache := t.TempDir()
 	model := "test/tiny"
@@ -108,5 +121,19 @@ func TestCheckModelFitsInVRAMRejectsInsufficientFreeMemory(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "currently free") {
 		t.Fatalf("error=%q, want free memory detail", err.Error())
+	}
+}
+
+func TestCheckModelFitsInVRAMAllowsDeepSeekV4MLAKVHeadsWithTensorParallel(t *testing.T) {
+	hfCache := t.TempDir()
+	model := "deepseek-ai/DeepSeek-V4-Flash-DSpark"
+	writeVRAMTestModel(t, hfCache, model, deepSeekV4VRAMConfig(1048576), 1024)
+
+	err := CheckModelFitsInVRAM(model, hfCache, []GPUInfo{
+		{ID: 0, MemoryTotal: 16 * 1024 * 1024 * 1024, MemoryFree: 16 * 1024 * 1024 * 1024},
+		{ID: 1, MemoryTotal: 16 * 1024 * 1024 * 1024, MemoryFree: 16 * 1024 * 1024 * 1024},
+	}, 2, "0.95", "32768", "fp8")
+	if err != nil {
+		t.Fatalf("CheckModelFitsInVRAM() error=%v", err)
 	}
 }

@@ -19,6 +19,7 @@ type modelKVCacheEstimate struct {
 	HeadDim            int
 	DTypeBytes         int
 	DefaultMaxModelLen int
+	ModelType          string
 }
 
 const (
@@ -135,6 +136,10 @@ func (estimate modelKVCacheEstimate) bytesPerTokenPerGPU(tensorParallelSize int)
 		return 0, validationError("KV cache size estimate overflows uint64 before applying max_model_len; increase tensor_parallel_size or use a smaller model")
 	}
 	return value, nil
+}
+
+func (estimate modelKVCacheEstimate) requiresDivisibleKVHeads() bool {
+	return !strings.EqualFold(strings.TrimSpace(estimate.ModelType), "deepseek_v4")
 }
 
 func checkedMulUint64(values ...uint64) (uint64, bool) {
@@ -374,7 +379,11 @@ func GetModelKVCacheEstimate(hfCache string, model string) (modelKVCacheEstimate
 		"n_positions",
 		"sliding_window",
 	)
-	estimate := modelKVCacheEstimate{DefaultMaxModelLen: maxModelLen}
+	modelType, _ := getConfigString(config, root, "model_type")
+	estimate := modelKVCacheEstimate{
+		DefaultMaxModelLen: maxModelLen,
+		ModelType:          modelType,
+	}
 
 	layers, ok := getConfigInt(config, root, "num_hidden_layers", "n_layer", "num_layers", "num_layers_total")
 	if !ok {
@@ -638,8 +647,11 @@ func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, 
 		)
 	}
 
-	// Fix #6: KV heads must be divisible by tensor parallel size
-	if kvEstimateOK && estimate.KeyValueHeads > 0 && estimate.KeyValueHeads%gpus != 0 {
+	// Generic GQA/MQA models shard KV heads across TP ranks, so vLLM rejects
+	// non-divisible KV head counts. DeepSeek-V4 uses vLLM's MLA implementation
+	// and its configs intentionally report num_key_value_heads=1 even for
+	// multi-GPU tensor parallel launches.
+	if kvEstimateOK && estimate.requiresDivisibleKVHeads() && estimate.KeyValueHeads > 0 && estimate.KeyValueHeads%gpus != 0 {
 		return validationError(
 			"num_key_value_heads (%d) is not divisible by tensor_parallel_size (%d); vLLM will refuse to start — use a divisor of %d GPUs instead",
 			estimate.KeyValueHeads,
