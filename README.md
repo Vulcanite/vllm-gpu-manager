@@ -168,6 +168,7 @@ You can also use the helper script:
 ./manager.sh start
 ./manager.sh start 8080
 ./manager.sh start 8080 change-me
+./manager.sh start 8080 change-me --host 0.0.0.0
 ./manager.sh start 8080 change-me --no-proxy
 ./manager.sh status
 ./manager.sh stop
@@ -176,7 +177,7 @@ You can also use the helper script:
 
 Logs are written to `vllm-manager.log` when started through `manager.sh`.
 
-The helper writes `.vllm-manager.state` with the last port, no-proxy flag state, and dashboard password so `./manager.sh restart` reuses them. The state file is written with `0600` permissions but stores the password as plaintext.
+The helper writes `.vllm-manager.state` with the last port, host, no-proxy flag state, and dashboard password so `./manager.sh restart` reuses them. The state file is written with `0600` permissions but stores the password as plaintext.
 
 Dashboard mode handles `SIGINT` and `SIGTERM` with a graceful HTTP shutdown timeout, so in-flight API requests get a short window to finish during restarts.
 

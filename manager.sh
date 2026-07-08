@@ -3,12 +3,33 @@
 STATE_FILE=".vllm-manager.state"
 PORT=9090
 PORT_SET=0
+HOST=""
+HOST_SET=0
 PASSWORD=""
 NO_PROXY=""
 NO_PROXY_SET=0
 
-for ARG in "${@:2}"; do
+ARGS_INPUT=("${@:2}")
+for ((i = 0; i < ${#ARGS_INPUT[@]}; i++)); do
+    ARG="${ARGS_INPUT[$i]}"
     case "$ARG" in
+        --host)
+            if [ $((i + 1)) -ge ${#ARGS_INPUT[@]} ]; then
+                echo "Error: --host requires an IP address."
+                exit 1
+            fi
+            HOST="${ARGS_INPUT[$((i + 1))]}"
+            HOST_SET=1
+            i=$((i + 1))
+            ;;
+        --host=*)
+            HOST="${ARG#--host=}"
+            if [ -z "$HOST" ]; then
+                echo "Error: --host requires an IP address."
+                exit 1
+            fi
+            HOST_SET=1
+            ;;
         --no-proxy)
             NO_PROXY=1
             NO_PROXY_SET=1
@@ -32,6 +53,7 @@ load_state_for_restart() {
     [ -f "$STATE_FILE" ] || return 0
 
     local saved_port=""
+    local saved_host=""
     local saved_no_proxy=""
     local saved_password=""
     while IFS='=' read -r key value; do
@@ -40,6 +62,9 @@ load_state_for_restart() {
                 if [[ "$value" =~ ^[0-9]+$ ]]; then
                     saved_port="$value"
                 fi
+                ;;
+            HOST)
+                saved_host="$value"
                 ;;
             NO_PROXY)
                 if [ "$value" = "1" ]; then
@@ -55,6 +80,9 @@ load_state_for_restart() {
     if [ "$PORT_SET" -eq 0 ] && [ -n "$saved_port" ]; then
         PORT="$saved_port"
     fi
+    if [ "$HOST_SET" -eq 0 ] && [ -n "$saved_host" ]; then
+        HOST="$saved_host"
+    fi
     if [ "$NO_PROXY_SET" -eq 0 ]; then
         NO_PROXY="$saved_no_proxy"
     fi
@@ -68,6 +96,7 @@ save_state() {
     local password_value="$2"
     {
         echo "PORT=$PORT"
+        echo "HOST=$HOST"
         echo "NO_PROXY=$no_proxy_value"
         echo "PASSWORD=$password_value"
     } > "$STATE_FILE"
@@ -93,6 +122,9 @@ case "$1" in
         fi
 
         ARGS=(--dashboard --port "$PORT")
+        if [ -n "$HOST" ]; then
+            ARGS+=(--host "$HOST")
+        fi
         NO_PROXY_ENABLED=""
         if [ -n "$NO_PROXY" ] || [ "$VLLM_MANAGER_NO_PROXY" = "1" ] || [ "$VLLM_MANAGER_NO_PROXY" = "true" ]; then
             ARGS+=(--no-proxy)
@@ -101,9 +133,10 @@ case "$1" in
         fi
 
         save_state "${NO_PROXY_ENABLED:-0}" "$ACTIVE_PASSWORD"
-        echo "Starting vllm-manager on port $PORT in the background..."
+        DISPLAY_HOST="${HOST:-127.0.0.1}"
+        echo "Starting vllm-manager on $DISPLAY_HOST:$PORT in the background..."
         nohup ./vllm-manager "${ARGS[@]}" > vllm-manager.log 2>&1 &
-        echo "Done! Server is running at https://localhost:$PORT"
+        echo "Done! Server is running at https://$DISPLAY_HOST:$PORT"
         echo "Logs: tail -f vllm-manager.log"
         ;;
     stop)
@@ -132,12 +165,23 @@ case "$1" in
             echo "Error: vllm-manager did not stop in time; restart aborted."
             exit 1
         fi
-        "$0" start "$PORT" ${PASSWORD:+"$PASSWORD"} ${NO_PROXY:+--no-proxy}
+        RESTART_ARGS=(start "$PORT")
+        if [ -n "$HOST" ]; then
+            RESTART_ARGS+=(--host "$HOST")
+        fi
+        if [ -n "$PASSWORD" ]; then
+            RESTART_ARGS+=("$PASSWORD")
+        fi
+        if [ -n "$NO_PROXY" ]; then
+            RESTART_ARGS+=(--no-proxy)
+        fi
+        "$0" "${RESTART_ARGS[@]}"
         ;;
     *)
-        echo "Usage: $0 {start|stop|status|restart} [port] [password] [--no-proxy]"
+        echo "Usage: $0 {start|stop|status|restart} [port] [password] [--host <ip>] [--no-proxy]"
         echo "  [port] defaults to 9090."
         echo "  [password] is optional and secures the dashboard."
+        echo "  --host sets the dashboard bind IP, defaulting to the binary default."
         echo "  --no-proxy disables the /v1/ OpenAI-compatible proxy gateway."
         exit 1
         ;;
