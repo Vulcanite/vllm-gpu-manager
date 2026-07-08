@@ -32,7 +32,7 @@ The manager currently targets:
 - Hugging Face Hub model cache layout
 - internal/private network usage
 
-It does not provide multi-user dashboard authorization, Kubernetes orchestration, or cluster scheduling. It **does** provide automatic local HTTPS termination (via self-signed certificates) and a dynamic OpenAI proxy gateway that routes `/v1/` requests to active model containers.
+It does not provide multi-user dashboard authorization, Kubernetes orchestration, or cluster scheduling. It **does** provide optional local HTTPS termination (via self-signed certificates) and a dynamic OpenAI proxy gateway that routes `/v1/` requests to active model containers.
 
 ## How It Works
 
@@ -137,6 +137,12 @@ By default, the dashboard binds to `127.0.0.1`. Bind the dashboard to a specific
 ./vllm-manager --dashboard --host 0.0.0.0 --port 9090
 ```
 
+Dashboard HTTP is the default. Add `--https` to serve the dashboard with local self-signed TLS files (`server.crt` and `server.key`, generated on first use):
+
+```bash
+./vllm-manager --dashboard --port 9090 --https
+```
+
 Set `VLLM_MANAGER_PASSWORD` to require browser login before the dashboard can call `/api` endpoints:
 
 ```bash
@@ -159,7 +165,7 @@ Run host checks before setup or after driver/Docker changes:
 Then open:
 
 ```text
-https://<host>:9090
+http://<host>:9090
 ```
 
 You can also use the helper script:
@@ -170,6 +176,9 @@ You can also use the helper script:
 ./manager.sh start 8080 change-me
 ./manager.sh start 8080 change-me --host 0.0.0.0
 ./manager.sh start 8080 change-me --no-proxy
+./manager.sh start 8080 change-me --https
+./manager.sh start 8080 change-me --monitoring
+./manager.sh start 8080 change-me --monitoring --monitoring-targets-file monitoring/runtime/vllm-targets.yml
 ./manager.sh status
 ./manager.sh stop
 ./manager.sh restart
@@ -177,7 +186,9 @@ You can also use the helper script:
 
 Logs are written to `vllm-manager.log` when started through `manager.sh`.
 
-The helper writes `.vllm-manager.state` with the last port, host, no-proxy flag state, and dashboard password so `./manager.sh restart` reuses them. The state file is written with `0600` permissions but stores the password as plaintext.
+When `--monitoring` is set without `--monitoring-targets-file`, the binary uses its default Prometheus file-SD path: `monitoring/runtime/vllm-targets.yml`.
+
+The helper writes `.vllm-manager.state` with the last port, host, no-proxy flag state, HTTPS flag state, monitoring flag state, monitoring targets file, and dashboard password so `./manager.sh restart` reuses them. The state file is written with `0600` permissions but stores the password as plaintext.
 
 Dashboard mode handles `SIGINT` and `SIGTERM` with a graceful HTTP shutdown timeout, so in-flight API requests get a short window to finish during restarts.
 
@@ -309,7 +320,10 @@ Optional launch parameters currently exposed by the UI/API:
 - `--moe-backend`
 - `--enable-expert-parallel`
 - `--speculative-config`
+- validated extra vLLM flags imported from a command recipe
 - `--api-key` when a global vLLM API key or per-server key is configured
+
+The Deploy Server modal can import `docker run ...` and `vllm serve ...` command recipes. The manager parses supported fields into the normal launch form, ignores manager-owned Docker settings such as ports and cache mounts, blocks unsafe Docker options, and only preserves extra vLLM flags from a curated allowlist.
 
 Outside proxy mode, the CLI accepts a per-launch bind override:
 
@@ -387,6 +401,7 @@ All APIs are under `/api`.
 | `GET`  | `/models/download/progress?model=<id>` | Return current cached byte count for a model.                             |
 | `GET`  | `/models/logs?container_id=<id>`       | Return recent logs for a managed container.                               |
 | `GET`  | `/models/logs/stream?container_id=<id>` | Stream container logs as server-sent events.                              |
+| `POST` | `/models/import-command`               | Parse a pasted Docker/vLLM command into deploy form fields and safe extra args. |
 | `POST` | `/models/start`                        | Start a vLLM serving container.                                           |
 | `POST` | `/models/stop`                         | Stop a serving container by port.                                         |
 | `POST` | `/models/restart`                      | Restart a running managed container or start a stopped one by container ID. |
@@ -405,7 +420,7 @@ The active model UI can restart existing model servers and remove stopped contai
 This is an internal utility. It provides:
 
 - Optional single-password dashboard authentication for the web UI and JSON APIs
-- Self-signed HTTPS termination on the dashboard port (certificate auto-generated on first run)
+- Optional self-signed HTTPS termination on the dashboard port with `--https` (certificate auto-generated on first TLS run)
 - Request-level `Authorization: Bearer <proxy_user_api_key>` for `/v1/` proxy endpoints
 
 Anyone who can access the web interface can inspect GPU state, start and stop model containers, trigger model downloads, delete cached models, and use configured Hugging Face or vLLM API keys indirectly.
