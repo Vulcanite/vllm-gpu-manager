@@ -23,12 +23,9 @@ const dashboardShutdownTimeout = 10 * time.Second
 type dashboardOptions struct {
 	Host         string
 	Port         string
+	HTTPSEnabled bool
 	ProxyEnabled bool
 	Monitoring   monitoringOptions
-}
-
-func newDashboardMux(proxyEnabled bool) (*http.ServeMux, dashboardAuth) {
-	return newDashboardMuxWithOptions(dashboardOptions{ProxyEnabled: proxyEnabled})
 }
 
 func newDashboardMuxWithOptions(opts dashboardOptions) (*http.ServeMux, dashboardAuth) {
@@ -80,7 +77,7 @@ func validateRoutingTableForActiveModels(table map[string]int, models []api.Acti
 		if api.NormalizeModelKey(modelName) == "" {
 			return nil, newAppError(http.StatusBadRequest, "invalid model name %q", rawModel)
 		}
-		if !validRoutingPort(port) {
+		if port < 1 || port > 65535 {
 			return nil, newAppError(http.StatusBadRequest, "port for %q must be between 1 and 65535", modelName)
 		}
 		modelKey := api.NormalizeModelKeyForMatch(modelName)
@@ -104,11 +101,32 @@ func validateRoutingTableForActiveModels(table map[string]int, models []api.Acti
 	return validated, nil
 }
 
+func dashboardExposure(proxyEnabled bool) string {
+	if proxyEnabled {
+		return api.ContainerExposureProxy
+	}
+	return api.ContainerExposureDirect
+}
+
+func filterDashboardModels(models []api.ActiveModel, proxyEnabled bool) []api.ActiveModel {
+	exposure := dashboardExposure(proxyEnabled)
+	filtered := make([]api.ActiveModel, 0, len(models))
+	for _, model := range models {
+		if model.Exposure != exposure || model.LaunchSpec == nil {
+			continue
+		}
+		filtered = append(filtered, model)
+	}
+	return filtered
+}
+
 func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) http.HandlerFunc, opts dashboardOptions) {
 	proxyEnabled := opts.ProxyEnabled
 	mux.HandleFunc("/api/settings", apiHandler(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			writeJSON(w, getSettingsStatusWithProxy(proxyEnabled))
+			status := getSettingsStatus()
+			status.ProxyEnabled = proxyEnabled
+			writeJSON(w, status)
 			return
 		}
 		if r.Method == http.MethodPost {
@@ -260,6 +278,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 					writeAPIError(w, err)
 					return
 				}
+				models = filterDashboardModels(models, true)
 				validated, err := validateRoutingTableForActiveModels(table, models)
 				if err != nil {
 					writeAPIError(w, err)
@@ -332,6 +351,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		if models == nil {
 			models = []api.ActiveModel{}
 		}
+		models = filterDashboardModels(models, proxyEnabled)
 		// Enrich the response with per-server key status without exposing the
 		// secret itself. A missing entry means the global key is in use.
 		for i := range models {
@@ -364,26 +384,27 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			return
 		}
 		var req struct {
-			Model                     string `json:"model"`
-			Port                      int    `json:"port"`
-			GPUs                      int    `json:"gpus"`
-			GPUIDs                    string `json:"gpu_ids"`
-			MemUtil                   string `json:"mem_util"`
-			MaxLen                    string `json:"max_len"`
-			MaxNumSeqs                string `json:"max_num_seqs"`
-			KVCacheDType              string `json:"kv_cache_dtype"`
-			ToolParser                string `json:"tool_parser"`
-			TokenizerMode             string `json:"tokenizer_mode"`
-			ReasoningParser           string `json:"reasoning_parser"`
-			TrustRemoteCode           bool   `json:"trust_remote_code"`
-			BlockSize                 string `json:"block_size"`
-			MoeBackend                string `json:"moe_backend"`
-			ExpertParallel            bool   `json:"enable_expert_parallel"`
-			DisableFlashInferAutotune bool   `json:"disable_flashinfer_autotune"`
-			SpeculativeConfig         string `json:"speculative_config"`
-			BindIP                    string `json:"bind_ip"`
-			UseAPIKey                 bool   `json:"use_api_key"`
-			ServerAPIKey              string `json:"server_api_key"`
+			Model                     string   `json:"model"`
+			Port                      int      `json:"port"`
+			GPUs                      int      `json:"gpus"`
+			GPUIDs                    string   `json:"gpu_ids"`
+			MemUtil                   string   `json:"mem_util"`
+			MaxLen                    string   `json:"max_len"`
+			MaxNumSeqs                string   `json:"max_num_seqs"`
+			KVCacheDType              string   `json:"kv_cache_dtype"`
+			ToolParser                string   `json:"tool_parser"`
+			TokenizerMode             string   `json:"tokenizer_mode"`
+			ReasoningParser           string   `json:"reasoning_parser"`
+			TrustRemoteCode           bool     `json:"trust_remote_code"`
+			BlockSize                 string   `json:"block_size"`
+			MoeBackend                string   `json:"moe_backend"`
+			ExpertParallel            bool     `json:"enable_expert_parallel"`
+			DisableFlashInferAutotune bool     `json:"disable_flashinfer_autotune"`
+			SpeculativeConfig         string   `json:"speculative_config"`
+			BindIP                    string   `json:"bind_ip"`
+			UseAPIKey                 bool     `json:"use_api_key"`
+			ServerAPIKey              string   `json:"server_api_key"`
+			ExtraVLLMArgs             []string `json:"extra_vllm_args"`
 		}
 		if !decodeJSONBody(w, r, &req) {
 			return
@@ -404,8 +425,10 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 
 		settings := getSettings()
 		hostBindIP := settings.ServerBindIP
+		containerExposure := api.ContainerExposureDirect
 		if proxyEnabled {
 			hostBindIP = "127.0.0.1"
+			containerExposure = api.ContainerExposureProxy
 		} else if strings.TrimSpace(req.BindIP) != "" {
 			hostBindIP = strings.TrimSpace(req.BindIP)
 		}
@@ -418,7 +441,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		if serverAPIKey != "" {
 			vllmAPIKey = ""
 		}
-		if err := api.StartModel(req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, req.SpeculativeConfig, settings.HFCache, settings.HFToken, vllmAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, serverAPIKey); err != nil {
+		if err := api.StartModel(req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, req.SpeculativeConfig, settings.HFCache, settings.HFToken, vllmAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, containerExposure, serverAPIKey, req.ExtraVLLMArgs); err != nil {
 			writeAPIError(w, err)
 			return
 		}
@@ -437,6 +460,25 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		upsertRoute(req.Model, req.Port)
 		syncMonitoringTargets(opts.Monitoring)
 		writeJSON(w, map[string]string{"status": "success"})
+	}))
+
+	mux.HandleFunc("/api/models/import-command", apiHandler(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var req struct {
+			Command string `json:"command"`
+		}
+		if !decodeJSONBody(w, r, &req) {
+			return
+		}
+		parsed, err := api.ParseImportedCommand(req.Command)
+		if err != nil {
+			writeAPIError(w, err)
+			return
+		}
+		writeJSON(w, parsed)
 	}))
 
 	mux.HandleFunc("/api/models/stop", apiHandler(func(w http.ResponseWriter, r *http.Request) {
@@ -788,16 +830,22 @@ func runDashboard(opts dashboardOptions) {
 		fmt.Println("Dashboard authentication enabled via VLLM_MANAGER_PASSWORD")
 	}
 
-	if err := ensureCerts("server.crt", "server.key"); err != nil {
-		log.Fatalf("failed to generate TLS certificates: %v", err)
+	scheme := "http"
+	if opts.HTTPSEnabled {
+		scheme = "https"
+		if err := ensureCerts("server.crt", "server.key"); err != nil {
+			log.Fatalf("failed to generate TLS certificates: %v", err)
+		}
 	}
 
-	fmt.Printf("Starting vllm-manager server on %s (HTTPS)\n", server.Addr)
+	fmt.Printf("Starting vllm-manager server on %s (%s)\n", server.Addr, strings.ToUpper(scheme))
 	if msg := monitoringStartMessage(opts.Monitoring); msg != "" {
 		fmt.Println(msg)
 	}
 
-	reconcileRoutingTable()
+	if opts.ProxyEnabled {
+		reconcileRoutingTable(api.ContainerExposureProxy)
+	}
 	syncMonitoringTargets(opts.Monitoring)
 
 	heartbeatStop := startHeartbeatRefresher()
@@ -808,7 +856,11 @@ func runDashboard(opts dashboardOptions) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- server.ListenAndServeTLS("server.crt", "server.key")
+		if opts.HTTPSEnabled {
+			errCh <- server.ListenAndServeTLS("server.crt", "server.key")
+			return
+		}
+		errCh <- server.ListenAndServe()
 	}()
 
 	signals := make(chan os.Signal, 1)

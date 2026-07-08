@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"vllm-manager/api"
@@ -124,7 +123,7 @@ func runDoctor() doctorReport {
 		} else {
 			add("HF cache writable", doctorPass, "cache directory is writable", true)
 		}
-		if free, err := freeBytes(settings.HFCache); err != nil {
+		if free, err := api.FreeBytesForPath(settings.HFCache); err != nil {
 			add("HF cache free space", doctorWarn, err.Error(), false)
 		} else {
 			add("HF cache free space", doctorPass, api.FormatBytes(free)+" available", false)
@@ -178,14 +177,6 @@ func checkWritable(dir string) error {
 	return os.Remove(name)
 }
 
-func freeBytes(path string) (uint64, error) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
-		return 0, err
-	}
-	return stat.Bavail * uint64(stat.Bsize), nil
-}
-
 func checkSettingsPermissions(checks *[]doctorCheck) {
 	info, err := os.Stat(settingsFile)
 	if err != nil {
@@ -205,12 +196,18 @@ func checkSettingsPermissions(checks *[]doctorCheck) {
 }
 
 func checkDashboardCerts(checks *[]doctorCheck) {
-	if _, err := os.Stat("server.crt"); err != nil {
-		*checks = append(*checks, doctorCheck{Name: "dashboard certificate", Status: doctorWarn, Detail: "server.crt missing; dashboard will generate a self-signed cert", Require: false})
+	_, certErr := os.Stat("server.crt")
+	_, keyErr := os.Stat("server.key")
+	if os.IsNotExist(certErr) && os.IsNotExist(keyErr) {
+		*checks = append(*checks, doctorCheck{Name: "dashboard TLS files", Status: doctorPass, Detail: "not present; only needed when starting dashboard with --https", Require: false})
 		return
 	}
-	if _, err := os.Stat("server.key"); err != nil {
-		*checks = append(*checks, doctorCheck{Name: "dashboard private key", Status: doctorWarn, Detail: "server.key missing; dashboard will generate a self-signed key", Require: false})
+	if certErr != nil {
+		*checks = append(*checks, doctorCheck{Name: "dashboard certificate", Status: doctorWarn, Detail: "server.crt missing; --https will generate a self-signed cert", Require: false})
+		return
+	}
+	if keyErr != nil {
+		*checks = append(*checks, doctorCheck{Name: "dashboard private key", Status: doctorWarn, Detail: "server.key missing; --https will generate a self-signed key", Require: false})
 		return
 	}
 	*checks = append(*checks, doctorCheck{Name: "dashboard TLS files", Status: doctorPass, Detail: "server.crt and server.key exist", Require: false})

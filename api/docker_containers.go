@@ -232,11 +232,24 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 		TrustRemoteCode:           false,
 		DisableFlashInferAutotune: false,
 		BlockSize:                 "default",
+		MoeBackend:                "auto",
+		ExpertParallel:            false,
+		SpeculativeConfig:         "",
+		ExtraVLLMArgs:             []string{},
 		BindIP:                    "unknown",
 		MetricsTarget:             "unknown",
 		APIUrl:                    "unknown",
 		IsReady:                   false,
 		State:                     vc.state,
+		Exposure:                  strings.TrimSpace(vc.labels[containerExposureLabel]),
+		LaunchSpecVersion:         strings.TrimSpace(vc.labels[containerLaunchSpecVersionLabel]),
+	}
+
+	hasLaunchSpec := false
+	if spec, ok := launchSpecFromLabels(vc.labels); ok {
+		model.LaunchSpec = &spec
+		applyLaunchSpecToActiveModel(&model, spec)
+		hasLaunchSpec = true
 	}
 
 	if vc.labels[containerModelLabel] != "" {
@@ -244,6 +257,12 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 	}
 
 	for i := 0; i < len(args); i++ {
+		if args[i] == "--api-key" && i+1 < len(args) {
+			model.APIKey = args[i+1]
+		}
+		if hasLaunchSpec {
+			continue
+		}
 		if args[i] == "--model" && i+1 < len(args) && vc.labels[containerModelLabel] == "" {
 			model.Model = args[i+1]
 		}
@@ -283,8 +302,28 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 		if args[i] == "--block-size" && i+1 < len(args) {
 			model.BlockSize = args[i+1]
 		}
-		if args[i] == "--api-key" && i+1 < len(args) {
-			model.APIKey = args[i+1]
+		if args[i] == "--moe-backend" && i+1 < len(args) {
+			model.MoeBackend = args[i+1]
+		}
+		if args[i] == "--enable-expert-parallel" {
+			model.ExpertParallel = true
+		}
+		if args[i] == "--speculative-config" && i+1 < len(args) {
+			model.SpeculativeConfig = args[i+1]
+		}
+		if flag, value, hasInlineValue := splitFlagValue(args[i]); strings.HasPrefix(flag, "--") {
+			if spec, ok := allowedExtraVLLMFlags[flag]; ok {
+				model.ExtraVLLMArgs = append(model.ExtraVLLMArgs, flag)
+				if spec.hasValue {
+					if !hasInlineValue && i+1 < len(args) {
+						value = args[i+1]
+						i++
+					}
+					if strings.TrimSpace(value) != "" {
+						model.ExtraVLLMArgs = append(model.ExtraVLLMArgs, value)
+					}
+				}
+			}
 		}
 	}
 
@@ -315,6 +354,67 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 	}
 
 	return model, true
+}
+
+func launchSpecFromLabels(labels map[string]string) (LaunchSpec, bool) {
+	if strings.TrimSpace(labels[containerLaunchSpecVersionLabel]) != LaunchSpecVersion {
+		return LaunchSpec{}, false
+	}
+	raw := strings.TrimSpace(labels[containerLaunchSpecLabel])
+	if raw == "" {
+		return LaunchSpec{}, false
+	}
+	var spec LaunchSpec
+	if err := json.Unmarshal([]byte(raw), &spec); err != nil {
+		return LaunchSpec{}, false
+	}
+	return spec, true
+}
+
+func applyLaunchSpecToActiveModel(model *ActiveModel, spec LaunchSpec) {
+	model.Model = spec.Model
+	model.Port = strconv.Itoa(spec.Port)
+	model.GPUs = strconv.Itoa(spec.GPUs)
+	model.GPUIDs = spec.GPUIDs
+	model.MemUtil = spec.MemUtil
+	model.MaxLen = emptyStringAs(spec.MaxLen, "default")
+	model.MaxNumSeqs = emptyStringAs(spec.MaxNumSeqs, "default")
+	model.KVCacheDType = emptyStringAs(spec.KVCacheDType, "auto")
+	model.ToolParser = emptyStringAs(spec.ToolParser, "disabled")
+	model.TokenizerMode = emptyStringAs(spec.TokenizerMode, "auto")
+	model.ReasoningParser = emptyStringAs(spec.ReasoningParser, "disabled")
+	model.TrustRemoteCode = spec.TrustRemoteCode
+	model.DisableFlashInferAutotune = spec.DisableFlashInferAutotune
+	model.BlockSize = emptyStringAs(spec.BlockSize, "default")
+	model.MoeBackend = emptyStringAs(spec.MoeBackend, "auto")
+	model.ExpertParallel = spec.ExpertParallel
+	model.SpeculativeConfig = spec.SpeculativeConfig
+	model.ExtraVLLMArgs = append([]string(nil), spec.ExtraVLLMArgs...)
+	model.BindIP = emptyStringAs(spec.BindIP, "unknown")
+}
+
+func emptyStringAs(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func serverContainerLabels(model string, exposure string, spec LaunchSpec) (map[string]string, error) {
+	specBytes, err := json.Marshal(spec)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode launch spec: %v", err)
+	}
+	return map[string]string{
+		"app":                           "vllm-manager",
+		managedContainerLabel:           "true",
+		containerKindLabel:              containerKindServer,
+		containerModelLabel:             model,
+		containerExposureLabel:          exposure,
+		containerLaunchSpecVersionLabel: LaunchSpecVersion,
+		containerLaunchSpecLabel:        string(specBytes),
+		"vllm-manager.version":          managerVersion,
+	}, nil
 }
 
 func hostBindIPFromMetadata(metadata container.InspectResponse, port string) string {
@@ -588,6 +688,17 @@ func normalizeHostBindIP(hostBindIP string) (netip.Addr, error) {
 	return ValidateLocalBindIP(hostBindIP)
 }
 
+func normalizeContainerExposure(exposure string) (string, error) {
+	exposure = strings.TrimSpace(strings.ToLower(exposure))
+	if exposure == "" {
+		return ContainerExposureDirect, nil
+	}
+	if exposure != ContainerExposureProxy && exposure != ContainerExposureDirect {
+		return "", validationError("container exposure must be %q or %q", ContainerExposureProxy, ContainerExposureDirect)
+	}
+	return exposure, nil
+}
+
 // allowedToolParsers is the explicit allowlist of vLLM tool-call parsers. vLLM
 // passes this string to its built-in registry and forwards it to Python, so
 // anything outside this set is rejected as a hardening measure.
@@ -798,7 +909,7 @@ func NormalizeModelKeyForMatch(model string) string {
 	return model
 }
 
-func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, kvCacheDType string, toolParser string, tokenizerMode string, reasoningParser string, trustRemoteCode bool, blockSize string, moeBackend string, enableExpertParallel bool, disableFlashInferAutotune bool, speculativeConfig string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, serverAPIKey string) error {
+func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, kvCacheDType string, toolParser string, tokenizerMode string, reasoningParser string, trustRemoteCode bool, blockSize string, moeBackend string, enableExpertParallel bool, disableFlashInferAutotune bool, speculativeConfig string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, containerExposure string, serverAPIKey string, extraVLLMArgs []string) error {
 	hfCache = NormalizeHFHome(hfCache)
 	if hfCache == "" {
 		return validationError("hugging face cache directory is required")
@@ -836,6 +947,10 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	if err != nil {
 		return err
 	}
+	containerExposure, err = normalizeContainerExposure(containerExposure)
+	if err != nil {
+		return err
+	}
 
 	lock := getModelOperationLock(hfCache, model)
 	lock.Lock()
@@ -861,7 +976,7 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	if idx := strings.LastIndex(model, "/"); idx != -1 {
 		shortName = model[idx+1:]
 	}
-	shortName = sanitizeDockerNamePart(shortName)
+	shortName = SanitizeDockerNamePart(shortName)
 	containerName := fmt.Sprintf("vllm-%s-%d", shortName, port)
 
 	// Reject if any managed vLLM container (stopped or running) already
@@ -924,6 +1039,10 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	if err != nil {
 		return err
 	}
+	extraVLLMArgs, err = NormalizeExtraVLLMArgs(extraVLLMArgs)
+	if err != nil {
+		return err
+	}
 
 	// Check if port is already in use and hold the listener until the container
 	// is created.  This eliminates the TOCTOU window where another process could
@@ -948,6 +1067,11 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	if err != nil {
 		return err
 	}
+	effectiveGPUIDs := make([]string, 0, len(selectedGPUs))
+	for _, gpu := range selectedGPUs {
+		effectiveGPUIDs = append(effectiveGPUIDs, strconv.Itoa(gpu.ID))
+	}
+	effectiveGPUIDsValue := strings.Join(effectiveGPUIDs, ",")
 
 	// Fix #2 / GPT-P1a: reject if combined mem_util on any requested GPU would exceed 1.0
 	totalGPUCount := len(selectedGPUs)
@@ -984,12 +1108,30 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	// StartModel so the user gets a clear "reserved by existing container"
 	// error before we even probe the listener.
 
-	labels := map[string]string{
-		"app":                  "vllm-manager",
-		managedContainerLabel:  "true",
-		containerKindLabel:     containerKindServer,
-		containerModelLabel:    model,
-		"vllm-manager.version": managerVersion,
+	launchSpec := LaunchSpec{
+		Model:                     model,
+		Port:                      port,
+		GPUs:                      gpus,
+		GPUIDs:                    effectiveGPUIDsValue,
+		MemUtil:                   memUtil,
+		MaxLen:                    maxLen,
+		MaxNumSeqs:                maxNumSeqs,
+		KVCacheDType:              kvCacheDType,
+		ToolParser:                toolParser,
+		TokenizerMode:             tokenizerMode,
+		ReasoningParser:           reasoningParser,
+		TrustRemoteCode:           trustRemoteCode,
+		BlockSize:                 blockSize,
+		MoeBackend:                moeBackend,
+		ExpertParallel:            enableExpertParallel,
+		DisableFlashInferAutotune: disableFlashInferAutotune,
+		SpeculativeConfig:         speculativeConfig,
+		BindIP:                    hostBindAddr.String(),
+		ExtraVLLMArgs:             append([]string(nil), extraVLLMArgs...),
+	}
+	labels, err := serverContainerLabels(model, containerExposure, launchSpec)
+	if err != nil {
+		return err
 	}
 	env := []string{"HF_HOME=/hf_cache"}
 
@@ -1051,6 +1193,7 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 	if speculativeConfig != "" {
 		cmd = append(cmd, "--speculative-config", speculativeConfig)
 	}
+	cmd = append(cmd, extraVLLMArgs...)
 	if effectiveAPIKey != "" {
 		cmd = append(cmd, "--api-key", effectiveAPIKey)
 	}

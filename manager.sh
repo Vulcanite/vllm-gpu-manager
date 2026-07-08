@@ -8,6 +8,12 @@ HOST_SET=0
 PASSWORD=""
 NO_PROXY=""
 NO_PROXY_SET=0
+HTTPS=""
+HTTPS_SET=0
+MONITORING=""
+MONITORING_SET=0
+MONITORING_TARGETS_FILE=""
+MONITORING_TARGETS_FILE_SET=0
 
 ARGS_INPUT=("${@:2}")
 for ((i = 0; i < ${#ARGS_INPUT[@]}; i++)); do
@@ -34,6 +40,35 @@ for ((i = 0; i < ${#ARGS_INPUT[@]}; i++)); do
             NO_PROXY=1
             NO_PROXY_SET=1
             ;;
+        --https)
+            HTTPS=1
+            HTTPS_SET=1
+            ;;
+        --monitoring)
+            MONITORING=1
+            MONITORING_SET=1
+            ;;
+        --monitoring-targets-file)
+            if [ $((i + 1)) -ge ${#ARGS_INPUT[@]} ]; then
+                echo "Error: --monitoring-targets-file requires a path."
+                exit 1
+            fi
+            MONITORING_TARGETS_FILE="${ARGS_INPUT[$((i + 1))]}"
+            if [ -z "$MONITORING_TARGETS_FILE" ]; then
+                echo "Error: --monitoring-targets-file requires a path."
+                exit 1
+            fi
+            MONITORING_TARGETS_FILE_SET=1
+            i=$((i + 1))
+            ;;
+        --monitoring-targets-file=*)
+            MONITORING_TARGETS_FILE="${ARG#--monitoring-targets-file=}"
+            if [ -z "$MONITORING_TARGETS_FILE" ]; then
+                echo "Error: --monitoring-targets-file requires a path."
+                exit 1
+            fi
+            MONITORING_TARGETS_FILE_SET=1
+            ;;
         *)
             if [ "$PORT_SET" -eq 0 ] && [[ "$ARG" =~ ^[0-9]+$ ]]; then
                 PORT=$ARG
@@ -55,6 +90,9 @@ load_state_for_restart() {
     local saved_port=""
     local saved_host=""
     local saved_no_proxy=""
+    local saved_https=""
+    local saved_monitoring=""
+    local saved_monitoring_targets_file=""
     local saved_password=""
     while IFS='=' read -r key value; do
         case "$key" in
@@ -71,6 +109,19 @@ load_state_for_restart() {
                     saved_no_proxy=1
                 fi
                 ;;
+            HTTPS)
+                if [ "$value" = "1" ]; then
+                    saved_https=1
+                fi
+                ;;
+            MONITORING)
+                if [ "$value" = "1" ]; then
+                    saved_monitoring=1
+                fi
+                ;;
+            MONITORING_TARGETS_FILE)
+                saved_monitoring_targets_file="$value"
+                ;;
             PASSWORD)
                 saved_password="$value"
                 ;;
@@ -86,6 +137,15 @@ load_state_for_restart() {
     if [ "$NO_PROXY_SET" -eq 0 ]; then
         NO_PROXY="$saved_no_proxy"
     fi
+    if [ "$HTTPS_SET" -eq 0 ]; then
+        HTTPS="$saved_https"
+    fi
+    if [ "$MONITORING_SET" -eq 0 ]; then
+        MONITORING="$saved_monitoring"
+    fi
+    if [ "$MONITORING_TARGETS_FILE_SET" -eq 0 ] && [ -n "$saved_monitoring_targets_file" ]; then
+        MONITORING_TARGETS_FILE="$saved_monitoring_targets_file"
+    fi
     if [ -z "$PASSWORD" ] && [ -n "$saved_password" ]; then
         PASSWORD="$saved_password"
     fi
@@ -93,11 +153,17 @@ load_state_for_restart() {
 
 save_state() {
     local no_proxy_value="$1"
-    local password_value="$2"
+    local https_value="$2"
+    local monitoring_value="$3"
+    local monitoring_targets_file_value="$4"
+    local password_value="$5"
     {
         echo "PORT=$PORT"
         echo "HOST=$HOST"
         echo "NO_PROXY=$no_proxy_value"
+        echo "HTTPS=$https_value"
+        echo "MONITORING=$monitoring_value"
+        echo "MONITORING_TARGETS_FILE=$monitoring_targets_file_value"
         echo "PASSWORD=$password_value"
     } > "$STATE_FILE"
     chmod 600 "$STATE_FILE"
@@ -131,12 +197,36 @@ case "$1" in
             NO_PROXY_ENABLED=1
             echo "Proxy gateway disabled."
         fi
+        HTTPS_ENABLED=""
+        if [ -n "$HTTPS" ] || [ "$VLLM_MANAGER_HTTPS" = "1" ] || [ "$VLLM_MANAGER_HTTPS" = "true" ]; then
+            ARGS+=(--https)
+            HTTPS_ENABLED=1
+            echo "HTTPS enabled."
+        fi
+        MONITORING_ENABLED=""
+        ACTIVE_MONITORING_TARGETS_FILE="$MONITORING_TARGETS_FILE"
+        if [ -z "$ACTIVE_MONITORING_TARGETS_FILE" ]; then
+            ACTIVE_MONITORING_TARGETS_FILE="$VLLM_MANAGER_MONITORING_TARGETS_FILE"
+        fi
+        if [ -n "$MONITORING" ] || [ "$VLLM_MANAGER_MONITORING" = "1" ] || [ "$VLLM_MANAGER_MONITORING" = "true" ]; then
+            ARGS+=(--monitoring)
+            MONITORING_ENABLED=1
+            echo "Monitoring target sync enabled."
+        fi
+        if [ -n "$ACTIVE_MONITORING_TARGETS_FILE" ]; then
+            ARGS+=(--monitoring-targets-file "$ACTIVE_MONITORING_TARGETS_FILE")
+            echo "Monitoring targets file: $ACTIVE_MONITORING_TARGETS_FILE"
+        fi
 
-        save_state "${NO_PROXY_ENABLED:-0}" "$ACTIVE_PASSWORD"
+        save_state "${NO_PROXY_ENABLED:-0}" "${HTTPS_ENABLED:-0}" "${MONITORING_ENABLED:-0}" "$ACTIVE_MONITORING_TARGETS_FILE" "$ACTIVE_PASSWORD"
         DISPLAY_HOST="${HOST:-127.0.0.1}"
+        SCHEME="http"
+        if [ -n "$HTTPS_ENABLED" ]; then
+            SCHEME="https"
+        fi
         echo "Starting vllm-manager on $DISPLAY_HOST:$PORT in the background..."
         nohup ./vllm-manager "${ARGS[@]}" > vllm-manager.log 2>&1 &
-        echo "Done! Server is running at https://$DISPLAY_HOST:$PORT"
+        echo "Done! Server is running at $SCHEME://$DISPLAY_HOST:$PORT"
         echo "Logs: tail -f vllm-manager.log"
         ;;
     stop)
@@ -175,14 +265,26 @@ case "$1" in
         if [ -n "$NO_PROXY" ]; then
             RESTART_ARGS+=(--no-proxy)
         fi
+        if [ -n "$HTTPS" ]; then
+            RESTART_ARGS+=(--https)
+        fi
+        if [ -n "$MONITORING" ]; then
+            RESTART_ARGS+=(--monitoring)
+        fi
+        if [ -n "$MONITORING_TARGETS_FILE" ]; then
+            RESTART_ARGS+=(--monitoring-targets-file "$MONITORING_TARGETS_FILE")
+        fi
         "$0" "${RESTART_ARGS[@]}"
         ;;
     *)
-        echo "Usage: $0 {start|stop|status|restart} [port] [password] [--host <ip>] [--no-proxy]"
+        echo "Usage: $0 {start|stop|status|restart} [port] [password] [--host <ip>] [--no-proxy] [--https] [--monitoring] [--monitoring-targets-file <path>]"
         echo "  [port] defaults to 9090."
         echo "  [password] is optional and secures the dashboard."
         echo "  --host sets the dashboard bind IP, defaulting to the binary default."
         echo "  --no-proxy disables the /v1/ OpenAI-compatible proxy gateway."
+        echo "  --https enables self-signed HTTPS on the dashboard port."
+        echo "  --monitoring syncs running vLLM servers into the Prometheus file-SD targets file."
+        echo "  --monitoring-targets-file sets the Prometheus file-SD path; binary default is monitoring/runtime/vllm-targets.yml."
         exit 1
         ;;
 esac

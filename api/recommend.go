@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -351,7 +352,7 @@ func formatGPUCount(value int) string {
 	if value == 1 {
 		return "1 GPU"
 	}
-	return formatInt(value) + " GPUs"
+	return strconv.Itoa(value) + " GPUs"
 }
 
 func formatGB(value float64) string {
@@ -379,24 +380,15 @@ func clamp(value float64, min float64, max float64) float64 {
 func joinInts(values []int) string {
 	parts := make([]string, len(values))
 	for i, value := range values {
-		parts[i] = formatInt(value)
+		parts[i] = strconv.Itoa(value)
 	}
 	return strings.Join(parts, ",")
 }
 
-func formatInt(value int) string {
-	return formatFloat(float64(value))
-}
-
 func formatFloat(value float64) string {
-	formatted := jsonNumber(value)
+	formatted := strconv.FormatFloat(value, 'f', -1, 64)
 	if !strings.Contains(formatted, ".") {
 		return formatted
 	}
 	return strings.TrimRight(strings.TrimRight(formatted, "0"), ".")
-}
-
-func jsonNumber(value float64) string {
-	data, _ := json.Marshal(value)
-	return string(data)
 }

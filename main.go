@@ -30,7 +30,7 @@ func main() {
 		return
 	}
 
-	if shouldRunDashboard(os.Args[1:]) {
+	if hasDashboardFlag(os.Args[1:]) {
 		port, proxyEnabled, err := parseDashboardFlags(os.Args[1:], os.Stderr)
 		if err != nil {
 			os.Exit(2)
@@ -42,6 +42,7 @@ func main() {
 		runDashboard(dashboardOptions{
 			Host:         port.host,
 			Port:         port.value,
+			HTTPSEnabled: port.httpsEnabled,
 			ProxyEnabled: proxyEnabled,
 			Monitoring: monitoringOptions{
 				Enabled:     port.monitoringEnabled,
@@ -66,13 +67,10 @@ func hasDashboardFlag(args []string) bool {
 	return false
 }
 
-func shouldRunDashboard(args []string) bool {
-	return hasDashboardFlag(args)
-}
-
 type dashboardFlagValues struct {
 	value                 string
 	host                  string
+	httpsEnabled          bool
 	monitoringEnabled     bool
 	monitoringTargetsFile string
 	extraArgs             []string
@@ -84,6 +82,7 @@ func parseDashboardFlags(args []string, errOut io.Writer) (dashboardFlagValues, 
 	fs.Bool("dashboard", false, "Run the web dashboard")
 	port := fs.String("port", defaultDashboardPort, "Port to run the dashboard on")
 	host := fs.String("host", "127.0.0.1", "Host IP address to bind the dashboard on")
+	httpsEnabled := fs.Bool("https", false, "enable HTTPS with local server.crt/server.key")
 	noProxy := fs.Bool("no-proxy", false, "disable the OpenAI-compatible proxy gateway on /v1/")
 	monitoring := fs.Bool("monitoring", false, "sync running vLLM servers into the Prometheus file-SD targets file")
 	monitoringTargetsFile := fs.String("monitoring-targets-file", defaultMonitoringTargetsFile, "Prometheus file-SD targets file for vLLM metrics")
@@ -94,6 +93,7 @@ func parseDashboardFlags(args []string, errOut io.Writer) (dashboardFlagValues, 
 	return dashboardFlagValues{
 		value:                 *port,
 		host:                  *host,
+		httpsEnabled:          *httpsEnabled,
 		monitoringEnabled:     *monitoring,
 		monitoringTargetsFile: *monitoringTargetsFile,
 		extraArgs:             fs.Args(),

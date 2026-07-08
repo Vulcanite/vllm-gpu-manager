@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { ClipboardPaste } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { ActiveContainersCard } from '../components/launch/ActiveContainersCard.jsx';
@@ -7,7 +8,7 @@ import { DeployServerCard } from '../components/launch/DeployServerCard.jsx';
 import { DownloadModelCard } from '../components/launch/DownloadModelCard.jsx';
 import { ConfirmModal } from '../components/ConfirmModal.jsx';
 import { useAutoDismiss } from '../hooks/useAutoDismiss.js';
-import { deleteDownloadedModel, downloadModel, getErrorDetail, getModelInfo, removeModel, restartModel, startModel } from '../lib/api.js';
+import { deleteDownloadedModel, downloadModel, getErrorDetail, getModelInfo, getServerAPIKey, importModelCommand, removeModel, restartModel, startModel } from '../lib/api.js';
 import { formatBytes } from '../lib/format.js';
 
 const ACTIVE_DOWNLOAD_STORAGE_KEY = 'vllm-manager-active-download';
@@ -28,6 +29,31 @@ const DEFAULT_LAUNCH_CONFIG = {
   moe_backend_options: ['auto', 'cutlass', 'deepep_high_throughput', 'deepep_low_latency', 'flashinfer', 'flashinfer_all2allv', 'naive', 'pplx', 'triton'],
 };
 
+const createDefaultDeployConfig = () => ({
+  modelName: '',
+  port: '8080',
+  gpus: 1,
+  gpuIds: [],
+  mem: '0.5',
+  maxLen: '32768',
+  maxNumSeqs: '',
+  kvCacheDType: 'auto',
+  parser: '',
+  tokenizerMode: 'auto',
+  reasoningParser: '',
+  trustRemoteCode: false,
+  blockSize: '16',
+  moeBackend: 'auto',
+  enableExpertParallel: false,
+  disableFlashInferAutotune: false,
+  speculativeConfig: '',
+  extraVLLMArgs: [],
+  bindIP: '',
+  useServerApiKey: false,
+  useCustomServerApiKey: false,
+  serverApiKey: '',
+});
+
 const normalizeGpuPinning = (selectedIds, availableIds, requestedCount, useAll) => {
   if (useAll) return [];
 
@@ -38,6 +64,55 @@ const normalizeGpuPinning = (selectedIds, availableIds, requestedCount, useAll) 
     next = [...next, ...remainingIds.slice(0, requestedCount - next.length)];
   }
   return next;
+};
+
+const normalizeChangeValue = (value) => {
+  if (Array.isArray(value)) return JSON.stringify(value);
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (value === null || value === undefined || value === '') return 'Disabled';
+  return String(value);
+};
+
+const compactJSONString = (value) => {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  try {
+    return JSON.stringify(JSON.parse(text));
+  } catch {
+    return text;
+  }
+};
+
+const CHANGE_FIELDS = [
+  ['port', 'Port'],
+  ['gpus', 'GPUs'],
+  ['gpu_ids', 'GPU Pinning'],
+  ['mem_util', 'Memory Utilization'],
+  ['max_len', 'Max Context Length'],
+  ['max_num_seqs', 'Max Num Seqs'],
+  ['kv_cache_dtype', 'KV Cache DType'],
+  ['tool_parser', 'Tool Call Parser'],
+  ['tokenizer_mode', 'Tokenizer Mode'],
+  ['reasoning_parser', 'Reasoning Parser'],
+  ['trust_remote_code', 'Trust Remote Code'],
+  ['block_size', 'Block Size'],
+  ['moe_backend', 'MoE Backend'],
+  ['enable_expert_parallel', 'Expert Parallel'],
+  ['disable_flashinfer_autotune', 'Disable FlashInfer Autotune'],
+  ['speculative_config', 'Speculative Config'],
+  ['extra_vllm_args', 'Extra vLLM Args'],
+  ['bind_ip', 'Bind IP'],
+  ['use_api_key', 'API Key Authentication'],
+];
+
+const diffLaunchPayload = (before, after) => {
+  if (!before || !after) return [];
+  return CHANGE_FIELDS.flatMap(([key, label]) => {
+    const oldValue = normalizeChangeValue(before[key]);
+    const newValue = normalizeChangeValue(after[key]);
+    if (oldValue === newValue) return [];
+    return [{ key, label, oldValue, newValue }];
+  });
 };
 
 const shellQuote = (value) => {
@@ -85,6 +160,7 @@ const buildDockerRunCommand = (payload, { dockerGpuFlag = 'all', hfCache, hostBi
   if (payload.enable_expert_parallel) args.push('--enable-expert-parallel');
   if (payload.disable_flashinfer_autotune) args.push('--no-enable-flashinfer-autotune');
   if (payload.speculative_config) args.push('--speculative-config', payload.speculative_config);
+  if (Array.isArray(payload.extra_vllm_args)) args.push(...payload.extra_vllm_args);
   if (payload.use_api_key) args.push('--api-key', includeAPIKey && payload.server_api_key ? payload.server_api_key : '<redacted>');
 
   const valueFlags = new Set(['--gpus', '--name', '-p', '-v', '-e', '--model', '--host', '--port', '--tensor-parallel-size', '--gpu-memory-utilization', '--max-model-len', '--max-num-seqs', '--kv-cache-dtype', '--tool-call-parser', '--tokenizer-mode', '--reasoning-parser', '--block-size', '--moe-backend', '--speculative-config', '--api-key']);
@@ -99,6 +175,28 @@ const buildDockerRunCommand = (payload, { dockerGpuFlag = 'all', hfCache, hostBi
     }
   }
   return lines.join(' \\\n');
+};
+
+const ImportCommandFeedback = ({ result }) => {
+  if (!result) return null;
+  const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+  const unsupported = Array.isArray(result.unsupported) ? result.unsupported : [];
+  const ignored = Array.isArray(result.ignored) ? result.ignored : [];
+  const extras = Array.isArray(result.extra_vllm_args) ? result.extra_vllm_args : [];
+  if (warnings.length === 0 && unsupported.length === 0 && ignored.length === 0 && extras.length === 0 && !result.image) return null;
+
+  return (
+    <div className="import-command-feedback">
+      <div className="import-command-feedback-header">Imported command review</div>
+      {result.image && <div className="text-sm text-secondary">Image detected: <span className="text-primary">{result.image}</span>. The manager still uses the configured vLLM image.</div>}
+      {extras.length > 0 && <div className="text-sm text-secondary">Extra vLLM args: <code>{extras.join(' ')}</code></div>}
+      {warnings.map((warning) => (
+        <div key={warning} className="text-sm text-warning">{warning}</div>
+      ))}
+      {ignored.length > 0 && <div className="text-sm text-secondary">Ignored Docker args: <code>{ignored.join(' ')}</code></div>}
+      {unsupported.length > 0 && <div className="text-sm text-danger">Unsupported args were not imported: <code>{unsupported.join(' ')}</code></div>}
+    </div>
+  );
 };
 
 export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModels, launchConfig, fetchData, notify, vllmAPIKeySet = false, proxyEnabled = false }) => {
@@ -119,29 +217,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     ? launchConfig.moe_backend_options
     : DEFAULT_LAUNCH_CONFIG.moe_backend_options;
 
-  const [deployConfig, setDeployConfig] = useState({
-    modelName: '',
-    port: '8080',
-    gpus: 1,
-    gpuIds: [],
-    mem: '0.5',
-    maxLen: '32768',
-    maxNumSeqs: '',
-    kvCacheDType: 'auto',
-    parser: '',
-    tokenizerMode: 'auto',
-    reasoningParser: '',
-    trustRemoteCode: false,
-    blockSize: '16',
-    moeBackend: 'auto',
-    enableExpertParallel: false,
-    disableFlashInferAutotune: false,
-    speculativeConfig: '',
-    bindIP: '',
-    useServerApiKey: false,
-    useCustomServerApiKey: false,
-    serverApiKey: '',
-  });
+  const [deployConfig, setDeployConfig] = useState(createDefaultDeployConfig);
 
   const updateDeployConfig = (field, value) => {
     setDeployConfig((prev) => ({ ...prev, [field]: value }));
@@ -164,6 +240,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const startEnableExpertParallel = deployConfig.enableExpertParallel;
   const startDisableFlashInferAutotune = deployConfig.disableFlashInferAutotune;
   const startSpeculativeConfig = deployConfig.speculativeConfig;
+  const startExtraVLLMArgs = deployConfig.extraVLLMArgs;
   const startBindIP = deployConfig.bindIP;
   const startUseServerApiKey = deployConfig.useServerApiKey;
   const startUseCustomServerApiKey = deployConfig.useCustomServerApiKey;
@@ -172,6 +249,13 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const [launching, setLaunching] = useState(false);
   const [launchConfirmData, setLaunchConfirmData] = useState(null);
   const [deployModalOpen, setDeployModalOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState(null);
+  const [editOriginalPayload, setEditOriginalPayload] = useState(null);
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importCommandText, setImportCommandText] = useState('');
+  const [importCommandError, setImportCommandError] = useState('');
+  const [importCommandResult, setImportCommandResult] = useState(null);
+  const [importingCommand, setImportingCommand] = useState(false);
 
   const [downloadConfirmData, setDownloadConfirmData] = useState(null);
   const [downloadName, setDownloadName] = useState('');
@@ -212,6 +296,70 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     () => normalizeGpuPinning(startGpuIds, availableGpuIds, requestedGpuCount, usesAllGpus),
     [availableGpuIds, requestedGpuCount, startGpuIds, usesAllGpus],
   );
+  const editingServer = Boolean(editTarget);
+
+  const buildPayloadFromCurrentConfig = () => {
+    const gpusToSend = Number(startGpus);
+    const gpuIdsParam = usesAllGpus ? 'all' : [...selectedGpuIds].sort((a, b) => a - b).join(',');
+    const effectiveUseServerApiKey = !proxyEnabled && vllmAPIKeySet && startUseServerApiKey;
+    const effectiveServerApiKey = effectiveUseServerApiKey && startUseCustomServerApiKey ? startServerApiKey.trim() : '';
+    const compactSpeculativeConfig = compactJSONString(startSpeculativeConfig);
+    return {
+      payload: {
+        model: startModelName,
+        port: Number(startPort),
+        gpus: gpusToSend,
+        gpu_ids: gpuIdsParam,
+        mem_util: startMem !== null && startMem !== undefined ? startMem.toString() : '',
+        max_len: startMaxLen ? startMaxLen.toString() : '',
+        max_num_seqs: startMaxNumSeqs ? startMaxNumSeqs.toString() : '',
+        kv_cache_dtype: startKvCacheDType,
+        tool_parser: startParser || '',
+        tokenizer_mode: startTokenizerMode || 'auto',
+        reasoning_parser: startReasoningParser || '',
+        trust_remote_code: Boolean(startTrustRemoteCode),
+        block_size: startBlockSize ? startBlockSize.toString() : '',
+        moe_backend: startMoeBackend || 'auto',
+        enable_expert_parallel: Boolean(startEnableExpertParallel),
+        disable_flashinfer_autotune: Boolean(startDisableFlashInferAutotune),
+        speculative_config: compactSpeculativeConfig,
+        extra_vllm_args: Array.isArray(startExtraVLLMArgs) ? startExtraVLLMArgs : [],
+        bind_ip: !proxyEnabled ? startBindIP.trim() : '',
+        use_api_key: effectiveUseServerApiKey,
+        server_api_key: effectiveServerApiKey,
+      },
+      gpuIdsParam,
+    };
+  };
+
+  const buildComparablePayloadFromConfig = (config) => {
+    const gpuCount = Number(config.gpus) || 1;
+    const nextUsesAll = !noGpuDetected && gpuCount >= maxGpus;
+    const pinnedIds = normalizeGpuPinning(config.gpuIds || [], availableGpuIds, gpuCount, nextUsesAll);
+    const gpuIdsParam = nextUsesAll ? 'all' : pinnedIds.sort((a, b) => a - b).join(',');
+    return {
+      model: config.modelName,
+      port: Number(config.port),
+      gpus: gpuCount,
+      gpu_ids: gpuIdsParam,
+      mem_util: String(config.mem ?? ''),
+      max_len: String(config.maxLen ?? ''),
+      max_num_seqs: String(config.maxNumSeqs ?? ''),
+      kv_cache_dtype: config.kvCacheDType || 'auto',
+      tool_parser: config.parser || '',
+      tokenizer_mode: config.tokenizerMode || 'auto',
+      reasoning_parser: config.reasoningParser || '',
+      trust_remote_code: Boolean(config.trustRemoteCode),
+      block_size: String(config.blockSize ?? ''),
+      moe_backend: config.moeBackend || 'auto',
+      enable_expert_parallel: Boolean(config.enableExpertParallel),
+      disable_flashinfer_autotune: Boolean(config.disableFlashInferAutotune),
+      speculative_config: compactJSONString(config.speculativeConfig),
+      extra_vllm_args: Array.isArray(config.extraVLLMArgs) ? config.extraVLLMArgs : [],
+      bind_ip: !proxyEnabled ? String(config.bindIP || '').trim() : '',
+      use_api_key: !proxyEnabled && vllmAPIKeySet && Boolean(config.useServerApiKey),
+    };
+  };
 
   useAutoDismiss(launchError, setLaunchError);
   useAutoDismiss(restartError, setRestartError);
@@ -306,10 +454,139 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     updateDeployConfig('maxLen', String(next));
   };
 
+  const openDeployServer = () => {
+    setLaunchError('');
+    setImportCommandResult(null);
+    setEditTarget(null);
+    setEditOriginalPayload(null);
+    setDeployConfig(createDefaultDeployConfig());
+    setDeployModalOpen(true);
+  };
+
+  const openEditServer = async (model) => {
+    const active = ['running', 'restarting', 'paused'].includes(model.state);
+    if (active) {
+      setRemoveError('Stop this container before editing it.');
+      return;
+    }
+
+    setLaunchError('');
+    setImportCommandResult(null);
+    const spec = model.launch_spec;
+    if (!spec) {
+      setRemoveError('This container does not have complete launch metadata and cannot be edited.');
+      return;
+    }
+
+    const rawGpuIds = String(spec.gpu_ids || '').trim();
+    const parsedGpuIds = rawGpuIds && rawGpuIds !== 'all'
+      ? rawGpuIds.split(',').map((value) => Number(value.trim())).filter((value) => Number.isInteger(value))
+      : [];
+    const gpuCount = Number(spec.gpus) || parsedGpuIds.length || 1;
+    const nextUsesAll = !noGpuDetected && gpuCount >= maxGpus;
+    const apiKeyMode = String(model.api_key_mode || '').toLowerCase();
+    const usesCustomServerKey = apiKeyMode === 'custom' || Boolean(model.has_server_api_key);
+    let customServerKey = '';
+
+    if (!proxyEnabled && usesCustomServerKey) {
+      try {
+        const res = await getServerAPIKey(model.container_name);
+        customServerKey = res.data?.server_api_key || '';
+      } catch (error) {
+        setLaunchError(getErrorDetail(error, 'Could not load the custom API key for this server. Enter it again before updating.'));
+      }
+    }
+
+    const nextConfig = {
+      ...createDefaultDeployConfig(),
+      modelName: spec.model || '',
+      port: spec.port ? String(spec.port) : '8080',
+      gpus: gpuCount,
+      gpuIds: nextUsesAll ? [] : normalizeGpuPinning(parsedGpuIds, availableGpuIds, gpuCount, false),
+      mem: spec.mem_util || '0.5',
+      maxLen: spec.max_len || '',
+      maxNumSeqs: spec.max_num_seqs || '',
+      kvCacheDType: spec.kv_cache_dtype || 'auto',
+      parser: spec.tool_parser || '',
+      tokenizerMode: spec.tokenizer_mode || 'auto',
+      reasoningParser: spec.reasoning_parser || '',
+      trustRemoteCode: Boolean(spec.trust_remote_code),
+      blockSize: spec.block_size || '',
+      moeBackend: spec.moe_backend || 'auto',
+      enableExpertParallel: Boolean(spec.enable_expert_parallel),
+      disableFlashInferAutotune: Boolean(spec.disable_flashinfer_autotune),
+      speculativeConfig: spec.speculative_config || '',
+      extraVLLMArgs: Array.isArray(spec.extra_vllm_args) ? spec.extra_vllm_args : [],
+      bindIP: spec.bind_ip || '',
+      useServerApiKey: !proxyEnabled && apiKeyMode !== 'none',
+      useCustomServerApiKey: !proxyEnabled && usesCustomServerKey,
+      serverApiKey: customServerKey,
+    };
+
+    setDeployConfig(nextConfig);
+    setEditTarget(model);
+    setEditOriginalPayload(buildComparablePayloadFromConfig(nextConfig));
+    setDeployModalOpen(true);
+  };
+
+  const applyImportedCommand = async () => {
+    const command = importCommandText.trim();
+    if (!command) {
+      setImportCommandError('Paste a docker run or vLLM serve command first.');
+      return;
+    }
+
+    setImportingCommand(true);
+    setImportCommandError('');
+    try {
+      const res = await importModelCommand(command);
+      const data = res.data || {};
+      const fields = data.fields || {};
+      const importedGpuIds = String(fields.gpu_ids || '').trim();
+      const importedGpuIdList = importedGpuIds && importedGpuIds !== 'all'
+        ? importedGpuIds.split(',').map((value) => Number(value.trim())).filter((value) => Number.isInteger(value))
+        : [];
+      const importedGpuCount = importedGpuIds === 'all'
+        ? Math.max(1, maxGpus || Number(startGpus) || 1)
+        : Number(fields.gpus) || importedGpuIdList.length || Number(startGpus) || 1;
+      const nextGpuCount = noGpuDetected ? startGpus : Math.min(maxGpus, Math.max(1, importedGpuCount));
+      const nextUsesAll = !noGpuDetected && (importedGpuIds === 'all' || nextGpuCount >= maxGpus);
+
+      setDeployConfig((prev) => ({
+        ...prev,
+        modelName: fields.model || prev.modelName,
+        port: fields.port ? String(fields.port) : prev.port,
+        gpus: nextGpuCount,
+        gpuIds: nextUsesAll ? [] : normalizeGpuPinning(importedGpuIdList, availableGpuIds, nextGpuCount, false),
+        mem: fields.mem_util || prev.mem,
+        maxLen: fields.max_len || prev.maxLen,
+        maxNumSeqs: fields.max_num_seqs || prev.maxNumSeqs,
+        kvCacheDType: fields.kv_cache_dtype || prev.kvCacheDType,
+        parser: fields.tool_parser || prev.parser,
+        tokenizerMode: fields.tokenizer_mode || prev.tokenizerMode,
+        reasoningParser: fields.reasoning_parser || prev.reasoningParser,
+        trustRemoteCode: Boolean(fields.trust_remote_code) || prev.trustRemoteCode,
+        blockSize: fields.block_size || prev.blockSize,
+        moeBackend: fields.moe_backend || prev.moeBackend,
+        enableExpertParallel: Boolean(fields.enable_expert_parallel) || prev.enableExpertParallel,
+        disableFlashInferAutotune: Boolean(fields.disable_flashinfer_autotune) || prev.disableFlashInferAutotune,
+        speculativeConfig: fields.speculative_config || prev.speculativeConfig,
+        extraVLLMArgs: Array.isArray(data.extra_vllm_args) ? data.extra_vllm_args : [],
+      }));
+      setImportCommandResult(data);
+      setImportModalOpen(false);
+    } catch (error) {
+      setImportCommandError(getErrorDetail(error, 'Failed to parse command'));
+    } finally {
+      setImportingCommand(false);
+    }
+  };
+
   const validateLaunch = () => {
     const gpusToSend = Number(startGpus);
     if (noGpuDetected) return gpuUnavailableMessage;
     if (!startModelName) return 'Please select a model to launch';
+    if (editingServer && startModelName !== editTarget?.model) return 'The model cannot be changed while editing an existing server.';
     if (!Number.isInteger(gpusToSend) || gpusToSend < 1) return 'Must request at least 1 GPU.';
     if (gpusToSend > maxGpus) return `Cannot request ${gpusToSend} GPUs. Only ${maxGpus} available.`;
 
@@ -363,32 +640,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     }
 
     const gpusToSend = Number(startGpus);
-    const gpuIdsParam = usesAllGpus ? 'all' : [...selectedGpuIds].sort((a, b) => a - b).join(',');
-    const effectiveUseServerApiKey = !proxyEnabled && vllmAPIKeySet && startUseServerApiKey;
-    const effectiveServerApiKey = effectiveUseServerApiKey && startUseCustomServerApiKey ? startServerApiKey.trim() : '';
-    const compactSpeculativeConfig = startSpeculativeConfig.trim() ? JSON.stringify(JSON.parse(startSpeculativeConfig)) : '';
-    const payload = {
-      model: startModelName,
-      port: Number(startPort),
-      gpus: gpusToSend,
-      gpu_ids: gpuIdsParam,
-      mem_util: startMem !== null && startMem !== undefined ? startMem.toString() : '',
-      max_len: startMaxLen ? startMaxLen.toString() : '',
-      max_num_seqs: startMaxNumSeqs ? startMaxNumSeqs.toString() : '',
-      kv_cache_dtype: startKvCacheDType,
-      tool_parser: startParser || '',
-      tokenizer_mode: startTokenizerMode || 'auto',
-      reasoning_parser: startReasoningParser || '',
-      trust_remote_code: Boolean(startTrustRemoteCode),
-      block_size: startBlockSize ? startBlockSize.toString() : '',
-      moe_backend: startMoeBackend || 'auto',
-      enable_expert_parallel: Boolean(startEnableExpertParallel),
-      disable_flashinfer_autotune: Boolean(startDisableFlashInferAutotune),
-      speculative_config: compactSpeculativeConfig,
-      bind_ip: !proxyEnabled ? startBindIP.trim() : '',
-      use_api_key: effectiveUseServerApiKey,
-      server_api_key: effectiveServerApiKey,
-    };
+    const { payload, gpuIdsParam } = buildPayloadFromCurrentConfig();
 
     setLaunchConfirmData({
       payload,
@@ -399,21 +651,40 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         vllmImage: launchConfig?.vllm_image,
       }),
       gpuIds: gpuIdsParam,
+      editTarget,
+      changes: editingServer ? diffLaunchPayload(editOriginalPayload, payload) : [],
     });
     setDeployModalOpen(false);
   };
 
   const executeStart = async () => {
     if (!launchConfirmData) return;
+    const wasUpdate = Boolean(launchConfirmData.editTarget);
+    let removedOriginal = false;
     try {
       setLaunching(true);
-      await startModel(launchConfirmData.payload);
-      notify('Model starting. It may take a few minutes to be ready.');
+      if (launchConfirmData.editTarget?.container_id) {
+        await removeModel(launchConfirmData.editTarget.container_id);
+        removedOriginal = true;
+        setEditTarget(null);
+        setEditOriginalPayload(null);
+        await startModel(launchConfirmData.payload);
+        notify('Model server updated. It may take a few minutes to be ready.');
+      } else {
+        await startModel(launchConfirmData.payload);
+        notify('Model starting. It may take a few minutes to be ready.');
+      }
       setLaunchConfirmData(null);
+      setEditTarget(null);
+      setEditOriginalPayload(null);
       fetchData();
       navigate('/');
     } catch (error) {
-      setLaunchError(getErrorDetail(error, 'Failed to start model'));
+      if (removedOriginal) {
+        setEditTarget(null);
+        setEditOriginalPayload(null);
+      }
+      setLaunchError(getErrorDetail(error, wasUpdate ? 'Failed to update model server' : 'Failed to start model'));
       setLaunchConfirmData(null);
       setDeployModalOpen(true);
     } finally {
@@ -588,10 +859,8 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         <ActiveContainersCard
           activeModels={activeModels}
           handleRestart={handleRestart}
-          onDeployServer={() => {
-            setLaunchError('');
-            setDeployModalOpen(true);
-          }}
+          onDeployServer={openDeployServer}
+          onEditModel={openEditServer}
           removing={removing}
           removeError={removeError}
           requestRemove={(containerId) => {
@@ -606,14 +875,36 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
 
       {deployModalOpen && (
         <ConfirmModal
-          title="Deploy Server"
+          title={editingServer ? 'Edit Server' : 'Deploy Server'}
           contentClassName="deploy-server-modal"
           hideActions
           loading={launching}
+          titleAction={!editingServer && (
+            <button
+              className="btn btn-outline btn-compact"
+              type="button"
+              onClick={() => {
+                setImportCommandError('');
+                setImportModalOpen(true);
+              }}
+            >
+              <ClipboardPaste size={14} /> Import Command
+            </button>
+          )}
           onCancel={() => {
-            if (!launching) setDeployModalOpen(false);
+            if (!launching) {
+              setDeployModalOpen(false);
+              setEditTarget(null);
+              setEditOriginalPayload(null);
+            }
           }}
         >
+          <ImportCommandFeedback result={importCommandResult} />
+          {editingServer && (
+            <div className="edit-server-note">
+              This stopped container will be removed and recreated with the updated settings. The model cannot be changed while editing.
+            </div>
+          )}
           <DeployServerCard
             downloadedModels={downloadedModels}
             embedded
@@ -627,6 +918,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             launchError={launchError}
             launching={launching}
             maxGpus={maxGpus}
+            modelLocked={editingServer}
             noGpuDetected={noGpuDetected}
             selectedGpuIds={selectedGpuIds}
             serverApiKey={startServerApiKey}
@@ -654,6 +946,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             startMoeBackend={startMoeBackend}
             startEnableExpertParallel={startEnableExpertParallel}
             startDisableFlashInferAutotune={startDisableFlashInferAutotune}
+            startExtraVLLMArgs={startExtraVLLMArgs}
             startSpeculativeConfig={startSpeculativeConfig}
             startGpus={startGpus}
             startKvCacheDType={startKvCacheDType}
@@ -665,6 +958,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             startReasoningParser={startReasoningParser}
             startTokenizerMode={startTokenizerMode}
             startTrustRemoteCode={startTrustRemoteCode}
+            submitLabel={editingServer ? 'Update Server' : 'Deploy Server'}
             startBindIP={startBindIP}
             startPort={startPort}
             useServerApiKey={startUseServerApiKey}
@@ -679,10 +973,35 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         </ConfirmModal>
       )}
 
+      {importModalOpen && (
+        <ConfirmModal
+          title="Import vLLM Command"
+          confirmLabel="Import Command"
+          contentClassName="import-command-modal"
+          loading={importingCommand}
+          onCancel={() => {
+            if (!importingCommand) setImportModalOpen(false);
+          }}
+          onConfirm={applyImportedCommand}
+        >
+          {importCommandError && <div className="alert alert-danger">{importCommandError}</div>}
+          <p>Paste a <code>docker run</code> or <code>vllm serve</code> command. The manager will import supported launch settings and keep safe vLLM-only extras.</p>
+          <textarea
+            className="form-control code-textarea import-command-textarea"
+            value={importCommandText}
+            onChange={(event) => setImportCommandText(event.target.value)}
+            placeholder={'docker run --gpus all \\\n  -p 8000:8000 \\\n  vllm/vllm-openai:latest deepseek-ai/DeepSeek-V4-Flash \\\n  --trust-remote-code \\\n  --kv-cache-dtype fp8'}
+            rows={10}
+            spellCheck="false"
+            disabled={importingCommand}
+          />
+        </ConfirmModal>
+      )}
+
       {launchConfirmData && (
         <ConfirmModal
-          title="Review Deploy Command"
-          confirmLabel="Deploy Server"
+          title={launchConfirmData.editTarget ? 'Review Update Command' : 'Review Deploy Command'}
+          confirmLabel={launchConfirmData.editTarget ? 'Update Server' : 'Deploy Server'}
           contentClassName="deploy-command-modal"
           loading={launching}
           onCancel={() => {
@@ -705,6 +1024,22 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
               <span>{launchConfirmData.payload.port}</span>
             </div>
           </div>
+          {launchConfirmData.editTarget && (
+            <div className="update-change-list">
+              <div className="update-change-title">Changes to apply</div>
+              {launchConfirmData.changes.length > 0 ? (
+                launchConfirmData.changes.map((change) => (
+                  <div key={change.key} className="update-change-row">
+                    <span>{change.label}</span>
+                    <span>{change.oldValue}</span>
+                    <strong>{change.newValue}</strong>
+                  </div>
+                ))
+              ) : (
+                <div className="text-sm text-secondary">No launch settings changed. Updating will still recreate the stopped container.</div>
+              )}
+            </div>
+          )}
           <pre className="deploy-command-preview">
             <code>{launchConfirmData.command}</code>
           </pre>

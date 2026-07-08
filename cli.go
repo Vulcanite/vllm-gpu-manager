@@ -46,7 +46,8 @@ func newCLICommand(out io.Writer, errOut io.Writer) *cobra.Command {
 	cmd.SetErr(errOut)
 	cmd.Flags().Bool("dashboard", false, "run the web dashboard")
 	cmd.Flags().String("port", defaultDashboardPort, "dashboard port")
-	cmd.Flags().String("host", "0.0.0.0", "dashboard host bind IP")
+	cmd.Flags().String("host", "127.0.0.1", "dashboard host bind IP")
+	cmd.Flags().Bool("https", false, "enable HTTPS with local server.crt/server.key")
 	cmd.Flags().Bool("no-proxy", false, "disable the /v1/ proxy gateway in dashboard mode")
 	cmd.Flags().Bool("monitoring", false, "sync vLLM Prometheus targets while the dashboard is running")
 	cmd.Flags().String("monitoring-targets-file", defaultMonitoringTargetsFile, "Prometheus file-SD targets file for vLLM metrics")
@@ -65,6 +66,7 @@ func newCLICommand(out io.Writer, errOut io.Writer) *cobra.Command {
 		"  vllm-manager model start Qwen/Qwen2.5-7B-Instruct --port 8080 --gpus 1",
 		"  vllm-manager settings get",
 		"  vllm-manager --dashboard --port 9090",
+		"  vllm-manager --dashboard --port 9090 --https",
 		"  vllm-manager --dashboard --host 127.0.0.1 --port 9090",
 		"  vllm-manager --dashboard --port 9090 --no-proxy",
 		"  vllm-manager --dashboard --port 9090 --monitoring",
@@ -104,16 +106,16 @@ func newModelCommand(opts *cliOptions) *cobra.Command {
 			Use:   "active",
 			Short: "Show active vLLM serving containers",
 			Args:  cobra.NoArgs,
-			RunE: func(_ *cobra.Command, args []string) error {
-				return cliModelActive(args, *opts)
+			RunE: func(_ *cobra.Command, _ []string) error {
+				return cliModelActive(*opts)
 			},
 		},
 		&cobra.Command{
 			Use:   "cached",
 			Short: "Show downloaded models in the Hugging Face cache",
 			Args:  cobra.NoArgs,
-			RunE: func(_ *cobra.Command, args []string) error {
-				return cliModelCached(args, *opts)
+			RunE: func(_ *cobra.Command, _ []string) error {
+				return cliModelCached(*opts)
 			},
 		},
 		&cobra.Command{
@@ -198,7 +200,7 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 			if strings.TrimSpace(bindIP) != "" {
 				hostBindIP = strings.TrimSpace(bindIP)
 			}
-			if err := api.StartModel(args[0], port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, kvCacheDType, toolParser, tokenizerMode, reasoningParser, trustRemoteCode, blockSize, moeBackend, enableExpertParallel, disableFlashInferAutotune, speculativeConfig, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, ""); err != nil {
+			if err := api.StartModel(args[0], port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, kvCacheDType, toolParser, tokenizerMode, reasoningParser, trustRemoteCode, blockSize, moeBackend, enableExpertParallel, disableFlashInferAutotune, speculativeConfig, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, api.ContainerExposureDirect, "", nil); err != nil {
 				return err
 			}
 			upsertRoute(args[0], port)
@@ -392,8 +394,8 @@ func newSettingsCommand(opts *cliOptions) *cobra.Command {
 			Use:   "get",
 			Short: "Show local settings and system resources",
 			Args:  cobra.NoArgs,
-			RunE: func(_ *cobra.Command, args []string) error {
-				return cliSettingsGet(args, *opts)
+			RunE: func(_ *cobra.Command, _ []string) error {
+				return cliSettingsGet(*opts)
 			},
 		},
 		newSettingsSetCommand(opts),
@@ -499,10 +501,7 @@ func cliGPUList(opts cliOptions) error {
 	return nil
 }
 
-func cliModelActive(args []string, opts cliOptions) error {
-	if len(args) != 0 {
-		return fmt.Errorf("model active does not accept arguments: %s", strings.Join(args, " "))
-	}
+func cliModelActive(opts cliOptions) error {
 	models, err := api.GetActiveModels(getSettings().VLLMAPIKey)
 	if err != nil {
 		return err
@@ -517,10 +516,7 @@ func cliModelActive(args []string, opts cliOptions) error {
 	return nil
 }
 
-func cliModelCached(args []string, opts cliOptions) error {
-	if len(args) != 0 {
-		return fmt.Errorf("model cached does not accept arguments: %s", strings.Join(args, " "))
-	}
+func cliModelCached(opts cliOptions) error {
 	models, err := api.GetDownloadedModels(getSettings().HFCache)
 	if err != nil {
 		return err
@@ -536,10 +532,14 @@ func cliModelCached(args []string, opts cliOptions) error {
 	}
 	rows := make([][]string, 0, len(models))
 	for _, model := range models {
+		defaultMaxLen := "-"
+		if model.DefaultMaxModelLen != 0 {
+			defaultMaxLen = strconv.Itoa(model.DefaultMaxModelLen)
+		}
 		rows = append(rows, []string{
 			model.Name,
 			model.Size,
-			zeroAsDash(model.DefaultMaxModelLen),
+			defaultMaxLen,
 			api.FormatBytes(model.KVCacheBytesPerToken),
 		})
 	}
@@ -548,9 +548,6 @@ func cliModelCached(args []string, opts cliOptions) error {
 }
 
 func cliModelInfo(args []string, opts cliOptions) error {
-	if len(args) != 1 {
-		return errors.New("usage: model info <model>")
-	}
 	info, err := fetchHFModelInfo(args[0])
 	if err != nil {
 		return err
@@ -565,6 +562,10 @@ func cliModelInfo(args []string, opts cliOptions) error {
 		cachedBytes = 0
 	}
 	if opts.JSON {
+		cacheWarning := ""
+		if cacheErr != nil {
+			cacheWarning = cacheErr.Error()
+		}
 		return printJSON(map[string]interface{}{
 			"model":         info.Model,
 			"size_bytes":    info.SizeBytes,
@@ -572,7 +573,7 @@ func cliModelInfo(args []string, opts cliOptions) error {
 			"likes":         info.Likes,
 			"downloaded":    downloaded,
 			"cached_bytes":  cachedBytes,
-			"cache_warning": cacheWarning(cacheErr),
+			"cache_warning": cacheWarning,
 		})
 	}
 	cacheStatus := "no"
@@ -590,19 +591,9 @@ func cliModelInfo(args []string, opts cliOptions) error {
 	return nil
 }
 
-func cacheWarning(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
-}
-
 var downloadModelForCLI = api.DownloadModel
 
 func cliModelDownload(args []string, opts cliOptions) error {
-	if len(args) != 1 {
-		return errors.New("usage: model download <model>")
-	}
 	settings := getSettings()
 
 	// Pre-flight: surface a clear hint before the API call so the operator
@@ -636,9 +627,6 @@ func newModelDownloadCommand(opts *cliOptions) *cobra.Command {
 }
 
 func cliModelProgress(args []string, opts cliOptions) error {
-	if len(args) != 1 {
-		return errors.New("usage: model progress <model>")
-	}
 	size, err := api.GetModelDirectorySize(args[0], getSettings().HFCache)
 	if err != nil {
 		return err
@@ -688,10 +676,7 @@ func cliModelRecommend(opts cliOptions, useCase string, fitOnly bool, limit int)
 	return nil
 }
 
-func cliSettingsGet(args []string, opts cliOptions) error {
-	if len(args) != 0 {
-		return fmt.Errorf("settings get does not accept arguments: %s", strings.Join(args, " "))
-	}
+func cliSettingsGet(opts cliOptions) error {
 	status := getSettingsStatus()
 	if opts.JSON {
 		return printJSON(status)
@@ -888,13 +873,6 @@ func escapeCells(cells []string) []string {
 		escaped[i] = cell
 	}
 	return escaped
-}
-
-func zeroAsDash(value int) string {
-	if value == 0 {
-		return "-"
-	}
-	return strconv.Itoa(value)
 }
 
 func emptyAsDefault(value string, fallback string) string {

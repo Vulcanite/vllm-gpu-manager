@@ -45,7 +45,7 @@ func stubUpstreamAPIKeyLookup(t *testing.T, fn func(int) (string, error)) {
 	})
 }
 
-func TestShouldRunDashboard(t *testing.T) {
+func TestHasDashboardFlag(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
@@ -80,8 +80,8 @@ func TestShouldRunDashboard(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := shouldRunDashboard(tt.args); got != tt.want {
-				t.Fatalf("shouldRunDashboard(%v)=%v, want %v", tt.args, got, tt.want)
+			if got := hasDashboardFlag(tt.args); got != tt.want {
+				t.Fatalf("hasDashboardFlag(%v)=%v, want %v", tt.args, got, tt.want)
 			}
 		})
 	}
@@ -93,6 +93,7 @@ func TestParseDashboardFlagsProxyDefaults(t *testing.T) {
 		args      []string
 		wantPort  string
 		wantHost  string
+		wantHTTPS bool
 		wantProxy bool
 	}{
 		{
@@ -100,6 +101,7 @@ func TestParseDashboardFlagsProxyDefaults(t *testing.T) {
 			args:      []string{"--dashboard"},
 			wantPort:  defaultDashboardPort,
 			wantHost:  "127.0.0.1",
+			wantHTTPS: false,
 			wantProxy: true,
 		},
 		{
@@ -107,6 +109,15 @@ func TestParseDashboardFlagsProxyDefaults(t *testing.T) {
 			args:      []string{"--dashboard", "--port", "9443"},
 			wantPort:  "9443",
 			wantHost:  "127.0.0.1",
+			wantHTTPS: false,
+			wantProxy: true,
+		},
+		{
+			name:      "https is opt-in",
+			args:      []string{"--dashboard", "--https"},
+			wantPort:  defaultDashboardPort,
+			wantHost:  "127.0.0.1",
+			wantHTTPS: true,
 			wantProxy: true,
 		},
 		{
@@ -114,6 +125,7 @@ func TestParseDashboardFlagsProxyDefaults(t *testing.T) {
 			args:      []string{"--dashboard", "--host", "0.0.0.0"},
 			wantPort:  defaultDashboardPort,
 			wantHost:  "0.0.0.0",
+			wantHTTPS: false,
 			wantProxy: true,
 		},
 		{
@@ -121,6 +133,7 @@ func TestParseDashboardFlagsProxyDefaults(t *testing.T) {
 			args:      []string{"--dashboard", "--no-proxy"},
 			wantPort:  defaultDashboardPort,
 			wantHost:  "127.0.0.1",
+			wantHTTPS: false,
 			wantProxy: false,
 		},
 	}
@@ -137,10 +150,47 @@ func TestParseDashboardFlagsProxyDefaults(t *testing.T) {
 			if values.host != tt.wantHost {
 				t.Fatalf("host=%q, want %q", values.host, tt.wantHost)
 			}
+			if values.httpsEnabled != tt.wantHTTPS {
+				t.Fatalf("httpsEnabled=%v, want %v", values.httpsEnabled, tt.wantHTTPS)
+			}
 			if proxyEnabled != tt.wantProxy {
 				t.Fatalf("proxyEnabled=%v, want %v", proxyEnabled, tt.wantProxy)
 			}
 		})
+	}
+}
+
+func TestFilterDashboardModelsRequiresMatchingExposureAndLaunchSpec(t *testing.T) {
+	spec := &api.LaunchSpec{Model: "model/proxy", Port: 8082, GPUs: 1, GPUIDs: "0"}
+	models := []api.ActiveModel{
+		{Model: "model/proxy", Exposure: api.ContainerExposureProxy, LaunchSpec: spec},
+		{Model: "model/direct", Exposure: api.ContainerExposureDirect, LaunchSpec: &api.LaunchSpec{Model: "model/direct", Port: 8080, GPUs: 1, GPUIDs: "0"}},
+		{Model: "model/unlabeled", Exposure: "", LaunchSpec: spec},
+		{Model: "model/no-spec", Exposure: api.ContainerExposureProxy, LaunchSpec: nil},
+	}
+
+	proxyModels := filterDashboardModels(models, true)
+	if len(proxyModels) != 1 || proxyModels[0].Model != "model/proxy" {
+		t.Fatalf("proxyModels=%+v, want only proxy model with launch spec", proxyModels)
+	}
+	directModels := filterDashboardModels(models, false)
+	if len(directModels) != 1 || directModels[0].Model != "model/direct" {
+		t.Fatalf("directModels=%+v, want only direct model with launch spec", directModels)
+	}
+}
+
+func TestValidateRoutingTableUsesFilteredProxyModels(t *testing.T) {
+	spec := &api.LaunchSpec{Model: "Qwen/Qwen3", Port: 8082, GPUs: 1, GPUIDs: "0"}
+	models := filterDashboardModels([]api.ActiveModel{
+		{Model: "Qwen/Qwen3", Port: "8082", State: "running", Exposure: api.ContainerExposureProxy, LaunchSpec: spec},
+		{Model: "Qwen/Direct", Port: "8080", State: "running", Exposure: api.ContainerExposureDirect, LaunchSpec: &api.LaunchSpec{Model: "Qwen/Direct", Port: 8080, GPUs: 1, GPUIDs: "0"}},
+	}, true)
+
+	if _, err := validateRoutingTableForActiveModels(map[string]int{"Qwen/Qwen3": 8082}, models); err != nil {
+		t.Fatalf("validate proxy route returned error: %v", err)
+	}
+	if _, err := validateRoutingTableForActiveModels(map[string]int{"Qwen/Direct": 8080}, models); err == nil {
+		t.Fatal("validate direct route succeeded against proxy-filtered models; want error")
 	}
 }
 
@@ -648,7 +698,7 @@ func TestSettingsEndpointReturnsStatus(t *testing.T) {
 	t.Setenv("VLLM_MANAGER_PASSWORD", "")
 	cacheDir := t.TempDir()
 	resetSettingsCache(t, Settings{HFCache: cacheDir, HFToken: "hf-secret", VLLMAPIKey: "api-secret", EnableCUDACompatibility: true, HFHubOffline: true, VLLMImage: "vllm/vllm-openai:v0.4.3"}, true)
-	mux, _ := newDashboardMux(true)
+	mux, _ := newDashboardMuxWithOptions(dashboardOptions{ProxyEnabled: true})
 	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
 	rr := httptest.NewRecorder()
 
@@ -671,7 +721,7 @@ func TestSettingsEndpointReturnsStatus(t *testing.T) {
 
 func TestSPAFallbackServesIndex(t *testing.T) {
 	t.Setenv("VLLM_MANAGER_PASSWORD", "")
-	mux, _ := newDashboardMux(true)
+	mux, _ := newDashboardMuxWithOptions(dashboardOptions{ProxyEnabled: true})
 	req := httptest.NewRequest(http.MethodGet, "/settings", nil)
 	rr := httptest.NewRecorder()
 
@@ -701,7 +751,7 @@ func TestModelsInfoEndpointReportsDownloadedState(t *testing.T) {
 	}
 
 	resetSettingsCache(t, Settings{HFCache: cacheDir}, true)
-	mux, _ := newDashboardMux(true)
+	mux, _ := newDashboardMuxWithOptions(dashboardOptions{ProxyEnabled: true})
 
 	// Stub the network call.
 	original := fetchHFModelInfoForTest
@@ -1103,7 +1153,7 @@ func TestModelsDownloadEndpointReturns409WhenAlreadyDownloaded(t *testing.T) {
 	}
 
 	resetSettingsCache(t, Settings{HFCache: cacheDir}, true)
-	mux, _ := newDashboardMux(true)
+	mux, _ := newDashboardMuxWithOptions(dashboardOptions{ProxyEnabled: true})
 
 	body := strings.NewReader(`{"model":"Qwen/Qwen2.5-7B-Instruct"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/models/download", body)
