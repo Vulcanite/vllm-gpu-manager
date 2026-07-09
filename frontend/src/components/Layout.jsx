@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Activity, LogOut, Moon, Play, Settings, Sparkles, Sun, X, Network, FileText } from 'lucide-react';
+import { Activity, LogOut, Moon, Play, Settings, Sparkles, Sun, X, Network, FileText, ShieldCheck } from 'lucide-react';
 
 const NavItem = ({ to, icon, label }) => {
   const location = useLocation();
@@ -38,6 +38,7 @@ export const Layout = ({ authRequired = false, children, notice, systemError, on
             <NavItem to="/launch" icon={<Play size={20} />} label="Models" />
             {proxyEnabled && <NavItem to="/routing" icon={<Network size={20} />} label="Proxy Gateway" />}
             <NavItem to="/logs" icon={<FileText size={20} />} label="Logs" />
+            <NavItem to="/audit" icon={<ShieldCheck size={20} />} label="Audit" />
             <NavItem to="/settings" icon={<Settings size={20} />} label="Settings" />
           </nav>
         </div>

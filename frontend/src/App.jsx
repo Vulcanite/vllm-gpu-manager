@@ -10,6 +10,7 @@ import { RecommendedModels } from './pages/RecommendedModels.jsx';
 import { SettingsPage } from './pages/SettingsPage.jsx';
 import { TrafficRouting } from './pages/TrafficRouting.jsx';
 import { ContainerLogs } from './pages/ContainerLogs.jsx';
+import { AuditLogs } from './pages/AuditLogs.jsx';
 import { useAutoDismiss } from './hooks/useAutoDismiss.js';
 import { fetchOverview, getAuthStatus, getConfig, getErrorDetail, getSettings, login, logout, stopModel } from './lib/api.js';
 
@@ -272,6 +273,7 @@ const App = () => {
           {proxyEnabled && <Route path="/routing" element={<TrafficRouting notify={notify} />} />}
           <Route path="/settings" element={<SettingsPage fetchData={fetchData} notify={notify} proxyEnabled={proxyEnabled} />} />
           <Route path="/logs" element={<ContainerLogs containerId={new URLSearchParams(window.location.search).get('container_id') || ''} activeModels={activeModels} />} />
+          <Route path="/audit" element={<AuditLogs />} />
         </Routes>
       </Layout>
     );

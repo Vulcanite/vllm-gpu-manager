@@ -13,6 +13,7 @@ This project should stay focused on single-binary deployment for one GPU host. F
 - **Settings export and import:** Export sanitized settings and routing table; import secrets only when explicitly provided.
 - **Health diagnostics page:** Check Docker socket, NVIDIA runtime, `nvidia-smi`, vLLM image availability, HF cache path, disk space, and TLS cert status.
 - **Configurable vLLM image tag:** Allow `vllm/vllm-openai:<tag>` instead of hardcoding `latest` for reproducible deployments.
+- **DeepGEMM MegaMoE backend support:** Add `deep_gemm_mega_moe` as a guarded advanced MoE backend for DeepSeek-V4-style models. Validate `--enable-expert-parallel`, `model_type=deepseek_v4`, `expert_dtype=fp4`, and SM100-class GPUs before allowing launch.
 - **Systemd unit generator:** Add a CLI command that prints a systemd unit for running the single binary in dashboard mode.
 - **Recommended model improvements:** Add sort controls, richer "why this model" explanations, downloaded/not-downloaded filters, family tags, launch-risk indicators, recommendation modes such as Balanced/Max Quality/Fastest/Lowest VRAM, suggested `max_num_seqs`, compare mode, and catalog metadata such as license, source URL, notes, and last-reviewed date.
 

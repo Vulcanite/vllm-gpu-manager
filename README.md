@@ -162,6 +162,8 @@ Run host checks before setup or after driver/Docker changes:
 ./vllm-manager doctor --json
 ```
 
+`doctor` checks Linux, `nvidia-smi`, visible NVIDIA GPUs, driver-supported CUDA, Docker access, NVIDIA container runtime signals, Hugging Face cache access, and dashboard TLS files. The host CUDA toolkit (`nvcc`) is reported when present but remains optional for Docker-based serving.
+
 Then open:
 
 ```text
@@ -386,6 +388,7 @@ All APIs are under `/api`.
 | `GET`  | `/settings`                            | Read HF cache path, secret status, cache disk usage, and system RAM usage. |
 | `POST` | `/settings`                            | Save HF cache path and optionally update or clear stored secrets.          |
 | `GET`  | `/settings/vllm-api-key`               | Reveal the stored global vLLM API key.                                    |
+| `GET`  | `/audit-logs`                          | Return recent manager audit events.                                       |
 | `GET`  | `/proxy-users`                         | List proxy API key users and request counts.                              |
 | `POST` | `/proxy-users`                         | Create a proxy API key user.                                              |
 | `GET`  | `/proxy-users/key?username=<name>`      | Reveal a proxy user's API key.                                            |

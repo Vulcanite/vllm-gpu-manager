@@ -91,6 +91,8 @@ export const getRoutingTable = () => axios.get(`${API_BASE}/routing`);
 
 export const saveRoutingTable = (payload) => axios.post(`${API_BASE}/routing`, payload);
 
+export const getAuditLogs = (limit = 200) => axios.get(`${API_BASE}/audit-logs?limit=${encodeURIComponent(limit)}`);
+
 export const getContainerLogs = (containerId) =>
     axios.get(`${API_BASE}/models/logs?container_id=${encodeURIComponent(containerId)}`);
 
