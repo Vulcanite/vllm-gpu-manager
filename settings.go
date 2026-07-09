@@ -672,48 +672,59 @@ func upsertServerAPIKey(containerName string, apiKey string) {
 // removeServerAPIKey drops any per-server API key whose container name matches.
 // The map can stay with empty entries, but we keep it tidy so settings.json
 // doesn't accumulate stale keys.
-func removeServerAPIKey(containerName string) {
+func removeServerAPIKey(containerName string) bool {
 	settingsCacheMu.Lock()
 	defer settingsCacheMu.Unlock()
 	refreshSettingsCacheFromDiskIfPresentLocked()
 	if settingsCache.ServerAPIKeys == nil {
-		return
+		return false
 	}
+	_, existed := settingsCache.ServerAPIKeys[containerName]
 	delete(settingsCache.ServerAPIKeys, containerName)
 	_ = saveSettingsLocked(settingsCache)
+	return existed
 }
 
 // removeServerAPIKeyByPort walks the per-server key map and removes the entry
 // whose container name ends with the given port suffix. This mirrors
 // removeRouteByPort so callers don't have to know the container name.
-func removeServerAPIKeyByPort(port int) {
+func removeServerAPIKeyByPort(port int) []string {
 	suffix := fmt.Sprintf("-%d", port)
+	removed := []string{}
 	settingsCacheMu.Lock()
 	defer settingsCacheMu.Unlock()
 	refreshSettingsCacheFromDiskIfPresentLocked()
 	if settingsCache.ServerAPIKeys == nil {
-		return
+		return removed
 	}
 	for name := range settingsCache.ServerAPIKeys {
 		if strings.HasSuffix(name, suffix) {
 			delete(settingsCache.ServerAPIKeys, name)
+			removed = append(removed, name)
 		}
 	}
 	_ = saveSettingsLocked(settingsCache)
+	sort.Strings(removed)
+	return removed
 }
 
-func cleanupModelStateForPort(port int) {
+func cleanupModelStateForPort(port int) []string {
 	removeRouteByPort(port)
-	removeServerAPIKeyByPort(port)
+	return removeServerAPIKeyByPort(port)
 }
 
-func cleanupModelStateForActiveModel(model api.ActiveModel) {
+func cleanupModelStateForActiveModel(model api.ActiveModel) []string {
+	removed := []string{}
 	if port, err := strconv.Atoi(model.Port); err == nil {
-		cleanupModelStateForPort(port)
+		removed = append(removed, cleanupModelStateForPort(port)...)
 	}
 	if strings.TrimSpace(model.ContainerName) != "" {
-		removeServerAPIKey(model.ContainerName)
+		if removeServerAPIKey(model.ContainerName) {
+			removed = append(removed, model.ContainerName)
+		}
 	}
+	sort.Strings(removed)
+	return removed
 }
 
 func cleanupModelStateForContainerID(containerID string) {

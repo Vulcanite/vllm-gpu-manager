@@ -1002,6 +1002,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         <ConfirmModal
           title={launchConfirmData.editTarget ? 'Review Update Command' : 'Review Deploy Command'}
           confirmLabel={launchConfirmData.editTarget ? 'Update Server' : 'Deploy Server'}
+          cancelLabel="Back"
           contentClassName="deploy-command-modal"
           loading={launching}
           onCancel={() => {
