@@ -70,11 +70,11 @@ func TestParseImportedCommandRejectsBadQuoting(t *testing.T) {
 }
 
 func TestNormalizeExtraVLLMArgs(t *testing.T) {
-	got, err := NormalizeExtraVLLMArgs([]string{"--served-model-name=alias", "--disable-log-requests"})
+	got, err := NormalizeExtraVLLMArgs([]string{"--served-model-name=alias", "--disable-log-requests", "--language-model-only"})
 	if err != nil {
 		t.Fatalf("NormalizeExtraVLLMArgs() error=%v", err)
 	}
-	if !reflect.DeepEqual(got, []string{"--served-model-name", "alias", "--disable-log-requests"}) {
+	if !reflect.DeepEqual(got, []string{"--served-model-name", "alias", "--disable-log-requests", "--language-model-only"}) {
 		t.Fatalf("NormalizeExtraVLLMArgs()=%v", got)
 	}
 

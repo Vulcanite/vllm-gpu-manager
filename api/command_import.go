@@ -105,6 +105,7 @@ var allowedExtraVLLMFlags = map[string]vllmFlagSpec{
 	"--enable-chunked-prefill":       {hasValue: false},
 	"--enable-prompt-embeds":         {hasValue: false},
 	"--enforce-eager":                {hasValue: false},
+	"--language-model-only":          {hasValue: false},
 }
 
 var dockerValueFlags = map[string]struct{}{
