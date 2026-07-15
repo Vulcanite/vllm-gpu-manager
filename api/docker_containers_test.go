@@ -195,6 +195,7 @@ func TestBuildActiveModelUsesLaunchSpecLabelsForEditMetadata(t *testing.T) {
 		MemUtil:                   "0.85",
 		MaxLen:                    "32768",
 		MaxNumSeqs:                "8",
+		CPUOffloadGB:              "16",
 		KVCacheDType:              "fp8",
 		ToolParser:                "deepseek_v4",
 		TokenizerMode:             "deepseek_v4",
@@ -244,8 +245,8 @@ func TestBuildActiveModelUsesLaunchSpecLabelsForEditMetadata(t *testing.T) {
 	if model.Exposure != ContainerExposureProxy {
 		t.Fatalf("Exposure=%q, want proxy", model.Exposure)
 	}
-	if model.Model != spec.Model || model.Port != "9090" || model.GPUs != "2" {
-		t.Fatalf("model fields=%q/%q/%q, want launch spec values", model.Model, model.Port, model.GPUs)
+	if model.Model != spec.Model || model.Port != "9090" || model.GPUs != "2" || model.CPUOffloadGB != "16" {
+		t.Fatalf("model fields=%q/%q/%q/%q, want launch spec values", model.Model, model.Port, model.GPUs, model.CPUOffloadGB)
 	}
 	if model.ServedModelName != spec.ServedModelName {
 		t.Fatalf("ServedModelName=%q, want %q", model.ServedModelName, spec.ServedModelName)
@@ -267,6 +268,7 @@ func TestServerContainerLabelsIncludeExposureAndLaunchSpec(t *testing.T) {
 		GPUIDs:          "0,1",
 		MemUtil:         "0.9",
 		MaxLen:          "32768",
+		CPUOffloadGB:    "8",
 		KVCacheDType:    "auto",
 		TokenizerMode:   "auto",
 		MoeBackend:      "auto",
@@ -610,8 +612,60 @@ func TestNormalizeSpeculativeConfig(t *testing.T) {
 	}
 }
 
+func TestNormalizeCPUOffloadGB(t *testing.T) {
+	tests := []struct {
+		value string
+		want  int
+	}{
+		{value: "", want: 0},
+		{value: "0", want: 0},
+		{value: "16", want: 16},
+		{value: " 32 ", want: 32},
+	}
+	for _, test := range tests {
+		got, err := normalizeCPUOffloadGB(test.value)
+		if err != nil {
+			t.Fatalf("normalizeCPUOffloadGB(%q) error=%v", test.value, err)
+		}
+		if got != test.want {
+			t.Fatalf("normalizeCPUOffloadGB(%q)=%d, want %d", test.value, got, test.want)
+		}
+	}
+
+	for _, value := range []string{"-1", "1.5", "bad"} {
+		if _, err := normalizeCPUOffloadGB(value); err == nil {
+			t.Fatalf("normalizeCPUOffloadGB(%q) accepted invalid value", value)
+		}
+	}
+}
+
+func TestValidateCPUOffloadRAM(t *testing.T) {
+	ram := SystemRAM{Free: 40 * bytesPerGiB}
+	if err := validateCPUOffloadRAM(16, 2, ram); err != nil {
+		t.Fatalf("validateCPUOffloadRAM returned error: %v", err)
+	}
+	if err := validateCPUOffloadRAM(17, 2, ram); err == nil {
+		t.Fatal("validateCPUOffloadRAM accepted insufficient RAM")
+	} else if !IsValidationError(err) {
+		t.Fatalf("error type=%T, want ValidationError", err)
+	}
+	if err := validateCPUOffloadRAM(0, 2, SystemRAM{}); err != nil {
+		t.Fatalf("validateCPUOffloadRAM disabled returned error: %v", err)
+	}
+}
+
+func TestCPUOffloadUlimits(t *testing.T) {
+	if got := cpuOffloadUlimits(0); got != nil {
+		t.Fatalf("cpuOffloadUlimits(0)=%v, want nil", got)
+	}
+	got := cpuOffloadUlimits(1)
+	if len(got) != 1 || got[0].Name != "memlock" || got[0].Soft != -1 || got[0].Hard != -1 {
+		t.Fatalf("cpuOffloadUlimits(1)=%+v, want memlock -1:-1", got)
+	}
+}
+
 func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", ContainerExposureDirect, "per-server-key", nil)
+	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "0", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", ContainerExposureDirect, "per-server-key", nil)
 	if err == nil {
 		t.Fatal("StartModel accepted both global and per-server key; want validation error")
 	}
@@ -624,7 +678,7 @@ func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
 }
 
 func TestStartModelRejectsWhitespaceInPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "", false, false, "0.0.0.0", ContainerExposureDirect, "key with space", nil)
+	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "0", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "", false, false, "0.0.0.0", ContainerExposureDirect, "key with space", nil)
 	if err == nil {
 		t.Fatal("StartModel accepted whitespace in per-server key; want validation error")
 	}

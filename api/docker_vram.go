@@ -37,17 +37,22 @@ var kvCacheDTypeOptions = []string{"auto", "fp8", "fp8_e5m2", "fp8_e4m3"}
 // backend's VRAM preflight preview. Serving these from one place keeps the
 // frontend estimate in sync with CheckModelFitsInVRAM.
 type LaunchConfig struct {
-	ModelVRAMSafetyMargin       float64  `json:"model_vram_safety_margin"`
-	DefaultGPUMemoryUtilization float64  `json:"default_gpu_memory_utilization"`
-	DefaultMaxModelLen          int      `json:"default_max_model_len"`
-	HFCache                     string   `json:"hf_cache,omitempty"`
-	VLLMImage                   string   `json:"vllm_image"`
-	KVCacheDTypeOptions         []string `json:"kv_cache_dtype_options"`
-	ToolParserOptions           []string `json:"tool_parser_options"`
-	TokenizerModeOptions        []string `json:"tokenizer_mode_options"`
-	ReasoningParserOptions      []string `json:"reasoning_parser_options"`
-	BlockSizeOptions            []int    `json:"block_size_options"`
-	MoeBackendOptions           []string `json:"moe_backend_options"`
+	ModelVRAMSafetyMargin       float64           `json:"model_vram_safety_margin"`
+	DefaultGPUMemoryUtilization float64           `json:"default_gpu_memory_utilization"`
+	DefaultMaxModelLen          int               `json:"default_max_model_len"`
+	HFCache                     string            `json:"hf_cache,omitempty"`
+	VLLMImage                   string            `json:"vllm_image"`
+	RAMTotal                    uint64            `json:"ram_total"`
+	RAMFree                     uint64            `json:"ram_free"`
+	CPUOffloadRAMSafetyFactor   float64           `json:"cpu_offload_ram_safety_factor"`
+	GPUTopologyLinks            []GPUTopologyLink `json:"gpu_topology_links,omitempty"`
+	GPUTopologyError            string            `json:"gpu_topology_error,omitempty"`
+	KVCacheDTypeOptions         []string          `json:"kv_cache_dtype_options"`
+	ToolParserOptions           []string          `json:"tool_parser_options"`
+	TokenizerModeOptions        []string          `json:"tokenizer_mode_options"`
+	ReasoningParserOptions      []string          `json:"reasoning_parser_options"`
+	BlockSizeOptions            []int             `json:"block_size_options"`
+	MoeBackendOptions           []string          `json:"moe_backend_options"`
 }
 
 // LaunchDefaults returns the launch tuning constants shared with the frontend.
@@ -57,6 +62,7 @@ func LaunchDefaults() LaunchConfig {
 		DefaultGPUMemoryUtilization: defaultGPUMemoryUtilization,
 		DefaultMaxModelLen:          defaultMaxModelLen,
 		VLLMImage:                   VLLMImage,
+		CPUOffloadRAMSafetyFactor:   CPUOffloadRAMSafetyFactor,
 		KVCacheDTypeOptions:         append([]string(nil), kvCacheDTypeOptions...),
 		ToolParserOptions:           allowedToolParserNames(),
 		TokenizerModeOptions:        append([]string(nil), tokenizerModeOptions...),

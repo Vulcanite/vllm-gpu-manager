@@ -37,6 +37,7 @@ type startModelRequest struct {
 	MemUtil                   string   `json:"mem_util"`
 	MaxLen                    string   `json:"max_len"`
 	MaxNumSeqs                string   `json:"max_num_seqs"`
+	CPUOffloadGB              string   `json:"cpu_offload_gb"`
 	KVCacheDType              string   `json:"kv_cache_dtype"`
 	ToolParser                string   `json:"tool_parser"`
 	TokenizerMode             string   `json:"tokenizer_mode"`
@@ -349,6 +350,10 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 	mux.HandleFunc("/api/config", apiHandler(func(w http.ResponseWriter, r *http.Request) {
 		config := api.LaunchDefaults()
 		config.HFCache = getSettings().HFCache
+		ram := api.GetSystemRAM()
+		config.RAMTotal = ram.Total
+		config.RAMFree = ram.Free
+		config.GPUTopologyLinks, config.GPUTopologyError = api.GetGPUTopologyLinks()
 		writeJSON(w, config)
 	}))
 
@@ -448,8 +453,8 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			return
 		}
 
-		log.Printf("[API] /api/models/start requested! Model=%s ServedModelName=%s Port=%d GPUs=%d GPUIDs=%s MemUtil=%s MaxLen=%s MaxNumSeqs=%s KVCacheDType=%s Parser=%s TokenizerMode=%s ReasoningParser=%s TrustRemoteCode=%t BlockSize=%s MoeBackend=%s ExpertParallel=%t DisableFlashInferAutotune=%t SpeculativeConfigSet=%t\n",
-			req.Model, req.ServedModelName, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, strings.TrimSpace(req.SpeculativeConfig) != "")
+		log.Printf("[API] /api/models/start requested! Model=%s ServedModelName=%s Port=%d GPUs=%d GPUIDs=%s MemUtil=%s MaxLen=%s MaxNumSeqs=%s CPUOffloadGB=%s KVCacheDType=%s Parser=%s TokenizerMode=%s ReasoningParser=%s TrustRemoteCode=%t BlockSize=%s MoeBackend=%s ExpertParallel=%t DisableFlashInferAutotune=%t SpeculativeConfigSet=%t\n",
+			req.Model, req.ServedModelName, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.CPUOffloadGB, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, strings.TrimSpace(req.SpeculativeConfig) != "")
 
 		_, err := api.RequireDetectedGPUs()
 		if err != nil {
@@ -480,7 +485,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			vllmAPIKey = ""
 		}
 		auditParams := auditLaunchParams(req, containerExposure, hostBindIP)
-		if err := api.StartModel(req.Model, req.ServedModelName, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, req.SpeculativeConfig, settings.HFCache, settings.HFToken, vllmAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, containerExposure, serverAPIKey, req.ExtraVLLMArgs); err != nil {
+		if err := api.StartModel(req.Model, req.ServedModelName, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.CPUOffloadGB, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, req.SpeculativeConfig, settings.HFCache, settings.HFToken, vllmAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, containerExposure, serverAPIKey, req.ExtraVLLMArgs); err != nil {
 			appendAuditEvent(auditEvent{
 				Action:  "model_deploy",
 				Result:  "failed",

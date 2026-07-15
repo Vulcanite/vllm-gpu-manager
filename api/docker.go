@@ -20,6 +20,7 @@ type ActiveModel struct {
 	MemUtil                   string      `json:"mem_util"`
 	MaxLen                    string      `json:"max_len"`
 	MaxNumSeqs                string      `json:"max_num_seqs"`
+	CPUOffloadGB              string      `json:"cpu_offload_gb"`
 	KVCacheDType              string      `json:"kv_cache_dtype"`
 	ToolParser                string      `json:"tool_parser"`
 	TokenizerMode             string      `json:"tokenizer_mode"`
@@ -57,6 +58,7 @@ type LaunchSpec struct {
 	MemUtil                   string   `json:"mem_util"`
 	MaxLen                    string   `json:"max_len"`
 	MaxNumSeqs                string   `json:"max_num_seqs"`
+	CPUOffloadGB              string   `json:"cpu_offload_gb"`
 	KVCacheDType              string   `json:"kv_cache_dtype"`
 	ToolParser                string   `json:"tool_parser"`
 	TokenizerMode             string   `json:"tokenizer_mode"`

@@ -13,6 +13,7 @@ import { formatBytes } from '../lib/format.js';
 import { getVLLMDocsUrl } from '../lib/vllmDocs.js';
 
 const ACTIVE_DOWNLOAD_STORAGE_KEY = 'vllm-manager-active-download';
+const DEFAULT_MAX_NUM_SEQS = '256';
 
 // Fallback values mirror api.LaunchDefaults(). The live values are fetched from
 // /api/config so this preview cannot drift from the backend VRAM preflight; the
@@ -23,6 +24,11 @@ const DEFAULT_LAUNCH_CONFIG = {
   default_max_model_len: 32768,
   hf_cache: '~/.cache/huggingface',
   vllm_image: 'vllm/vllm-openai:v0.23.0-cu129',
+  ram_total: 0,
+  ram_free: 0,
+  cpu_offload_ram_safety_factor: 1.25,
+  gpu_topology_links: [],
+  gpu_topology_error: '',
   kv_cache_dtype_options: ['auto', 'fp8', 'fp8_e5m2', 'fp8_e4m3'],
   tokenizer_mode_options: ['auto', 'hf', 'slow', 'mistral', 'deepseek_v32', 'deepseek_v4'],
   reasoning_parser_options: ['deepseek_r1', 'deepseek_v4', 'ernie_x1', 'glm45', 'granite', 'hunyuan_a13b', 'mistral', 'openai_gptoss', 'qwen3'],
@@ -37,7 +43,9 @@ const createDefaultDeployConfig = () => ({
   gpuIds: [],
   mem: '0.5',
   maxLen: '32768',
-  maxNumSeqs: '',
+  maxNumSeqs: DEFAULT_MAX_NUM_SEQS,
+  cpuOffloadGB: '0',
+  languageModelOnly: false,
   servedModelName: '',
   kvCacheDType: 'auto',
   parser: '',
@@ -47,7 +55,6 @@ const createDefaultDeployConfig = () => ({
   blockSize: '16',
   moeBackend: 'auto',
   enableExpertParallel: false,
-  disableFlashInferAutotune: false,
   speculativeConfig: '',
   extraVLLMArgs: '',
   bindIP: '',
@@ -92,6 +99,8 @@ const CHANGE_FIELDS = [
   ['mem_util', 'Memory Utilization'],
   ['max_len', 'Max Context Length'],
   ['max_num_seqs', 'Max Num Seqs'],
+  ['language_model_only', 'Language Model Only'],
+  ['cpu_offload_gb', 'CPU Offload'],
   ['served_model_name', 'Served Model Name'],
   ['kv_cache_dtype', 'KV Cache DType'],
   ['tool_parser', 'Tool Call Parser'],
@@ -101,7 +110,6 @@ const CHANGE_FIELDS = [
   ['block_size', 'Block Size'],
   ['moe_backend', 'MoE Backend'],
   ['enable_expert_parallel', 'Expert Parallel'],
-  ['disable_flashinfer_autotune', 'Disable FlashInfer Autotune'],
   ['speculative_config', 'Speculative Config'],
   ['extra_vllm_args', 'Extra vLLM Args'],
   ['bind_ip', 'Bind IP'],
@@ -172,9 +180,11 @@ const parseExtraVLLMArgsText = (text) => {
 
 const extraArgsTextFromTokens = (tokens) => (Array.isArray(tokens) ? tokens.map(shellQuote).join('\n') : '');
 
-const extractServedModelNameFromExtraArgs = (tokens) => {
+const extractManagedFieldsFromExtraArgs = (tokens) => {
   const extraArgs = [];
   let servedModelName = '';
+  let cpuOffloadGB = '';
+  let languageModelOnly = false;
   const values = Array.isArray(tokens) ? tokens : [];
   for (let i = 0; i < values.length; i += 1) {
     const token = String(values[i] ?? '');
@@ -187,10 +197,34 @@ const extractServedModelNameFromExtraArgs = (tokens) => {
       servedModelName = token.slice('--served-model-name='.length).trim();
       continue;
     }
+    if (token === '--cpu-offload-gb') {
+      cpuOffloadGB = String(values[i + 1] ?? '').trim();
+      i += 1;
+      continue;
+    }
+    if (token.startsWith('--cpu-offload-gb=')) {
+      cpuOffloadGB = token.slice('--cpu-offload-gb='.length).trim();
+      continue;
+    }
+    if (token === '--language-model-only') {
+      languageModelOnly = true;
+      continue;
+    }
     extraArgs.push(token);
   }
-  return { servedModelName, extraArgs };
+  return { servedModelName, cpuOffloadGB, languageModelOnly, extraArgs };
 };
+
+const BYTES_PER_GIB = 1024 ** 3;
+
+const cpuOffloadValue = (value) => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
+};
+
+const cpuOffloadRequiredBytes = (cpuOffloadGB, gpuCount, safetyFactor) => (
+  cpuOffloadValue(cpuOffloadGB) * Math.max(1, Number(gpuCount) || 1) * (Number(safetyFactor) || 1.25) * BYTES_PER_GIB
+);
 
 const dockerContainerName = (model, port) => {
   const shortName = String(model || '').split('/').pop() || 'model';
@@ -208,6 +242,9 @@ const buildDockerRunCommand = (payload, { dockerGpuFlag = 'all', hfCache, hostBi
     '--gpus', dockerGpuFlag,
     '--name', dockerContainerName(payload.model, payload.port),
     '--ipc=host',
+  ];
+  if (cpuOffloadValue(payload.cpu_offload_gb) > 0) args.push('--ulimit', 'memlock=-1:-1');
+  args.push(
     '-p', hostPort,
     '-v', `${cachePath}:/hf_cache`,
     '-e', 'HF_HOME=/hf_cache',
@@ -218,10 +255,11 @@ const buildDockerRunCommand = (payload, { dockerGpuFlag = 'all', hfCache, hostBi
     '--tensor-parallel-size', String(payload.gpus),
     '--gpu-memory-utilization', payload.mem_util,
     '--enable-prefix-caching',
-  ];
+  );
   if (payload.served_model_name) args.push('--served-model-name', payload.served_model_name);
   if (payload.max_len) args.push('--max-model-len', payload.max_len);
   if (payload.max_num_seqs) args.push('--max-num-seqs', payload.max_num_seqs);
+  if (cpuOffloadValue(payload.cpu_offload_gb) > 0) args.push('--cpu-offload-gb', String(payload.cpu_offload_gb));
   if (payload.kv_cache_dtype && payload.kv_cache_dtype !== 'auto') args.push('--kv-cache-dtype', payload.kv_cache_dtype);
   if (payload.tool_parser) args.push('--tool-call-parser', payload.tool_parser, '--enable-auto-tool-choice');
   if (payload.tokenizer_mode && payload.tokenizer_mode !== 'auto') args.push('--tokenizer-mode', payload.tokenizer_mode);
@@ -230,12 +268,11 @@ const buildDockerRunCommand = (payload, { dockerGpuFlag = 'all', hfCache, hostBi
   if (payload.block_size) args.push('--block-size', payload.block_size);
   if (payload.moe_backend && payload.moe_backend !== 'auto') args.push('--moe-backend', payload.moe_backend);
   if (payload.enable_expert_parallel) args.push('--enable-expert-parallel');
-  if (payload.disable_flashinfer_autotune) args.push('--no-enable-flashinfer-autotune');
   if (payload.speculative_config) args.push('--speculative-config', payload.speculative_config);
   if (Array.isArray(payload.extra_vllm_args)) args.push(...payload.extra_vllm_args);
   if (payload.use_api_key) args.push('--api-key', includeAPIKey && payload.server_api_key ? payload.server_api_key : '<redacted>');
 
-  const valueFlags = new Set(['--gpus', '--name', '-p', '-v', '-e', '--model', '--served-model-name', '--host', '--port', '--tensor-parallel-size', '--gpu-memory-utilization', '--max-model-len', '--max-num-seqs', '--kv-cache-dtype', '--tool-call-parser', '--tokenizer-mode', '--reasoning-parser', '--block-size', '--moe-backend', '--speculative-config', '--api-key']);
+  const valueFlags = new Set(['--gpus', '--name', '--ulimit', '-p', '-v', '-e', '--model', '--served-model-name', '--host', '--port', '--tensor-parallel-size', '--gpu-memory-utilization', '--max-model-len', '--max-num-seqs', '--cpu-offload-gb', '--kv-cache-dtype', '--tool-call-parser', '--tokenizer-mode', '--reasoning-parser', '--block-size', '--moe-backend', '--speculative-config', '--api-key']);
   const lines = [`${args[0]} ${args[1]}`];
   for (let i = 2; i < args.length; i += 1) {
     const arg = args[i];
@@ -295,6 +332,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const MOE_BACKEND_OPTIONS = launchConfig?.moe_backend_options?.length
     ? launchConfig.moe_backend_options
     : DEFAULT_LAUNCH_CONFIG.moe_backend_options;
+  const CPU_OFFLOAD_SAFETY_FACTOR = Number(launchConfig?.cpu_offload_ram_safety_factor) || DEFAULT_LAUNCH_CONFIG.cpu_offload_ram_safety_factor;
   const vllmDocsUrl = getVLLMDocsUrl(launchConfig?.vllm_image || DEFAULT_LAUNCH_CONFIG.vllm_image, 'cli/serve');
 
   const [deployConfig, setDeployConfig] = useState(createDefaultDeployConfig);
@@ -310,6 +348,8 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const startMem = deployConfig.mem;
   const startMaxLen = deployConfig.maxLen;
   const startMaxNumSeqs = deployConfig.maxNumSeqs;
+  const startCPUOffloadGB = deployConfig.cpuOffloadGB;
+  const startLanguageModelOnly = deployConfig.languageModelOnly;
   const startServedModelName = deployConfig.servedModelName;
   const startKvCacheDType = deployConfig.kvCacheDType;
   const startParser = deployConfig.parser;
@@ -319,7 +359,6 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const startBlockSize = deployConfig.blockSize;
   const startMoeBackend = deployConfig.moeBackend;
   const startEnableExpertParallel = deployConfig.enableExpertParallel;
-  const startDisableFlashInferAutotune = deployConfig.disableFlashInferAutotune;
   const startSpeculativeConfig = deployConfig.speculativeConfig;
   const startExtraVLLMArgs = deployConfig.extraVLLMArgs;
   const startBindIP = deployConfig.bindIP;
@@ -378,6 +417,49 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     [availableGpuIds, requestedGpuCount, startGpuIds, usesAllGpus],
   );
   const editingServer = Boolean(editTarget);
+  const cpuOffloadGBNumber = Number(startCPUOffloadGB);
+  const ramFreeBytes = Number(launchConfig?.ram_free) || 0;
+  const cpuOffloadMaxGB = ramFreeBytes > 0 && requestedGpuCount > 0
+    ? Math.floor(ramFreeBytes / (requestedGpuCount * CPU_OFFLOAD_SAFETY_FACTOR * BYTES_PER_GIB))
+    : null;
+  const cpuOffloadRequestedBytes = cpuOffloadValue(startCPUOffloadGB) * requestedGpuCount * BYTES_PER_GIB;
+  const cpuOffloadRequiredRAMBytes = cpuOffloadRequiredBytes(startCPUOffloadGB, requestedGpuCount, CPU_OFFLOAD_SAFETY_FACTOR);
+  const cpuOffloadRAMSummary = cpuOffloadValue(startCPUOffloadGB) > 0
+    ? `${startCPUOffloadGB} GiB/GPU x ${requestedGpuCount} GPU${requestedGpuCount === 1 ? '' : 's'} = ${formatBytes(cpuOffloadRequestedBytes)} requested; ${formatBytes(cpuOffloadRequiredRAMBytes)} required with safety margin.`
+    : 'Disabled. Set 1 GiB or more to offload model weights to system RAM.';
+
+  const buildTopologyWarnings = (payload, gpuIdsParam) => {
+    if (cpuOffloadValue(payload.cpu_offload_gb) <= 0) return [];
+    const ids = gpuIdsParam === 'all'
+      ? availableGpuIds.slice(0, Number(payload.gpus) || 1)
+      : String(gpuIdsParam || '').split(',').map((value) => Number(value.trim())).filter((value) => Number.isInteger(value));
+    if (ids.length <= 1) return [];
+
+    const links = Array.isArray(launchConfig?.gpu_topology_links) ? launchConfig.gpu_topology_links : [];
+    if (links.length === 0) {
+      return [`CPU offload is enabled, but GPU topology could not be verified${launchConfig?.gpu_topology_error ? `: ${launchConfig.gpu_topology_error}` : '.'}`];
+    }
+    const warnings = [];
+    for (let i = 0; i < ids.length; i += 1) {
+      for (let j = i + 1; j < ids.length; j += 1) {
+        const a = ids[i];
+        const b = ids[j];
+        const link = links.find((item) => (
+          (Number(item.gpu_a) === a && Number(item.gpu_b) === b) ||
+          (Number(item.gpu_a) === b && Number(item.gpu_b) === a)
+        ));
+        if (!link) {
+          warnings.push(`CPU offload is enabled, but topology for GPU ${a} - GPU ${b} is unknown.`);
+          continue;
+        }
+        const linkName = String(link.link || '').toUpperCase();
+        if (linkName === 'SYS' || linkName === 'PHB') {
+          warnings.push(`CPU offload may be slow on GPU ${a} - GPU ${b}; topology link is ${linkName}.`);
+        }
+      }
+    }
+    return warnings;
+  };
 
   const buildPayloadFromCurrentConfig = () => {
     const gpusToSend = Number(startGpus);
@@ -386,6 +468,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     const effectiveServerApiKey = effectiveUseServerApiKey && startUseCustomServerApiKey ? startServerApiKey.trim() : '';
     const compactSpeculativeConfig = compactJSONString(startSpeculativeConfig);
     const extraVLLMArgs = parseExtraVLLMArgsText(startExtraVLLMArgs);
+    if (startLanguageModelOnly) extraVLLMArgs.push('--language-model-only');
     return {
       payload: {
         model: startModelName,
@@ -396,6 +479,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         mem_util: startMem !== null && startMem !== undefined ? startMem.toString() : '',
         max_len: startMaxLen ? startMaxLen.toString() : '',
         max_num_seqs: startMaxNumSeqs ? startMaxNumSeqs.toString() : '',
+        cpu_offload_gb: startCPUOffloadGB ? startCPUOffloadGB.toString() : '0',
         kv_cache_dtype: startKvCacheDType,
         tool_parser: startParser || '',
         tokenizer_mode: startTokenizerMode || 'auto',
@@ -404,7 +488,6 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         block_size: startBlockSize ? startBlockSize.toString() : '',
         moe_backend: startMoeBackend || 'auto',
         enable_expert_parallel: Boolean(startEnableExpertParallel),
-        disable_flashinfer_autotune: Boolean(startDisableFlashInferAutotune),
         speculative_config: compactSpeculativeConfig,
         extra_vllm_args: extraVLLMArgs,
         bind_ip: !proxyEnabled ? startBindIP.trim() : '',
@@ -429,6 +512,8 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       mem_util: String(config.mem ?? ''),
       max_len: String(config.maxLen ?? ''),
       max_num_seqs: String(config.maxNumSeqs ?? ''),
+      language_model_only: Boolean(config.languageModelOnly),
+      cpu_offload_gb: String(config.cpuOffloadGB ?? '0'),
       kv_cache_dtype: config.kvCacheDType || 'auto',
       tool_parser: config.parser || '',
       tokenizer_mode: config.tokenizerMode || 'auto',
@@ -437,7 +522,6 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       block_size: String(config.blockSize ?? ''),
       moe_backend: config.moeBackend || 'auto',
       enable_expert_parallel: Boolean(config.enableExpertParallel),
-      disable_flashinfer_autotune: Boolean(config.disableFlashInferAutotune),
       speculative_config: compactJSONString(config.speculativeConfig),
       extra_vllm_args: parseExtraVLLMArgsText(config.extraVLLMArgs),
       bind_ip: !proxyEnabled ? String(config.bindIP || '').trim() : '',
@@ -475,6 +559,8 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         mem: searchParams.get('mem_util') || prev.mem,
         maxLen: searchParams.get('max_len') || prev.maxLen,
         maxNumSeqs: searchParams.get('max_num_seqs') || prev.maxNumSeqs,
+        languageModelOnly: searchParams.get('language_model_only') === 'true' || prev.languageModelOnly,
+        cpuOffloadGB: searchParams.get('cpu_offload_gb') || prev.cpuOffloadGB,
         kvCacheDType: searchParams.get('kv_cache_dtype') || prev.kvCacheDType,
         tokenizerMode: searchParams.get('tokenizer_mode') || prev.tokenizerMode,
         reasoningParser: searchParams.get('reasoning_parser') || prev.reasoningParser,
@@ -482,7 +568,6 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         blockSize: searchParams.get('block_size') || prev.blockSize,
         moeBackend: searchParams.get('moe_backend') || prev.moeBackend,
         enableExpertParallel: searchParams.get('enable_expert_parallel') === 'true' || prev.enableExpertParallel,
-        disableFlashInferAutotune: searchParams.get('disable_flashinfer_autotune') === 'true' || prev.disableFlashInferAutotune,
       }));
       setDeployModalOpen(true);
     }, 0);
@@ -582,7 +667,11 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       }
     }
 
-    const extractedExtras = extractServedModelNameFromExtraArgs(spec.extra_vllm_args);
+    const extractedExtras = extractManagedFieldsFromExtraArgs(spec.extra_vllm_args);
+    const editExtraArgs = [...extractedExtras.extraArgs];
+    if (spec.disable_flashinfer_autotune) {
+      editExtraArgs.push('--no-enable-flashinfer-autotune');
+    }
     const nextConfig = {
       ...createDefaultDeployConfig(),
       modelName: spec.model || '',
@@ -592,7 +681,9 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       gpuIds: nextUsesAll ? [] : normalizeGpuPinning(parsedGpuIds, availableGpuIds, gpuCount, false),
       mem: spec.mem_util || '0.5',
       maxLen: spec.max_len || '',
-      maxNumSeqs: spec.max_num_seqs || '',
+      maxNumSeqs: spec.max_num_seqs || DEFAULT_MAX_NUM_SEQS,
+      cpuOffloadGB: spec.cpu_offload_gb || extractedExtras.cpuOffloadGB || '0',
+      languageModelOnly: Boolean(extractedExtras.languageModelOnly),
       kvCacheDType: spec.kv_cache_dtype || 'auto',
       parser: spec.tool_parser || '',
       tokenizerMode: spec.tokenizer_mode || 'auto',
@@ -601,9 +692,8 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       blockSize: spec.block_size || '',
       moeBackend: spec.moe_backend || 'auto',
       enableExpertParallel: Boolean(spec.enable_expert_parallel),
-      disableFlashInferAutotune: Boolean(spec.disable_flashinfer_autotune),
       speculativeConfig: spec.speculative_config || '',
-      extraVLLMArgs: extraArgsTextFromTokens(extractedExtras.extraArgs),
+      extraVLLMArgs: extraArgsTextFromTokens(editExtraArgs),
       bindIP: spec.bind_ip || '',
       useServerApiKey: !proxyEnabled && apiKeyMode !== 'none',
       useCustomServerApiKey: !proxyEnabled && usesCustomServerKey,
@@ -638,6 +728,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         : Number(fields.gpus) || importedGpuIdList.length || Number(startGpus) || 1;
       const nextGpuCount = noGpuDetected ? startGpus : Math.min(maxGpus, Math.max(1, importedGpuCount));
       const nextUsesAll = !noGpuDetected && (importedGpuIds === 'all' || nextGpuCount >= maxGpus);
+      const importedExtras = extractManagedFieldsFromExtraArgs(data.extra_vllm_args);
 
       setDeployConfig((prev) => ({
         ...prev,
@@ -649,6 +740,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         mem: fields.mem_util || prev.mem,
         maxLen: fields.max_len || prev.maxLen,
         maxNumSeqs: fields.max_num_seqs || prev.maxNumSeqs,
+        cpuOffloadGB: fields.cpu_offload_gb || prev.cpuOffloadGB,
         kvCacheDType: fields.kv_cache_dtype || prev.kvCacheDType,
         parser: fields.tool_parser || prev.parser,
         tokenizerMode: fields.tokenizer_mode || prev.tokenizerMode,
@@ -657,9 +749,9 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         blockSize: fields.block_size || prev.blockSize,
         moeBackend: fields.moe_backend || prev.moeBackend,
         enableExpertParallel: Boolean(fields.enable_expert_parallel) || prev.enableExpertParallel,
-        disableFlashInferAutotune: Boolean(fields.disable_flashinfer_autotune) || prev.disableFlashInferAutotune,
         speculativeConfig: fields.speculative_config || prev.speculativeConfig,
-        extraVLLMArgs: extraArgsTextFromTokens(data.extra_vllm_args),
+        languageModelOnly: importedExtras.languageModelOnly || prev.languageModelOnly,
+        extraVLLMArgs: extraArgsTextFromTokens(importedExtras.extraArgs),
       }));
       setImportCommandResult(data);
       setImportModalOpen(false);
@@ -698,6 +790,15 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       }
     }
 
+    if (startCPUOffloadGB !== '') {
+      if (Number.isNaN(cpuOffloadGBNumber) || cpuOffloadGBNumber < 0 || !Number.isInteger(cpuOffloadGBNumber)) {
+        return 'CPU offload must be a non-negative whole number of GiB per GPU.';
+      }
+      if (cpuOffloadGBNumber > 0 && cpuOffloadMaxGB !== null && cpuOffloadGBNumber > cpuOffloadMaxGB) {
+        return `CPU offload is too high for available RAM. Max for ${gpusToSend} GPU${gpusToSend === 1 ? '' : 's'} is ${Math.max(0, cpuOffloadMaxGB)} GiB/GPU.`;
+      }
+    }
+
     if (startParser && !/^[a-zA-Z0-9_-]+$/.test(startParser)) return 'Tool parser must contain only letters, numbers, underscores, and hyphens';
     if (!TOKENIZER_MODE_OPTIONS.includes(startTokenizerMode)) return 'Tokenizer mode is not supported by this vLLM Manager build.';
     if (startReasoningParser && !REASONING_PARSER_OPTIONS.includes(startReasoningParser)) return 'Reasoning parser is not supported by this vLLM Manager build.';
@@ -714,6 +815,12 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       const extraArgs = parseExtraVLLMArgsText(startExtraVLLMArgs);
       if (extraArgs.some((arg) => arg === '--served-model-name' || arg.startsWith('--served-model-name='))) {
         return 'Served model name has a dedicated field. Remove --served-model-name from Extra vLLM Args.';
+      }
+      if (extraArgs.some((arg) => arg === '--cpu-offload-gb' || arg.startsWith('--cpu-offload-gb='))) {
+        return 'CPU offload has a dedicated field. Remove --cpu-offload-gb from Extra vLLM Args.';
+      }
+      if (extraArgs.some((arg) => arg === '--language-model-only')) {
+        return 'Language model only has a dedicated toggle. Remove --language-model-only from Extra vLLM Args.';
       }
     } catch (error) {
       return error.message || 'Extra vLLM args could not be parsed.';
@@ -754,6 +861,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         vllmImage: launchConfig?.vllm_image,
       }),
       gpuIds: gpuIdsParam,
+      warnings: buildTopologyWarnings(payload, gpuIdsParam),
       editTarget,
       changes: editingServer ? diffLaunchPayload(editOriginalPayload, payload) : [],
     });
@@ -1036,13 +1144,14 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             setStartBlockSize={(v) => updateDeployConfig('blockSize', v)}
             setStartMoeBackend={(v) => updateDeployConfig('moeBackend', v)}
             setStartEnableExpertParallel={(v) => updateDeployConfig('enableExpertParallel', v)}
-            setStartDisableFlashInferAutotune={(v) => updateDeployConfig('disableFlashInferAutotune', v)}
+            setStartLanguageModelOnly={(v) => updateDeployConfig('languageModelOnly', v)}
             setStartSpeculativeConfig={(v) => updateDeployConfig('speculativeConfig', v)}
             setUseServerApiKey={(v) => updateDeployConfig('useServerApiKey', v)}
             setUseCustomServerApiKey={(v) => updateDeployConfig('useCustomServerApiKey', v)}
             setStartKvCacheDType={(v) => updateDeployConfig('kvCacheDType', v)}
             setStartMaxLen={(v) => updateDeployConfig('maxLen', v)}
             setStartMaxNumSeqs={(v) => updateDeployConfig('maxNumSeqs', v)}
+            setStartCPUOffloadGB={(v) => updateDeployConfig('cpuOffloadGB', v)}
             setStartServedModelName={(v) => updateDeployConfig('servedModelName', v)}
             scaleMaxLen={scaleMaxLen}
             setStartMem={(v) => updateDeployConfig('mem', v)}
@@ -1057,13 +1166,16 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             startBlockSize={startBlockSize}
             startMoeBackend={startMoeBackend}
             startEnableExpertParallel={startEnableExpertParallel}
-            startDisableFlashInferAutotune={startDisableFlashInferAutotune}
+            startLanguageModelOnly={startLanguageModelOnly}
             startExtraVLLMArgs={startExtraVLLMArgs}
             startSpeculativeConfig={startSpeculativeConfig}
             startGpus={startGpus}
             startKvCacheDType={startKvCacheDType}
             startMaxLen={startMaxLen}
             startMaxNumSeqs={startMaxNumSeqs}
+            startCPUOffloadGB={startCPUOffloadGB}
+            cpuOffloadMaxGB={cpuOffloadMaxGB}
+            cpuOffloadRAMSummary={cpuOffloadRAMSummary}
             startServedModelName={startServedModelName}
             startMem={startMem}
             startModelName={startModelName}
@@ -1152,6 +1264,13 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
               ) : (
                 <div className="text-sm text-secondary">No launch settings changed. Updating will still recreate the stopped container.</div>
               )}
+            </div>
+          )}
+          {launchConfirmData.warnings?.length > 0 && (
+            <div className="deploy-command-warnings">
+              {launchConfirmData.warnings.map((warning) => (
+                <div key={warning} className="text-sm text-warning">{warning}</div>
+              ))}
             </div>
           )}
           <pre className="deploy-command-preview">

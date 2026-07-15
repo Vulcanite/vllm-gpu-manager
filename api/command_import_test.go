@@ -16,6 +16,8 @@ func TestParseImportedDockerRunCommand(t *testing.T) {
   --block-size 256 \
   --tensor-parallel-size 2 \
   --served-model-name DeepSeek-V4 \
+  --cpu-offload-gb 16 \
+  --no-enable-flashinfer-autotune \
   --enable-chunked-prefill \
   --speculative-config '{"method":"dspark","num_speculative_tokens":7}'`
 
@@ -41,7 +43,10 @@ func TestParseImportedDockerRunCommand(t *testing.T) {
 	if got.Fields.ServedModelName != "DeepSeek-V4" {
 		t.Fatalf("served_model_name=%q", got.Fields.ServedModelName)
 	}
-	if !reflect.DeepEqual(got.ExtraVLLMArgs, []string{"--enable-chunked-prefill"}) {
+	if got.Fields.CPUOffloadGB != "16" {
+		t.Fatalf("cpu_offload_gb=%q", got.Fields.CPUOffloadGB)
+	}
+	if !reflect.DeepEqual(got.ExtraVLLMArgs, []string{"--no-enable-flashinfer-autotune", "--enable-chunked-prefill"}) {
 		t.Fatalf("extra=%v", got.ExtraVLLMArgs)
 	}
 	if !containsString(got.Unsupported, "--privileged") {
@@ -73,16 +78,19 @@ func TestParseImportedCommandRejectsBadQuoting(t *testing.T) {
 }
 
 func TestNormalizeExtraVLLMArgs(t *testing.T) {
-	got, err := NormalizeExtraVLLMArgs([]string{"--disable-log-requests", "--language-model-only"})
+	got, err := NormalizeExtraVLLMArgs([]string{"--disable-log-requests", "--language-model-only", "--no-enable-flashinfer-autotune"})
 	if err != nil {
 		t.Fatalf("NormalizeExtraVLLMArgs() error=%v", err)
 	}
-	if !reflect.DeepEqual(got, []string{"--disable-log-requests", "--language-model-only"}) {
+	if !reflect.DeepEqual(got, []string{"--disable-log-requests", "--language-model-only", "--no-enable-flashinfer-autotune"}) {
 		t.Fatalf("NormalizeExtraVLLMArgs()=%v", got)
 	}
 
 	if _, err := NormalizeExtraVLLMArgs([]string{"--served-model-name=alias"}); err == nil {
 		t.Fatal("NormalizeExtraVLLMArgs accepted managed --served-model-name")
+	}
+	if _, err := NormalizeExtraVLLMArgs([]string{"--cpu-offload-gb", "16"}); err == nil {
+		t.Fatal("NormalizeExtraVLLMArgs accepted managed --cpu-offload-gb")
 	}
 	if _, err := NormalizeExtraVLLMArgs([]string{"--model", "Qwen/Qwen3"}); err == nil {
 		t.Fatal("NormalizeExtraVLLMArgs accepted managed --model")

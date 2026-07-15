@@ -7,24 +7,24 @@ import (
 )
 
 type ImportedCommandFields struct {
-	Model                     string `json:"model,omitempty"`
-	ServedModelName           string `json:"served_model_name,omitempty"`
-	Port                      int    `json:"port,omitempty"`
-	GPUs                      int    `json:"gpus,omitempty"`
-	GPUIDs                    string `json:"gpu_ids,omitempty"`
-	MemUtil                   string `json:"mem_util,omitempty"`
-	MaxLen                    string `json:"max_len,omitempty"`
-	MaxNumSeqs                string `json:"max_num_seqs,omitempty"`
-	KVCacheDType              string `json:"kv_cache_dtype,omitempty"`
-	ToolParser                string `json:"tool_parser,omitempty"`
-	TokenizerMode             string `json:"tokenizer_mode,omitempty"`
-	ReasoningParser           string `json:"reasoning_parser,omitempty"`
-	TrustRemoteCode           bool   `json:"trust_remote_code,omitempty"`
-	BlockSize                 string `json:"block_size,omitempty"`
-	MoeBackend                string `json:"moe_backend,omitempty"`
-	ExpertParallel            bool   `json:"enable_expert_parallel,omitempty"`
-	DisableFlashInferAutotune bool   `json:"disable_flashinfer_autotune,omitempty"`
-	SpeculativeConfig         string `json:"speculative_config,omitempty"`
+	Model             string `json:"model,omitempty"`
+	ServedModelName   string `json:"served_model_name,omitempty"`
+	Port              int    `json:"port,omitempty"`
+	GPUs              int    `json:"gpus,omitempty"`
+	GPUIDs            string `json:"gpu_ids,omitempty"`
+	MemUtil           string `json:"mem_util,omitempty"`
+	MaxLen            string `json:"max_len,omitempty"`
+	MaxNumSeqs        string `json:"max_num_seqs,omitempty"`
+	CPUOffloadGB      string `json:"cpu_offload_gb,omitempty"`
+	KVCacheDType      string `json:"kv_cache_dtype,omitempty"`
+	ToolParser        string `json:"tool_parser,omitempty"`
+	TokenizerMode     string `json:"tokenizer_mode,omitempty"`
+	ReasoningParser   string `json:"reasoning_parser,omitempty"`
+	TrustRemoteCode   bool   `json:"trust_remote_code,omitempty"`
+	BlockSize         string `json:"block_size,omitempty"`
+	MoeBackend        string `json:"moe_backend,omitempty"`
+	ExpertParallel    bool   `json:"enable_expert_parallel,omitempty"`
+	SpeculativeConfig string `json:"speculative_config,omitempty"`
 }
 
 type ImportedCommand struct {
@@ -53,6 +53,7 @@ var managedVLLMValueFlags = map[string]func(*ImportedCommandFields, string){
 	"--gpu-memory-utilization": func(f *ImportedCommandFields, v string) { f.MemUtil = v },
 	"--max-model-len":          func(f *ImportedCommandFields, v string) { f.MaxLen = v },
 	"--max-num-seqs":           func(f *ImportedCommandFields, v string) { f.MaxNumSeqs = v },
+	"--cpu-offload-gb":         func(f *ImportedCommandFields, v string) { f.CPUOffloadGB = v },
 	"--kv-cache-dtype":         func(f *ImportedCommandFields, v string) { f.KVCacheDType = v },
 	"--tool-call-parser":       func(f *ImportedCommandFields, v string) { f.ToolParser = v },
 	"--tokenizer-mode":         func(f *ImportedCommandFields, v string) { f.TokenizerMode = v },
@@ -66,7 +67,6 @@ var managedVLLMValueFlags = map[string]func(*ImportedCommandFields, string){
 var managedVLLMBoolFlags = map[string]func(*ImportedCommandFields){
 	"--trust-remote-code":                func(f *ImportedCommandFields) { f.TrustRemoteCode = true },
 	"--enable-expert-parallel":           func(f *ImportedCommandFields) { f.ExpertParallel = true },
-	"--no-enable-flashinfer-autotune":    func(f *ImportedCommandFields) { f.DisableFlashInferAutotune = true },
 	"--enable-auto-tool-choice":          func(*ImportedCommandFields) {},
 	"--enable-prefix-caching":            func(*ImportedCommandFields) {},
 	"--no-enable-prefix-caching":         func(*ImportedCommandFields) {},
@@ -79,34 +79,34 @@ var managedVLLMBoolFlags = map[string]func(*ImportedCommandFields){
 }
 
 var allowedExtraVLLMFlags = map[string]vllmFlagSpec{
-	"--max-num-batched-tokens":       {hasValue: true},
-	"--max-num-partial-prefills":     {hasValue: true},
-	"--max-long-partial-prefills":    {hasValue: true},
-	"--long-prefill-token-threshold": {hasValue: true},
-	"--max-seq-len-to-capture":       {hasValue: true},
-	"--max-logprobs":                 {hasValue: true},
-	"--chat-template":                {hasValue: true},
-	"--chat-template-content-format": {hasValue: true},
-	"--response-role":                {hasValue: true},
-	"--generation-config":            {hasValue: true},
-	"--guided-decoding-backend":      {hasValue: true},
-	"--rope-scaling":                 {hasValue: true},
-	"--rope-theta":                   {hasValue: true},
-	"--limit-mm-per-prompt":          {hasValue: true},
-	"--mm-processor-kwargs":          {hasValue: true},
-	"--scheduler-delay-factor":       {hasValue: true},
-	"--swap-space":                   {hasValue: true},
-	"--cpu-offload-gb":               {hasValue: true},
-	"--compilation-config":           {hasValue: true},
-	"--override-generation-config":   {hasValue: true},
-	"--override-pooler-config":       {hasValue: true},
-	"--hf-overrides":                 {hasValue: true},
-	"--disable-log-requests":         {hasValue: false},
-	"--disable-log-stats":            {hasValue: false},
-	"--enable-chunked-prefill":       {hasValue: false},
-	"--enable-prompt-embeds":         {hasValue: false},
-	"--enforce-eager":                {hasValue: false},
-	"--language-model-only":          {hasValue: false},
+	"--max-num-batched-tokens":        {hasValue: true},
+	"--max-num-partial-prefills":      {hasValue: true},
+	"--max-long-partial-prefills":     {hasValue: true},
+	"--long-prefill-token-threshold":  {hasValue: true},
+	"--max-seq-len-to-capture":        {hasValue: true},
+	"--max-logprobs":                  {hasValue: true},
+	"--chat-template":                 {hasValue: true},
+	"--chat-template-content-format":  {hasValue: true},
+	"--response-role":                 {hasValue: true},
+	"--generation-config":             {hasValue: true},
+	"--guided-decoding-backend":       {hasValue: true},
+	"--rope-scaling":                  {hasValue: true},
+	"--rope-theta":                    {hasValue: true},
+	"--limit-mm-per-prompt":           {hasValue: true},
+	"--mm-processor-kwargs":           {hasValue: true},
+	"--scheduler-delay-factor":        {hasValue: true},
+	"--swap-space":                    {hasValue: true},
+	"--compilation-config":            {hasValue: true},
+	"--override-generation-config":    {hasValue: true},
+	"--override-pooler-config":        {hasValue: true},
+	"--hf-overrides":                  {hasValue: true},
+	"--disable-log-requests":          {hasValue: false},
+	"--disable-log-stats":             {hasValue: false},
+	"--enable-chunked-prefill":        {hasValue: false},
+	"--enable-prompt-embeds":          {hasValue: false},
+	"--enforce-eager":                 {hasValue: false},
+	"--language-model-only":           {hasValue: false},
+	"--no-enable-flashinfer-autotune": {hasValue: false},
 }
 
 var dockerValueFlags = map[string]struct{}{

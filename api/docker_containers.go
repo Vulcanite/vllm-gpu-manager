@@ -226,6 +226,7 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 		MemUtil:                   "unknown",
 		MaxLen:                    "default",
 		MaxNumSeqs:                "default",
+		CPUOffloadGB:              "0",
 		KVCacheDType:              "auto",
 		ToolParser:                "disabled",
 		TokenizerMode:             "auto",
@@ -284,6 +285,9 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 		}
 		if args[i] == "--max-num-seqs" && i+1 < len(args) {
 			model.MaxNumSeqs = args[i+1]
+		}
+		if args[i] == "--cpu-offload-gb" && i+1 < len(args) {
+			model.CPUOffloadGB = args[i+1]
 		}
 		if args[i] == "--kv-cache-dtype" && i+1 < len(args) {
 			model.KVCacheDType = args[i+1]
@@ -384,6 +388,7 @@ func applyLaunchSpecToActiveModel(model *ActiveModel, spec LaunchSpec) {
 	model.MemUtil = spec.MemUtil
 	model.MaxLen = emptyStringAs(spec.MaxLen, "default")
 	model.MaxNumSeqs = emptyStringAs(spec.MaxNumSeqs, "default")
+	model.CPUOffloadGB = emptyStringAs(spec.CPUOffloadGB, "0")
 	model.KVCacheDType = emptyStringAs(spec.KVCacheDType, "auto")
 	model.ToolParser = emptyStringAs(spec.ToolParser, "disabled")
 	model.TokenizerMode = emptyStringAs(spec.TokenizerMode, "auto")
@@ -914,7 +919,7 @@ func NormalizeModelKeyForMatch(model string) string {
 	return model
 }
 
-func StartModel(model string, servedModelName string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, kvCacheDType string, toolParser string, tokenizerMode string, reasoningParser string, trustRemoteCode bool, blockSize string, moeBackend string, enableExpertParallel bool, disableFlashInferAutotune bool, speculativeConfig string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, containerExposure string, serverAPIKey string, extraVLLMArgs []string) error {
+func StartModel(model string, servedModelName string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, cpuOffloadGB string, kvCacheDType string, toolParser string, tokenizerMode string, reasoningParser string, trustRemoteCode bool, blockSize string, moeBackend string, enableExpertParallel bool, disableFlashInferAutotune bool, speculativeConfig string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, containerExposure string, serverAPIKey string, extraVLLMArgs []string) error {
 	hfCache = NormalizeHFHome(hfCache)
 	if hfCache == "" {
 		return validationError("hugging face cache directory is required")
@@ -1014,6 +1019,12 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 		return err
 	}
 
+	cpuOffloadGBValue, err := normalizeCPUOffloadGB(cpuOffloadGB)
+	if err != nil {
+		return err
+	}
+	cpuOffloadGB = strconv.Itoa(cpuOffloadGBValue)
+
 	kvCacheDType, err = normalizeKVCacheDType(kvCacheDType)
 	if err != nil {
 		return err
@@ -1079,6 +1090,10 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 	}
 	effectiveGPUIDsValue := strings.Join(effectiveGPUIDs, ",")
 
+	if err := validateCPUOffloadRAM(cpuOffloadGBValue, len(selectedGPUs), GetSystemRAM()); err != nil {
+		return err
+	}
+
 	// Fix #2 / GPT-P1a: reject if combined mem_util on any requested GPU would exceed 1.0
 	totalGPUCount := len(selectedGPUs)
 	var requestedGPUIDs []int
@@ -1123,6 +1138,7 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 		MemUtil:                   memUtil,
 		MaxLen:                    maxLen,
 		MaxNumSeqs:                maxNumSeqs,
+		CPUOffloadGB:              cpuOffloadGB,
 		KVCacheDType:              kvCacheDType,
 		ToolParser:                toolParser,
 		TokenizerMode:             tokenizerMode,
@@ -1173,6 +1189,9 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 	if maxNumSeqs != "" {
 		cmd = append(cmd, "--max-num-seqs", maxNumSeqs)
 	}
+	if cpuOffloadGBValue > 0 {
+		cmd = append(cmd, "--cpu-offload-gb", cpuOffloadGB)
+	}
 	if kvCacheDType != "auto" {
 		cmd = append(cmd, "--kv-cache-dtype", kvCacheDType)
 	}
@@ -1214,17 +1233,24 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 		}
 
 		portStr := strconv.Itoa(port)
-		logDockerAPI(
-			"container create",
+		ulimits := cpuOffloadUlimits(cpuOffloadGBValue)
+		logArgs := []string{
 			containerName,
-			"image="+VLLMImage,
+			"image=" + VLLMImage,
 			"ipc=host",
 			"runtime=nvidia",
-			"gpus="+gpuFlag,
-			"ports="+hostBindAddr.String()+":"+portStr+":"+portStr,
+			"gpus=" + gpuFlag,
+			"ports=" + hostBindAddr.String() + ":" + portStr + ":" + portStr,
 			"network=bridge",
-			"bind="+fmt.Sprintf("%s:/hf_cache", hfCache),
-			"cmd="+strings.Join(cmd, " "),
+			"bind=" + fmt.Sprintf("%s:/hf_cache", hfCache),
+			"cmd=" + strings.Join(cmd, " "),
+		}
+		if len(ulimits) > 0 {
+			logArgs = append(logArgs, "ulimit=memlock=-1:-1")
+		}
+		logDockerAPI(
+			"container create",
+			logArgs...,
 		)
 		p, _ := network.ParsePort(portStr + "/tcp")
 		var portBinding network.PortMap
@@ -1260,6 +1286,7 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 				Binds:        []string{fmt.Sprintf("%s:/hf_cache", hfCache)},
 				Resources: container.Resources{
 					DeviceRequests: []container.DeviceRequest{dockerDeviceRequest(gpuFlag)},
+					Ulimits:        ulimits,
 				},
 			},
 		})

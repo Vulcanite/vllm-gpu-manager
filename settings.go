@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
@@ -264,7 +263,7 @@ func getSettingsStatus() SettingsStatus {
 		free = stat.Bavail * uint64(stat.Bsize)
 		used = total - free
 	}
-	ramTotal, ramUsed, ramFree := getSystemRAM()
+	ram := api.GetSystemRAM()
 	vllmKeyContainerCount := 0
 	if s.VLLMAPIKey != "" {
 		if models, err := api.GetServerContainersUsingAPIKey(s.VLLMAPIKey); err == nil {
@@ -288,9 +287,9 @@ func getSettingsStatus() SettingsStatus {
 		DiskTotal:                total,
 		DiskUsed:                 used,
 		DiskFree:                 free,
-		RAMTotal:                 ramTotal,
-		RAMUsed:                  ramUsed,
-		RAMFree:                  ramFree,
+		RAMTotal:                 ram.Total,
+		RAMUsed:                  ram.Used,
+		RAMFree:                  ram.Free,
 		ServerAPIKeyCount:        len(s.ServerAPIKeys),
 		ServerAPIKeyNames:        sortedServerAPIKeyNames(s.ServerAPIKeys),
 		ProxyUserCount:           len(s.ProxyUsers),
@@ -905,52 +904,4 @@ func pidAlive(pid int) bool {
 		return false
 	}
 	return true
-}
-
-func getSystemRAM() (total uint64, used uint64, free uint64) {
-	file, err := os.Open("/proc/meminfo")
-	if err != nil {
-		return 0, 0, 0
-	}
-	defer file.Close()
-
-	var memTotal, memFree, memAvailable, buffers, cached uint64
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) < 2 {
-			continue
-		}
-		val, err := strconv.ParseUint(fields[1], 10, 64)
-		if err != nil {
-			continue
-		}
-		val *= 1024 // KB to Bytes
-
-		switch fields[0] {
-		case "MemTotal:":
-			memTotal = val
-		case "MemFree:":
-			memFree = val
-		case "MemAvailable:":
-			memAvailable = val
-		case "Buffers:":
-			buffers = val
-		case "Cached:":
-			cached = val
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		log.Printf("[SYSTEM] warning: failed to scan /proc/meminfo: %v", err)
-		return 0, 0, 0
-	}
-
-	total = memTotal
-	if memAvailable > 0 {
-		free = memAvailable
-	} else {
-		free = memFree + buffers + cached
-	}
-	used = total - free
-	return
 }

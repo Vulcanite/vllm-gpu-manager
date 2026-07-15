@@ -313,12 +313,14 @@ Optional launch parameters currently exposed by the UI/API:
 - `--max-model-len`
 - `--max-num-seqs`
 - `--served-model-name`
+- `--cpu-offload-gb`
 - `--kv-cache-dtype`
 - `--tool-call-parser`
 - `--enable-auto-tool-choice`
 - `--tokenizer-mode`
 - `--reasoning-parser`
 - `--trust-remote-code`
+- `--language-model-only`
 - `--block-size`
 - `--moe-backend`
 - `--enable-expert-parallel`

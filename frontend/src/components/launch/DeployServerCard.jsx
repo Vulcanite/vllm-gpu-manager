@@ -12,11 +12,12 @@ const FIELD_HELP = {
   gpuPinning: 'Choose the exact GPU IDs assigned to this server when you are not using every GPU.',
   memory: 'Fraction of each selected GPU memory that vLLM may use.',
   maxLen: 'Maximum context length passed to vLLM as --max-model-len.',
-  maxNumSeqs: 'Maximum number of concurrent sequences. Leave empty to use the vLLM default.',
+  maxNumSeqs: 'Maximum number of concurrent sequences. Defaults to 256.',
+  cpuOffloadGB: 'Offloads model weights to CPU memory per GPU. This does not replace KV cache memory and needs fast CPU-GPU interconnect.',
   blockSize: 'KV cache block size. This manager restricts it to supported powers of two.',
   moeBackend: 'Backend implementation used by vLLM for Mixture-of-Experts models.',
   expertParallel: 'Enable vLLM expert parallelism for MoE models.',
-  disableFlashInferAutotune: 'Pass --no-enable-flashinfer-autotune to skip FlashInfer autotuning during startup.',
+  languageModelOnly: 'Disable multimodal inputs and serve only the language model component.',
   trustRemoteCode: 'Allow model repositories to execute custom Python code inside the vLLM container.',
   speculativeConfig: 'JSON object passed directly to vLLM --speculative-config for speculative decoding.',
   extraVLLMArgs: 'Validated vLLM flags imported from a command that do not have dedicated fields yet.',
@@ -112,7 +113,7 @@ export const DeployServerCard = ({
   setServerApiKey,
   setStartBlockSize,
   setStartEnableExpertParallel,
-  setStartDisableFlashInferAutotune,
+  setStartLanguageModelOnly,
   setStartMoeBackend,
   setStartSpeculativeConfig,
   setUseServerApiKey,
@@ -120,6 +121,7 @@ export const DeployServerCard = ({
   setStartKvCacheDType,
   setStartMaxLen,
   setStartMaxNumSeqs,
+  setStartCPUOffloadGB,
   setStartServedModelName,
   setStartMem,
   setStartBindIP,
@@ -135,12 +137,14 @@ export const DeployServerCard = ({
   startKvCacheDType,
   startMaxLen,
   startMaxNumSeqs,
+  startCPUOffloadGB,
+  cpuOffloadMaxGB,
   startServedModelName,
   startMem,
   startBindIP,
   startModelName,
   startEnableExpertParallel,
-  startDisableFlashInferAutotune,
+  startLanguageModelOnly,
   startExtraVLLMArgs,
   startMoeBackend,
   startParser,
@@ -159,6 +163,9 @@ export const DeployServerCard = ({
   tokenizerModeOptions,
   toolParserOptions,
 }) => {
+  const [extraArgsExpanded, setExtraArgsExpanded] = useState(false);
+  const showExtraVLLMArgs = extraArgsExpanded || Boolean(String(startExtraVLLMArgs || '').trim());
+
   const handleServerKeyToggle = (event) => {
     const checked = event.target.checked;
     setUseServerApiKey(checked);
@@ -178,6 +185,14 @@ export const DeployServerCard = ({
 
   const handleGenerateServerApiKey = () => {
     setServerApiKey(generateVLLMToken());
+  };
+
+  const handleExtraArgsToggle = (event) => {
+    const checked = event.target.checked;
+    setExtraArgsExpanded(checked);
+    if (!checked) {
+      setStartExtraVLLMArgs('');
+    }
   };
 
   const currentGpuCount = Number(startGpus) || 1;
@@ -219,6 +234,27 @@ export const DeployServerCard = ({
     }
     if (!canIncreaseBlockSize) return;
     setStartBlockSize(String(blockSizeOptions[currentBlockSizeIndex + 1]));
+  };
+
+  const currentCPUOffload = Number(startCPUOffloadGB);
+  const normalizedCPUOffload = Number.isInteger(currentCPUOffload) && currentCPUOffload >= 0 ? currentCPUOffload : 0;
+  const canDecreaseCPUOffload = normalizedCPUOffload > 0;
+  const canIncreaseCPUOffload = cpuOffloadMaxGB === null || normalizedCPUOffload < cpuOffloadMaxGB;
+  const setCPUOffload = (value) => {
+    const next = Math.max(0, Math.trunc(Number(value) || 0));
+    if (cpuOffloadMaxGB !== null) {
+      setStartCPUOffloadGB(String(Math.min(next, Math.max(0, cpuOffloadMaxGB))));
+      return;
+    }
+    setStartCPUOffloadGB(String(next));
+  };
+  const decreaseCPUOffload = () => {
+    if (!canDecreaseCPUOffload) return;
+    setCPUOffload(normalizedCPUOffload - 1);
+  };
+  const increaseCPUOffload = () => {
+    if (!canIncreaseCPUOffload) return;
+    setCPUOffload(normalizedCPUOffload + 1);
   };
 
   return (
@@ -360,12 +396,11 @@ export const DeployServerCard = ({
             <FieldLabel htmlFor="startMaxNumSeqs" help={FIELD_HELP.maxNumSeqs}>Max Num Seqs</FieldLabel>
             <input
               id="startMaxNumSeqs"
-              type="number"
-              className="form-control no-native-spinner"
+              type="text"
+              className="form-control centered-input no-native-spinner"
               value={startMaxNumSeqs}
               onChange={(event) => setStartMaxNumSeqs(event.target.value)}
-              min="1"
-              placeholder="vLLM default"
+              inputMode="numeric"
             />
           </div>
         </div>
@@ -388,6 +423,30 @@ export const DeployServerCard = ({
               </div>
 
               <div className="form-group">
+                <FieldLabel htmlFor="startCPUOffloadGB" help={FIELD_HELP.cpuOffloadGB}>CPU Offload (GiB/GPU)</FieldLabel>
+                <div className="inline-control cpu-offload-control">
+                  <button className="btn btn-outline btn-compact" type="button" onClick={decreaseCPUOffload} disabled={!canDecreaseCPUOffload}>
+                    -
+                  </button>
+                  <input
+                    id="startCPUOffloadGB"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    className="form-control"
+                    value={startCPUOffloadGB}
+                    onChange={(event) => setCPUOffload(event.target.value)}
+                    disabled={launching}
+                  />
+                  <button className="btn btn-outline btn-compact" type="button" onClick={increaseCPUOffload} disabled={!canIncreaseCPUOffload}>
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="form-grid">
+              <div className="form-group">
                 <FieldLabel htmlFor="startMoeBackend" help={FIELD_HELP.moeBackend}>MoE Backend</FieldLabel>
                 <select id="startMoeBackend" className="form-control" value={startMoeBackend} onChange={(event) => setStartMoeBackend(event.target.value)}>
                   {(moeBackendOptions && moeBackendOptions.length > 0 ? moeBackendOptions : ['auto']).map((option) => (
@@ -396,6 +455,26 @@ export const DeployServerCard = ({
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div className="form-group launch-toggle-group">
+                <div className="setting-row launch-setting-row">
+                  <div>
+                    <FieldLabel htmlFor="startLanguageModelOnly" help={FIELD_HELP.languageModelOnly}>Language Model Only</FieldLabel>
+                  </div>
+                  <label className="toggle-control" aria-label="Serve only the language model component">
+                    <input
+                      id="startLanguageModelOnly"
+                      type="checkbox"
+                      checked={Boolean(startLanguageModelOnly)}
+                      onChange={(event) => setStartLanguageModelOnly(event.target.checked)}
+                      disabled={launching}
+                    />
+                    <span className="toggle-track" aria-hidden="true">
+                      <span className="toggle-thumb" />
+                    </span>
+                  </label>
+                </div>
               </div>
             </div>
 
@@ -439,54 +518,52 @@ export const DeployServerCard = ({
                   </label>
                 </div>
               </div>
-
-              <div className="form-group launch-toggle-group">
-                <div className="setting-row launch-setting-row">
-                  <div>
-                    <FieldLabel htmlFor="startDisableFlashInferAutotune" help={FIELD_HELP.disableFlashInferAutotune}>Disable FlashInfer Autotune</FieldLabel>
-                  </div>
-                  <label className="toggle-control" aria-label="Disable FlashInfer autotune for this server">
-                    <input
-                      id="startDisableFlashInferAutotune"
-                      type="checkbox"
-                      checked={Boolean(startDisableFlashInferAutotune)}
-                      onChange={(event) => setStartDisableFlashInferAutotune(event.target.checked)}
-                      disabled={launching}
-                    />
-                    <span className="toggle-track" aria-hidden="true">
-                      <span className="toggle-thumb" />
-                    </span>
-                  </label>
-                </div>
-              </div>
             </div>
 
             <div className="form-group">
               <FieldLabel htmlFor="startSpeculativeConfig" help={FIELD_HELP.speculativeConfig}>Speculative Config</FieldLabel>
-              <textarea
+              <input
                 id="startSpeculativeConfig"
-                className="form-control code-textarea"
+                type="text"
+                className="form-control code-input"
                 value={startSpeculativeConfig}
                 onChange={(event) => setStartSpeculativeConfig(event.target.value)}
                 placeholder='{"model":"draft-model","num_speculative_tokens":4}'
-                rows={4}
                 spellCheck="false"
                 disabled={launching}
               />
             </div>
 
-            <div className="form-group">
-              <FieldLabel htmlFor="startExtraVLLMArgs" help={FIELD_HELP.extraVLLMArgs}>Extra vLLM Args</FieldLabel>
-              <textarea
-                id="startExtraVLLMArgs"
-                className="form-control code-textarea"
-                value={startExtraVLLMArgs}
-                onChange={(event) => setStartExtraVLLMArgs(event.target.value)}
-                placeholder={'--language-model-only\n--max-num-batched-tokens 8192'}
-                rows={4}
-                spellCheck="false"
-                disabled={launching}
-              />
+            <div className="form-group extra-vllm-args-group">
+              <div className="setting-row launch-setting-row">
+                <div>
+                  <FieldLabel htmlFor="showExtraVLLMArgs" help={FIELD_HELP.extraVLLMArgs}>Extra vLLM Args</FieldLabel>
+                </div>
+                <label className="toggle-control" aria-label="Show extra vLLM args field">
+                  <input
+                    id="showExtraVLLMArgs"
+                    type="checkbox"
+                    checked={showExtraVLLMArgs}
+                    onChange={handleExtraArgsToggle}
+                    disabled={launching}
+                  />
+                  <span className="toggle-track" aria-hidden="true">
+                    <span className="toggle-thumb" />
+                  </span>
+                </label>
+              </div>
+              {showExtraVLLMArgs && (
+                <textarea
+                  id="startExtraVLLMArgs"
+                  className="form-control code-textarea extra-vllm-args-textarea"
+                  value={startExtraVLLMArgs}
+                  onChange={(event) => setStartExtraVLLMArgs(event.target.value)}
+                  placeholder={'--no-enable-flashinfer-autotune\n--max-num-batched-tokens 8192'}
+                  rows={4}
+                  spellCheck="false"
+                  disabled={launching}
+                />
+              )}
             </div>
 
             <div className="form-grid">
