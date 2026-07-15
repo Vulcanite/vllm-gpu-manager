@@ -432,6 +432,16 @@ body {
   margin-bottom: 1rem;
 }
 
+.launch-deploy-card .form-help {
+  margin: 0.45rem 0 0;
+  line-height: 1.4;
+}
+
+.deploy-server-panel .form-control:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
 .launch-side-stack {
   height: auto;
   min-height: 0;
@@ -1418,6 +1428,10 @@ body {
   border-color: var(--text-secondary);
 }
 
+.centered-input {
+  text-align: center;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1450,7 +1464,8 @@ body {
 .max-len-control .btn,
 .gpu-count-control .btn,
 .memory-util-control .btn,
-.block-size-control .btn {
+.block-size-control .btn,
+.cpu-offload-control .btn {
   flex-shrink: 0;
   width: 2.5rem;
 }
@@ -1458,7 +1473,8 @@ body {
 .max-len-control .form-control,
 .gpu-count-control .form-control,
 .memory-util-control .form-control,
-.block-size-control .form-control {
+.block-size-control .form-control,
+.cpu-offload-control .form-control {
   text-align: center;
 }
 
@@ -1486,6 +1502,27 @@ body {
   min-height: 7rem;
   resize: vertical;
   line-height: 1.45;
+}
+
+.code-input {
+  font-family: var(--font-mono);
+  line-height: 1.4;
+}
+
+.extra-vllm-args-textarea {
+  margin-top: 0.55rem;
+}
+
+.extra-vllm-args-group .setting-row {
+  min-height: 2.45rem;
+  align-items: center;
+}
+
+.extra-vllm-args-group .extra-vllm-args-textarea {
+  display: block;
+  width: 100%;
+  min-height: 5.5rem;
+  margin-top: 0.55rem;
 }
 
 .launch-toggle-group {

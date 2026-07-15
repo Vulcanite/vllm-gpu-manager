@@ -20,6 +20,7 @@ type modelKVCacheEstimate struct {
 	DTypeBytes         int
 	DefaultMaxModelLen int
 	ModelType          string
+	IsMultimodal       bool
 }
 
 const (
@@ -33,21 +34,28 @@ const (
 // via LaunchDefaults so the UI and backend cannot drift.
 var kvCacheDTypeOptions = []string{"auto", "fp8", "fp8_e5m2", "fp8_e4m3"}
 
+var dtypeOptions = []string{"auto", "bfloat16", "float16"}
+
 // LaunchConfig exposes the tuning constants the dashboard needs to reproduce the
 // backend's VRAM preflight preview. Serving these from one place keeps the
 // frontend estimate in sync with CheckModelFitsInVRAM.
 type LaunchConfig struct {
-	ModelVRAMSafetyMargin       float64  `json:"model_vram_safety_margin"`
-	DefaultGPUMemoryUtilization float64  `json:"default_gpu_memory_utilization"`
-	DefaultMaxModelLen          int      `json:"default_max_model_len"`
-	HFCache                     string   `json:"hf_cache,omitempty"`
-	VLLMImage                   string   `json:"vllm_image"`
-	KVCacheDTypeOptions         []string `json:"kv_cache_dtype_options"`
-	ToolParserOptions           []string `json:"tool_parser_options"`
-	TokenizerModeOptions        []string `json:"tokenizer_mode_options"`
-	ReasoningParserOptions      []string `json:"reasoning_parser_options"`
-	BlockSizeOptions            []int    `json:"block_size_options"`
-	MoeBackendOptions           []string `json:"moe_backend_options"`
+	ModelVRAMSafetyMargin       float64           `json:"model_vram_safety_margin"`
+	DefaultGPUMemoryUtilization float64           `json:"default_gpu_memory_utilization"`
+	DefaultMaxModelLen          int               `json:"default_max_model_len"`
+	HFCache                     string            `json:"hf_cache,omitempty"`
+	VLLMImage                   string            `json:"vllm_image"`
+	RAMTotal                    uint64            `json:"ram_total"`
+	RAMFree                     uint64            `json:"ram_free"`
+	CPUOffloadRAMSafetyFactor   float64           `json:"cpu_offload_ram_safety_factor"`
+	GPUTopologyLinks            []GPUTopologyLink `json:"gpu_topology_links,omitempty"`
+	GPUTopologyError            string            `json:"gpu_topology_error,omitempty"`
+	KVCacheDTypeOptions         []string          `json:"kv_cache_dtype_options"`
+	DTypeOptions                []string          `json:"dtype_options"`
+	ToolParserOptions           []string          `json:"tool_parser_options"`
+	TokenizerModeOptions        []string          `json:"tokenizer_mode_options"`
+	ReasoningParserOptions      []string          `json:"reasoning_parser_options"`
+	MoeBackendOptions           []string          `json:"moe_backend_options"`
 }
 
 // LaunchDefaults returns the launch tuning constants shared with the frontend.
@@ -57,11 +65,12 @@ func LaunchDefaults() LaunchConfig {
 		DefaultGPUMemoryUtilization: defaultGPUMemoryUtilization,
 		DefaultMaxModelLen:          defaultMaxModelLen,
 		VLLMImage:                   VLLMImage,
+		CPUOffloadRAMSafetyFactor:   CPUOffloadRAMSafetyFactor,
 		KVCacheDTypeOptions:         append([]string(nil), kvCacheDTypeOptions...),
+		DTypeOptions:                append([]string(nil), dtypeOptions...),
 		ToolParserOptions:           allowedToolParserNames(),
 		TokenizerModeOptions:        append([]string(nil), tokenizerModeOptions...),
 		ReasoningParserOptions:      allowedReasoningParserNames(),
-		BlockSizeOptions:            append([]int(nil), blockSizeOptions...),
 		MoeBackendOptions:           append([]string(nil), moeBackendOptions...),
 	}
 }
@@ -318,6 +327,40 @@ func getConfigString(primary map[string]interface{}, fallback map[string]interfa
 	return "", false
 }
 
+func isMultimodalConfig(root map[string]interface{}, modelType string) bool {
+	for _, key := range []string{"vision_config", "audio_config", "multimodal_config", "vision_tower", "mm_vision_tower"} {
+		if value, ok := root[key]; ok && value != nil {
+			return true
+		}
+	}
+
+	modelType = strings.ToLower(strings.TrimSpace(modelType))
+	for _, marker := range []string{
+		"blip", "chameleon", "deepseek_vl", "fuyu", "gemma3", "glm4v", "idefics",
+		"internvl", "llama4", "llava", "mllama", "molmo", "paligemma", "phi3_v",
+		"pixtral", "qwen2_vl", "qwen2_5_vl", "qwen3_vl", "qwen3_omni",
+	} {
+		if strings.Contains(modelType, marker) {
+			return true
+		}
+	}
+
+	architectures, _ := root["architectures"].([]interface{})
+	for _, raw := range architectures {
+		architecture, ok := raw.(string)
+		if !ok {
+			continue
+		}
+		architecture = strings.ToLower(architecture)
+		for _, marker := range []string{"vision", "llava", "mllama", "multimodal", "image", "audio", "omni", "vlfor"} {
+			if strings.Contains(architecture, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func kvElementBytes(dtype string) int {
 	dtype = strings.ToLower(strings.TrimSpace(dtype))
 	switch {
@@ -383,6 +426,7 @@ func GetModelKVCacheEstimate(hfCache string, model string) (modelKVCacheEstimate
 	estimate := modelKVCacheEstimate{
 		DefaultMaxModelLen: maxModelLen,
 		ModelType:          modelType,
+		IsMultimodal:       isMultimodalConfig(root, modelType),
 	}
 
 	layers, ok := getConfigInt(config, root, "num_hidden_layers", "n_layer", "num_layers", "num_layers_total")
@@ -600,7 +644,7 @@ func checkGPUOverlap(active []ActiveModel, requestedIDs []int, totalGPUs int, re
 	return nil
 }
 
-func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, gpus int, memUtil string, maxLen string, kvCacheDType string) error {
+func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, gpus int, parallelismMode string, memUtil string, maxLen string, kvCacheDType string) error {
 	if len(selectedGPUs) == 0 {
 		return nil
 	}
@@ -651,7 +695,7 @@ func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, 
 	// non-divisible KV head counts. DeepSeek-V4 uses vLLM's MLA implementation
 	// and its configs intentionally report num_key_value_heads=1 even for
 	// multi-GPU tensor parallel launches.
-	if kvEstimateOK && estimate.requiresDivisibleKVHeads() && estimate.KeyValueHeads > 0 && estimate.KeyValueHeads%gpus != 0 {
+	if parallelismMode == ParallelismTensor && kvEstimateOK && estimate.requiresDivisibleKVHeads() && estimate.KeyValueHeads > 0 && estimate.KeyValueHeads%gpus != 0 {
 		return validationError(
 			"num_key_value_heads (%d) is not divisible by tensor_parallel_size (%d); vLLM will refuse to start — use a divisor of %d GPUs instead",
 			estimate.KeyValueHeads,

@@ -169,6 +169,9 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 	var memUtil string
 	var maxLen string
 	var maxNumSeqs string
+	var cpuOffloadGB string
+	var dtype string
+	var parallelismMode string
 	var kvCacheDType string
 	var toolParser string
 	var tokenizerMode string
@@ -200,7 +203,7 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 			if strings.TrimSpace(bindIP) != "" {
 				hostBindIP = strings.TrimSpace(bindIP)
 			}
-			if err := api.StartModel(args[0], "", port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, kvCacheDType, toolParser, tokenizerMode, reasoningParser, trustRemoteCode, blockSize, moeBackend, enableExpertParallel, disableFlashInferAutotune, speculativeConfig, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, api.ContainerExposureDirect, "", nil); err != nil {
+			if err := api.StartModel(args[0], "", port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, cpuOffloadGB, dtype, parallelismMode, kvCacheDType, toolParser, tokenizerMode, reasoningParser, trustRemoteCode, blockSize, moeBackend, enableExpertParallel, disableFlashInferAutotune, speculativeConfig, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, api.ContainerExposureDirect, "", nil); err != nil {
 				return err
 			}
 			upsertRoute(args[0], port)
@@ -213,6 +216,9 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 				"mem_util":                    memUtil,
 				"max_len":                     emptyAsDefault(maxLen, "default"),
 				"max_num_seqs":                emptyAsDefault(maxNumSeqs, "default"),
+				"cpu_offload_gb":              emptyAsDefault(cpuOffloadGB, "0"),
+				"dtype":                       dtype,
+				"parallelism_mode":            parallelismMode,
 				"kv_cache_dtype":              kvCacheDType,
 				"tool_parser":                 emptyAsDefault(toolParser, "disabled"),
 				"tokenizer_mode":              emptyAsDefault(tokenizerMode, "auto"),
@@ -228,11 +234,14 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVar(&port, "port", 0, "port for the vLLM OpenAI server")
-	cmd.Flags().IntVar(&gpus, "gpus", 0, "tensor parallel GPU count")
+	cmd.Flags().IntVar(&gpus, "gpus", 0, "GPU count used by the selected parallelism mode")
 	cmd.Flags().StringVar(&gpuIDs, "gpu-ids", "", "comma-separated GPU IDs")
 	cmd.Flags().StringVar(&memUtil, "mem-util", "0.9", "vLLM GPU memory utilization")
 	cmd.Flags().StringVar(&maxLen, "max-len", "", "vLLM max model length")
 	cmd.Flags().StringVar(&maxNumSeqs, "max-num-seqs", "", "vLLM max number of sequences")
+	cmd.Flags().StringVar(&cpuOffloadGB, "cpu-offload-gb", "0", "vLLM CPU offload GiB per GPU")
+	cmd.Flags().StringVar(&dtype, "dtype", "auto", "vLLM model dtype: auto, bfloat16, float16, or float32")
+	cmd.Flags().StringVar(&parallelismMode, "parallelism", api.ParallelismTensor, "GPU parallelism mode: tensor or pipeline")
 	cmd.Flags().StringVar(&kvCacheDType, "kv-cache-dtype", "auto", "vLLM KV cache dtype: auto, fp8, fp8_e5m2, fp8_e4m3")
 	cmd.Flags().StringVar(&toolParser, "tool-parser", "", "vLLM tool call parser")
 	cmd.Flags().StringVar(&tokenizerMode, "tokenizer-mode", "auto", "vLLM tokenizer mode: auto, hf, slow, mistral, deepseek_v32, deepseek_v4")

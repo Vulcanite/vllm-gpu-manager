@@ -306,6 +306,8 @@ docker run -d \
   --gpu-memory-utilization <mem_util>
 ```
 
+Tensor parallelism is the default. For a multi-GPU pipeline deployment, the manager emits `--pipeline-parallel-size <gpus>` instead and leaves vLLM's tensor parallel size at its default of `1`.
+
 In proxy mode, the host bind IP is `127.0.0.1`, so browsers and external clients reach the model through the manager's `/v1/` proxy. Outside proxy mode, containers bind on `server_bind_ip` by default, or the per-launch `--bind-ip` value if provided.
 
 Optional launch parameters currently exposed by the UI/API:
@@ -313,13 +315,16 @@ Optional launch parameters currently exposed by the UI/API:
 - `--max-model-len`
 - `--max-num-seqs`
 - `--served-model-name`
+- `--cpu-offload-gb`
+- `--dtype`
+- `--tensor-parallel-size` or `--pipeline-parallel-size`
 - `--kv-cache-dtype`
 - `--tool-call-parser`
 - `--enable-auto-tool-choice`
 - `--tokenizer-mode`
 - `--reasoning-parser`
 - `--trust-remote-code`
-- `--block-size`
+- `--language-model-only`
 - `--moe-backend`
 - `--enable-expert-parallel`
 - `--speculative-config`
@@ -327,6 +332,8 @@ Optional launch parameters currently exposed by the UI/API:
 - `--api-key` when a global vLLM API key or per-server key is configured
 
 The Deploy Server modal can import `docker run ...` and `vllm serve ...` command recipes. The manager parses supported fields into the normal launch form, ignores manager-owned Docker settings such as ports and cache mounts, blocks unsafe Docker options, and only preserves extra vLLM flags from a curated allowlist.
+
+`--block-size` remains available through the CLI and validated Extra vLLM Args for imported or legacy launch configurations, but it is not shown as a dedicated GUI control.
 
 Outside proxy mode, the CLI accepts a per-launch bind override:
 
@@ -344,7 +351,7 @@ Before launching, the backend validates:
 - combined `gpu_memory_utilization` on any selected GPU does not exceed 100%
 - downloaded model size can fit in the requested GPU budget
 - estimated KV cache can fit for the requested or default max context length
-- KV heads are compatible with the requested tensor parallel size for generic GQA/MQA models when config data is available
+- KV heads are compatible with the requested tensor parallel size for generic GQA/MQA models when config data is available; this tensor-only check is skipped for pipeline mode
 - known FP8 quantized models only run on selected GPUs with compute capability 8.9 or newer
 
 ## Monitoring

@@ -20,6 +20,9 @@ type ActiveModel struct {
 	MemUtil                   string      `json:"mem_util"`
 	MaxLen                    string      `json:"max_len"`
 	MaxNumSeqs                string      `json:"max_num_seqs"`
+	CPUOffloadGB              string      `json:"cpu_offload_gb"`
+	DType                     string      `json:"dtype"`
+	ParallelismMode           string      `json:"parallelism_mode"`
 	KVCacheDType              string      `json:"kv_cache_dtype"`
 	ToolParser                string      `json:"tool_parser"`
 	TokenizerMode             string      `json:"tokenizer_mode"`
@@ -57,6 +60,9 @@ type LaunchSpec struct {
 	MemUtil                   string   `json:"mem_util"`
 	MaxLen                    string   `json:"max_len"`
 	MaxNumSeqs                string   `json:"max_num_seqs"`
+	CPUOffloadGB              string   `json:"cpu_offload_gb"`
+	DType                     string   `json:"dtype"`
+	ParallelismMode           string   `json:"parallelism_mode"`
 	KVCacheDType              string   `json:"kv_cache_dtype"`
 	ToolParser                string   `json:"tool_parser"`
 	TokenizerMode             string   `json:"tokenizer_mode"`
@@ -81,6 +87,7 @@ type DownloadedModel struct {
 	KVCacheHeadDim       int    `json:"kv_cache_head_dim,omitempty"`
 	KVCacheDTypeBytes    int    `json:"kv_cache_dtype_bytes,omitempty"`
 	DefaultMaxModelLen   int    `json:"default_max_model_len,omitempty"`
+	IsMultimodal         bool   `json:"is_multimodal"`
 }
 
 type ValidationError struct {
@@ -111,6 +118,8 @@ const (
 	containerKindDownload           = "download"
 	ContainerExposureProxy          = "proxy"
 	ContainerExposureDirect         = "direct"
+	ParallelismTensor               = "tensor"
+	ParallelismPipeline             = "pipeline"
 	LaunchSpecVersion               = "1"
 	managerVersion                  = "0.1.0"
 )

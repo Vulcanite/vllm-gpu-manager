@@ -302,6 +302,7 @@ func GetDownloadedModels(hfCache string) ([]DownloadedModel, error) {
 				KVCacheHeadDim:       kvEstimate.HeadDim,
 				KVCacheDTypeBytes:    kvEstimate.DTypeBytes,
 				DefaultMaxModelLen:   kvEstimate.DefaultMaxModelLen,
+				IsMultimodal:         kvEstimate.IsMultimodal,
 			})
 		}
 	}

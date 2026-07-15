@@ -8,17 +8,20 @@ const FIELD_HELP = {
   model: 'The downloaded Hugging Face model to serve with vLLM.',
   servedModelName: 'Optional public model alias passed to vLLM as --served-model-name.',
   port: 'The host port that clients or the proxy use to reach this model server.',
-  gpus: 'Tensor parallel GPU count for this vLLM server.',
+  gpus: 'Number of GPUs assigned to this vLLM server.',
   gpuPinning: 'Choose the exact GPU IDs assigned to this server when you are not using every GPU.',
   memory: 'Fraction of each selected GPU memory that vLLM may use.',
   maxLen: 'Maximum context length passed to vLLM as --max-model-len.',
-  maxNumSeqs: 'Maximum number of concurrent sequences. Leave empty to use the vLLM default.',
-  blockSize: 'KV cache block size. This manager restricts it to supported powers of two.',
-  moeBackend: 'Backend implementation used by vLLM for Mixture-of-Experts models.',
-  expertParallel: 'Enable vLLM expert parallelism for MoE models.',
-  disableFlashInferAutotune: 'Pass --no-enable-flashinfer-autotune to skip FlashInfer autotuning during startup.',
+  maxNumSeqs: 'Maximum number of concurrent sequences. Defaults to 256.',
+  cpuOffloadGB: 'Offloads model weights to CPU memory per GPU. This does not replace KV cache memory and needs fast CPU-GPU interconnect.',
+  dtype: 'Model weight and activation data type. Auto uses the type selected by vLLM and the model configuration.',
+  parallelismMode: 'Tensor parallelism splits each layer across GPUs. Pipeline parallelism assigns different layers to different GPUs. Multiple GPUs are required.',
+  moeBackend: 'Backend implementation used by vLLM for Mixture-of-Experts models. Enable Expert Parallel first.',
+  expertParallel: 'Enable vLLM expert parallelism for MoE models. Requires multiple GPUs in Tensor mode.',
+  languageModelOnly: 'Disable multimodal inputs and serve only the language model component.',
   trustRemoteCode: 'Allow model repositories to execute custom Python code inside the vLLM container.',
   speculativeConfig: 'JSON object passed directly to vLLM --speculative-config for speculative decoding.',
+  speculativeDecoding: 'Enable speculative decoding and provide its vLLM JSON configuration.',
   extraVLLMArgs: 'Validated vLLM flags imported from a command that do not have dedicated fields yet.',
   tokenizerMode: 'Tokenizer implementation mode passed to vLLM.',
   reasoningParser: 'Parser used by vLLM to extract reasoning content from supported model outputs.',
@@ -97,9 +100,11 @@ export const DeployServerCard = ({
   gpuList,
   gpuUnavailableMessage,
   handleGpuCountChange,
+  handleParallelismModeChange,
   handleStart,
   hasGlobalVllmAPIKey,
   kvCacheDTypeOptions,
+  dtypeOptions,
   launchError,
   launching,
   maxGpus,
@@ -110,9 +115,9 @@ export const DeployServerCard = ({
   selectedGpuIds,
   serverApiKey,
   setServerApiKey,
-  setStartBlockSize,
+  setStartDType,
   setStartEnableExpertParallel,
-  setStartDisableFlashInferAutotune,
+  setStartLanguageModelOnly,
   setStartMoeBackend,
   setStartSpeculativeConfig,
   setUseServerApiKey,
@@ -120,6 +125,7 @@ export const DeployServerCard = ({
   setStartKvCacheDType,
   setStartMaxLen,
   setStartMaxNumSeqs,
+  setStartCPUOffloadGB,
   setStartServedModelName,
   setStartMem,
   setStartBindIP,
@@ -130,17 +136,20 @@ export const DeployServerCard = ({
   setStartTrustRemoteCode,
   setStartExtraVLLMArgs,
   setStartPort,
-  startBlockSize,
   startGpus,
+  startDType,
+  startParallelismMode,
   startKvCacheDType,
   startMaxLen,
   startMaxNumSeqs,
+  startCPUOffloadGB,
+  cpuOffloadMaxGB,
   startServedModelName,
   startMem,
   startBindIP,
   startModelName,
   startEnableExpertParallel,
-  startDisableFlashInferAutotune,
+  startLanguageModelOnly,
   startExtraVLLMArgs,
   startMoeBackend,
   startParser,
@@ -149,16 +158,21 @@ export const DeployServerCard = ({
   startSpeculativeConfig,
   startTokenizerMode,
   startTrustRemoteCode,
+  selectedModelIsMultimodal,
   submitLabel = 'Deploy Server',
   useServerApiKey,
   useCustomServerApiKey,
-  blockSizeOptions,
   moeBackendOptions,
   reasoningParserOptions,
   toggleGpu,
   tokenizerModeOptions,
   toolParserOptions,
 }) => {
+  const [extraArgsExpanded, setExtraArgsExpanded] = useState(false);
+  const [speculativeExpanded, setSpeculativeExpanded] = useState(Boolean(String(startSpeculativeConfig || '').trim()));
+  const showExtraVLLMArgs = extraArgsExpanded || Boolean(String(startExtraVLLMArgs || '').trim());
+  const showSpeculativeConfig = speculativeExpanded || Boolean(String(startSpeculativeConfig || '').trim());
+
   const handleServerKeyToggle = (event) => {
     const checked = event.target.checked;
     setUseServerApiKey(checked);
@@ -178,6 +192,26 @@ export const DeployServerCard = ({
 
   const handleGenerateServerApiKey = () => {
     setServerApiKey(generateVLLMToken());
+  };
+
+  const handleExtraArgsToggle = (event) => {
+    const checked = event.target.checked;
+    setExtraArgsExpanded(checked);
+    if (!checked) {
+      setStartExtraVLLMArgs('');
+    }
+  };
+
+  const handleSpeculativeToggle = (event) => {
+    const checked = event.target.checked;
+    setSpeculativeExpanded(checked);
+    if (!checked) setStartSpeculativeConfig('');
+  };
+
+  const handleExpertParallelToggle = (event) => {
+    const checked = event.target.checked;
+    setStartEnableExpertParallel(checked);
+    if (!checked) setStartMoeBackend('auto');
   };
 
   const currentGpuCount = Number(startGpus) || 1;
@@ -205,21 +239,33 @@ export const DeployServerCard = ({
     setStartMem(formatMemoryUtil(next));
   };
 
-  const currentBlockSizeIndex = blockSizeOptions.findIndex((option) => String(option) === String(startBlockSize));
-  const canDecreaseBlockSize = startBlockSize !== '' && currentBlockSizeIndex > 0;
-  const canIncreaseBlockSize = startBlockSize === '' || currentBlockSizeIndex < blockSizeOptions.length - 1;
-  const decreaseBlockSize = () => {
-    if (!canDecreaseBlockSize) return;
-    setStartBlockSize(String(blockSizeOptions[currentBlockSizeIndex - 1]));
-  };
-  const increaseBlockSize = () => {
-    if (startBlockSize === '') {
-      setStartBlockSize(String(blockSizeOptions[0]));
+  const currentCPUOffload = Number(startCPUOffloadGB);
+  const normalizedCPUOffload = Number.isInteger(currentCPUOffload) && currentCPUOffload >= 0 ? currentCPUOffload : 0;
+  const canDecreaseCPUOffload = normalizedCPUOffload > 0;
+  const canIncreaseCPUOffload = cpuOffloadMaxGB === null || normalizedCPUOffload < cpuOffloadMaxGB;
+  const setCPUOffload = (value) => {
+    const next = Math.max(0, Math.trunc(Number(value) || 0));
+    if (cpuOffloadMaxGB !== null) {
+      setStartCPUOffloadGB(String(Math.min(next, Math.max(0, cpuOffloadMaxGB))));
       return;
     }
-    if (!canIncreaseBlockSize) return;
-    setStartBlockSize(String(blockSizeOptions[currentBlockSizeIndex + 1]));
+    setStartCPUOffloadGB(String(next));
   };
+  const decreaseCPUOffload = () => {
+    if (!canDecreaseCPUOffload) return;
+    setCPUOffload(normalizedCPUOffload - 1);
+  };
+  const increaseCPUOffload = () => {
+    if (!canIncreaseCPUOffload) return;
+    setCPUOffload(normalizedCPUOffload + 1);
+  };
+  const effectiveDTypeOptions = dtypeOptions.includes(startDType)
+    ? dtypeOptions
+    : [...dtypeOptions, startDType].filter(Boolean);
+  const parallelismEligible = currentGpuCount >= 2;
+  const expertParallelEligible = parallelismEligible && startParallelismMode === 'tensor';
+  const moeBackendEligible = expertParallelEligible && startEnableExpertParallel;
+  const showLanguageModelOnly = selectedModelIsMultimodal || startLanguageModelOnly;
 
   return (
     <div className={embedded ? 'launch-deploy-card deploy-server-panel' : 'card launch-deploy-card'}>
@@ -335,38 +381,24 @@ export const DeployServerCard = ({
           </div>
         </div>
 
-        <div className="form-grid">
-          <div className="form-group">
-            <FieldLabel htmlFor="startMaxLen" help={FIELD_HELP.maxLen}>Max Context Length</FieldLabel>
-            <div className="inline-control max-len-control">
-              <button className="btn btn-outline btn-compact" type="button" onClick={() => scaleMaxLen(0.5)}>
-                -
-              </button>
-              <input
-                id="startMaxLen"
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                className="form-control"
-                value={startMaxLen}
-                onChange={(event) => setStartMaxLen(event.target.value)}
-              />
-              <button className="btn btn-outline btn-compact" type="button" onClick={() => scaleMaxLen(2)}>
-                +
-              </button>
-            </div>
-          </div>
-          <div className="form-group">
-            <FieldLabel htmlFor="startMaxNumSeqs" help={FIELD_HELP.maxNumSeqs}>Max Num Seqs</FieldLabel>
+        <div className="form-group">
+          <FieldLabel htmlFor="startMaxLen" help={FIELD_HELP.maxLen}>Max Context Length</FieldLabel>
+          <div className="inline-control max-len-control">
+            <button className="btn btn-outline btn-compact" type="button" onClick={() => scaleMaxLen(0.5)}>
+              -
+            </button>
             <input
-              id="startMaxNumSeqs"
-              type="number"
-              className="form-control no-native-spinner"
-              value={startMaxNumSeqs}
-              onChange={(event) => setStartMaxNumSeqs(event.target.value)}
-              min="1"
-              placeholder="vLLM default"
+              id="startMaxLen"
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              className="form-control"
+              value={startMaxLen}
+              onChange={(event) => setStartMaxLen(event.target.value)}
             />
+            <button className="btn btn-outline btn-compact" type="button" onClick={() => scaleMaxLen(2)}>
+              +
+            </button>
           </div>
         </div>
 
@@ -375,26 +407,61 @@ export const DeployServerCard = ({
           <div className="advanced-settings-body">
             <div className="form-grid">
               <div className="form-group">
-                <FieldLabel htmlFor="startBlockSize" help={FIELD_HELP.blockSize}>Block Size</FieldLabel>
-                <div className="inline-control block-size-control">
-                  <button className="btn btn-outline btn-compact" type="button" onClick={decreaseBlockSize} disabled={!canDecreaseBlockSize}>
+                <FieldLabel htmlFor="startMaxNumSeqs" help={FIELD_HELP.maxNumSeqs}>Max Num Seqs</FieldLabel>
+                <input
+                  id="startMaxNumSeqs"
+                  type="text"
+                  className="form-control centered-input no-native-spinner"
+                  value={startMaxNumSeqs}
+                  onChange={(event) => setStartMaxNumSeqs(event.target.value)}
+                  inputMode="numeric"
+                />
+              </div>
+              <div className="form-group">
+                <FieldLabel htmlFor="startCPUOffloadGB" help={FIELD_HELP.cpuOffloadGB}>CPU Offload per GPU (GiB)</FieldLabel>
+                <div className="inline-control cpu-offload-control">
+                  <button className="btn btn-outline btn-compact" type="button" onClick={decreaseCPUOffload} disabled={!canDecreaseCPUOffload}>
                     -
                   </button>
-                  <input id="startBlockSize" type="text" className="form-control" value={startBlockSize || 'vLLM default'} readOnly />
-                  <button className="btn btn-outline btn-compact" type="button" onClick={increaseBlockSize} disabled={!canIncreaseBlockSize}>
+                  <input
+                    id="startCPUOffloadGB"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    className="form-control"
+                    value={startCPUOffloadGB}
+                    onChange={(event) => setCPUOffload(event.target.value)}
+                    disabled={launching}
+                  />
+                  <button className="btn btn-outline btn-compact" type="button" onClick={increaseCPUOffload} disabled={!canIncreaseCPUOffload}>
                     +
                   </button>
                 </div>
               </div>
+            </div>
 
+            <div className="form-grid">
               <div className="form-group">
-                <FieldLabel htmlFor="startMoeBackend" help={FIELD_HELP.moeBackend}>MoE Backend</FieldLabel>
-                <select id="startMoeBackend" className="form-control" value={startMoeBackend} onChange={(event) => setStartMoeBackend(event.target.value)}>
-                  {(moeBackendOptions && moeBackendOptions.length > 0 ? moeBackendOptions : ['auto']).map((option) => (
+                <FieldLabel htmlFor="startDType" help={FIELD_HELP.dtype}>DType</FieldLabel>
+                <select id="startDType" className="form-control" value={startDType} onChange={(event) => setStartDType(event.target.value)}>
+                  {effectiveDTypeOptions.map((option) => (
                     <option key={option} value={option}>
                       {option}
                     </option>
                   ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <FieldLabel htmlFor="startParallelismMode" help={FIELD_HELP.parallelismMode}>Parallelism Mode</FieldLabel>
+                <select
+                  id="startParallelismMode"
+                  className="form-control"
+                  value={startParallelismMode}
+                  onChange={(event) => handleParallelismModeChange(event.target.value)}
+                  disabled={launching || !parallelismEligible}
+                >
+                  <option value="tensor">Tensor</option>
+                  <option value="pipeline">Pipeline</option>
                 </select>
               </div>
             </div>
@@ -410,8 +477,8 @@ export const DeployServerCard = ({
                       id="startEnableExpertParallel"
                       type="checkbox"
                       checked={Boolean(startEnableExpertParallel)}
-                      onChange={(event) => setStartEnableExpertParallel(event.target.checked)}
-                      disabled={launching}
+                      onChange={handleExpertParallelToggle}
+                      disabled={launching || !expertParallelEligible}
                     />
                     <span className="toggle-track" aria-hidden="true">
                       <span className="toggle-thumb" />
@@ -419,7 +486,23 @@ export const DeployServerCard = ({
                   </label>
                 </div>
               </div>
+              <div className="form-group">
+                <FieldLabel htmlFor="startMoeBackend" help={FIELD_HELP.moeBackend}>MoE Backend</FieldLabel>
+                <select
+                  id="startMoeBackend"
+                  className="form-control"
+                  value={startMoeBackend}
+                  onChange={(event) => setStartMoeBackend(event.target.value)}
+                  disabled={launching || !moeBackendEligible}
+                >
+                  {(moeBackendOptions && moeBackendOptions.length > 0 ? moeBackendOptions : ['auto']).map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
 
+            <div className={showLanguageModelOnly ? 'form-grid' : ''}>
               <div className="form-group launch-toggle-group">
                 <div className="setting-row launch-setting-row">
                   <div>
@@ -439,54 +522,82 @@ export const DeployServerCard = ({
                   </label>
                 </div>
               </div>
-
-              <div className="form-group launch-toggle-group">
-                <div className="setting-row launch-setting-row">
-                  <div>
-                    <FieldLabel htmlFor="startDisableFlashInferAutotune" help={FIELD_HELP.disableFlashInferAutotune}>Disable FlashInfer Autotune</FieldLabel>
+              {showLanguageModelOnly && (
+                <div className="form-group launch-toggle-group">
+                  <div className="setting-row launch-setting-row">
+                    <div>
+                      <FieldLabel htmlFor="startLanguageModelOnly" help={FIELD_HELP.languageModelOnly}>Language Model Only</FieldLabel>
+                    </div>
+                    <label className="toggle-control" aria-label="Serve only the language model component">
+                      <input
+                        id="startLanguageModelOnly"
+                        type="checkbox"
+                        checked={Boolean(startLanguageModelOnly)}
+                        onChange={(event) => setStartLanguageModelOnly(event.target.checked)}
+                        disabled={launching}
+                      />
+                      <span className="toggle-track" aria-hidden="true">
+                        <span className="toggle-thumb" />
+                      </span>
+                    </label>
                   </div>
-                  <label className="toggle-control" aria-label="Disable FlashInfer autotune for this server">
-                    <input
-                      id="startDisableFlashInferAutotune"
-                      type="checkbox"
-                      checked={Boolean(startDisableFlashInferAutotune)}
-                      onChange={(event) => setStartDisableFlashInferAutotune(event.target.checked)}
-                      disabled={launching}
-                    />
-                    <span className="toggle-track" aria-hidden="true">
-                      <span className="toggle-thumb" />
-                    </span>
-                  </label>
                 </div>
+              )}
+            </div>
+
+            <div className="form-group extra-vllm-args-group">
+              <div className="setting-row launch-setting-row">
+                <FieldLabel htmlFor="enableSpeculativeDecoding" help={FIELD_HELP.speculativeDecoding}>Enable Speculative Decoding</FieldLabel>
+                <label className="toggle-control" aria-label="Enable speculative decoding">
+                  <input id="enableSpeculativeDecoding" type="checkbox" checked={showSpeculativeConfig} onChange={handleSpeculativeToggle} disabled={launching} />
+                  <span className="toggle-track" aria-hidden="true"><span className="toggle-thumb" /></span>
+                </label>
               </div>
+              {showSpeculativeConfig && (
+                <input
+                  id="startSpeculativeConfig"
+                  type="text"
+                  className="form-control code-input"
+                  value={startSpeculativeConfig}
+                  onChange={(event) => setStartSpeculativeConfig(event.target.value)}
+                  placeholder='{"model":"draft-model","num_speculative_tokens":4}'
+                  spellCheck="false"
+                  disabled={launching}
+                  aria-label={FIELD_HELP.speculativeConfig}
+                />
+              )}
             </div>
 
-            <div className="form-group">
-              <FieldLabel htmlFor="startSpeculativeConfig" help={FIELD_HELP.speculativeConfig}>Speculative Config</FieldLabel>
-              <textarea
-                id="startSpeculativeConfig"
-                className="form-control code-textarea"
-                value={startSpeculativeConfig}
-                onChange={(event) => setStartSpeculativeConfig(event.target.value)}
-                placeholder='{"model":"draft-model","num_speculative_tokens":4}'
-                rows={4}
-                spellCheck="false"
-                disabled={launching}
-              />
-            </div>
-
-            <div className="form-group">
-              <FieldLabel htmlFor="startExtraVLLMArgs" help={FIELD_HELP.extraVLLMArgs}>Extra vLLM Args</FieldLabel>
-              <textarea
-                id="startExtraVLLMArgs"
-                className="form-control code-textarea"
-                value={startExtraVLLMArgs}
-                onChange={(event) => setStartExtraVLLMArgs(event.target.value)}
-                placeholder={'--language-model-only\n--max-num-batched-tokens 8192'}
-                rows={4}
-                spellCheck="false"
-                disabled={launching}
-              />
+            <div className="form-group extra-vllm-args-group">
+              <div className="setting-row launch-setting-row">
+                <div>
+                  <FieldLabel htmlFor="showExtraVLLMArgs" help={FIELD_HELP.extraVLLMArgs}>Extra vLLM Args</FieldLabel>
+                </div>
+                <label className="toggle-control" aria-label="Show extra vLLM args field">
+                  <input
+                    id="showExtraVLLMArgs"
+                    type="checkbox"
+                    checked={showExtraVLLMArgs}
+                    onChange={handleExtraArgsToggle}
+                    disabled={launching}
+                  />
+                  <span className="toggle-track" aria-hidden="true">
+                    <span className="toggle-thumb" />
+                  </span>
+                </label>
+              </div>
+              {showExtraVLLMArgs && (
+                <textarea
+                  id="startExtraVLLMArgs"
+                  className="form-control code-textarea extra-vllm-args-textarea"
+                  value={startExtraVLLMArgs}
+                  onChange={(event) => setStartExtraVLLMArgs(event.target.value)}
+                  placeholder={'--no-enable-flashinfer-autotune\n--max-num-batched-tokens 8192'}
+                  rows={4}
+                  spellCheck="false"
+                  disabled={launching}
+                />
+              )}
             </div>
 
             <div className="form-grid">

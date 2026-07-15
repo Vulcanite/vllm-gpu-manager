@@ -64,7 +64,7 @@ func TestCheckModelFitsInVRAMAllowsSmallModel(t *testing.T) {
 		ID:          0,
 		MemoryTotal: 16 * 1024 * 1024 * 1024,
 		MemoryFree:  16 * 1024 * 1024 * 1024,
-	}}, 1, "0.9", "128", "auto")
+	}}, 1, ParallelismTensor, "0.9", "128", "auto")
 	if err != nil {
 		t.Fatalf("CheckModelFitsInVRAM() error=%v", err)
 	}
@@ -79,7 +79,7 @@ func TestCheckModelFitsInVRAMRejectsMaxLenAboveModelLimit(t *testing.T) {
 		ID:          0,
 		MemoryTotal: 16 * 1024 * 1024 * 1024,
 		MemoryFree:  16 * 1024 * 1024 * 1024,
-	}}, 1, "0.9", "256", "auto")
+	}}, 1, ParallelismTensor, "0.9", "256", "auto")
 	if err == nil {
 		t.Fatal("CheckModelFitsInVRAM() error=nil, want max len validation error")
 	}
@@ -97,7 +97,7 @@ func TestCheckModelFitsInVRAMRejectsMaxLenAboveModelLimitWithPartialConfig(t *te
 		ID:          0,
 		MemoryTotal: 16 * 1024 * 1024 * 1024,
 		MemoryFree:  16 * 1024 * 1024 * 1024,
-	}}, 1, "0.9", "256", "auto")
+	}}, 1, ParallelismTensor, "0.9", "256", "auto")
 	if err == nil {
 		t.Fatal("CheckModelFitsInVRAM() error=nil, want max len validation error")
 	}
@@ -115,7 +115,7 @@ func TestCheckModelFitsInVRAMRejectsInsufficientFreeMemory(t *testing.T) {
 		ID:          0,
 		MemoryTotal: 16 * 1024 * 1024 * 1024,
 		MemoryFree:  1024 * 1024,
-	}}, 1, "0.9", "128", "auto")
+	}}, 1, ParallelismTensor, "0.9", "128", "auto")
 	if err == nil {
 		t.Fatal("CheckModelFitsInVRAM() error=nil, want free memory validation error")
 	}
@@ -132,8 +132,47 @@ func TestCheckModelFitsInVRAMAllowsDeepSeekV4MLAKVHeadsWithTensorParallel(t *tes
 	err := CheckModelFitsInVRAM(model, hfCache, []GPUInfo{
 		{ID: 0, MemoryTotal: 16 * 1024 * 1024 * 1024, MemoryFree: 16 * 1024 * 1024 * 1024},
 		{ID: 1, MemoryTotal: 16 * 1024 * 1024 * 1024, MemoryFree: 16 * 1024 * 1024 * 1024},
-	}, 2, "0.95", "32768", "fp8")
+	}, 2, ParallelismTensor, "0.95", "32768", "fp8")
 	if err != nil {
 		t.Fatalf("CheckModelFitsInVRAM() error=%v", err)
+	}
+}
+
+func TestGetModelKVCacheEstimateDetectsMultimodalMetadata(t *testing.T) {
+	hfCache := t.TempDir()
+	model := "test/vision-model"
+	writeVRAMTestModel(t, hfCache, model, `{
+		"model_type": "qwen2_5_vl",
+		"architectures": ["Qwen2_5_VLForConditionalGeneration"],
+		"vision_config": {"hidden_size": 1024},
+		"num_hidden_layers": 2,
+		"num_attention_heads": 4,
+		"num_key_value_heads": 2,
+		"hidden_size": 64,
+		"head_dim": 16,
+		"torch_dtype": "float16",
+		"max_position_embeddings": 1024
+	}`, 1024)
+
+	estimate, err := GetModelKVCacheEstimate(hfCache, model)
+	if err != nil {
+		t.Fatalf("GetModelKVCacheEstimate() error=%v", err)
+	}
+	if !estimate.IsMultimodal {
+		t.Fatal("IsMultimodal=false, want true from cached config metadata")
+	}
+}
+
+func TestGetModelKVCacheEstimateDoesNotGuessMultimodalFromName(t *testing.T) {
+	hfCache := t.TempDir()
+	model := "test/model-with-vision-in-name"
+	writeVRAMTestModel(t, hfCache, model, tinyVRAMConfig(1024), 1024)
+
+	estimate, err := GetModelKVCacheEstimate(hfCache, model)
+	if err != nil {
+		t.Fatalf("GetModelKVCacheEstimate() error=%v", err)
+	}
+	if estimate.IsMultimodal {
+		t.Fatal("IsMultimodal=true without multimodal config metadata")
 	}
 }

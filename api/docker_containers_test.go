@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -195,13 +196,16 @@ func TestBuildActiveModelUsesLaunchSpecLabelsForEditMetadata(t *testing.T) {
 		MemUtil:                   "0.85",
 		MaxLen:                    "32768",
 		MaxNumSeqs:                "8",
+		CPUOffloadGB:              "16",
+		DType:                     "bfloat16",
+		ParallelismMode:           ParallelismPipeline,
 		KVCacheDType:              "fp8",
 		ToolParser:                "deepseek_v4",
 		TokenizerMode:             "deepseek_v4",
 		ReasoningParser:           "deepseek_v4",
 		TrustRemoteCode:           true,
 		BlockSize:                 "256",
-		MoeBackend:                "flashinfer",
+		MoeBackend:                "flashinfer_cutlass",
 		ExpertParallel:            true,
 		DisableFlashInferAutotune: true,
 		SpeculativeConfig:         `{"method":"dspark"}`,
@@ -244,8 +248,8 @@ func TestBuildActiveModelUsesLaunchSpecLabelsForEditMetadata(t *testing.T) {
 	if model.Exposure != ContainerExposureProxy {
 		t.Fatalf("Exposure=%q, want proxy", model.Exposure)
 	}
-	if model.Model != spec.Model || model.Port != "9090" || model.GPUs != "2" {
-		t.Fatalf("model fields=%q/%q/%q, want launch spec values", model.Model, model.Port, model.GPUs)
+	if model.Model != spec.Model || model.Port != "9090" || model.GPUs != "2" || model.CPUOffloadGB != "16" || model.DType != "bfloat16" || model.ParallelismMode != ParallelismPipeline {
+		t.Fatalf("model fields=%q/%q/%q/%q, want launch spec values", model.Model, model.Port, model.GPUs, model.CPUOffloadGB)
 	}
 	if model.ServedModelName != spec.ServedModelName {
 		t.Fatalf("ServedModelName=%q, want %q", model.ServedModelName, spec.ServedModelName)
@@ -267,6 +271,9 @@ func TestServerContainerLabelsIncludeExposureAndLaunchSpec(t *testing.T) {
 		GPUIDs:          "0,1",
 		MemUtil:         "0.9",
 		MaxLen:          "32768",
+		CPUOffloadGB:    "8",
+		DType:           "float16",
+		ParallelismMode: ParallelismTensor,
 		KVCacheDType:    "auto",
 		TokenizerMode:   "auto",
 		MoeBackend:      "auto",
@@ -293,6 +300,48 @@ func TestServerContainerLabelsIncludeExposureAndLaunchSpec(t *testing.T) {
 	if strings.Contains(labels[containerLaunchSpecLabel], "api_key") || strings.Contains(labels[containerLaunchSpecLabel], "secret") {
 		t.Fatalf("launch spec label appears to contain secret material: %s", labels[containerLaunchSpecLabel])
 	}
+}
+
+func TestBuildVLLMServeArgsUsesSingleParallelismMode(t *testing.T) {
+	tensorArgs := buildVLLMServeArgs(LaunchSpec{
+		Model:           "test/model",
+		Port:            8080,
+		GPUs:            2,
+		MemUtil:         "0.9",
+		DType:           "auto",
+		ParallelismMode: ParallelismTensor,
+	}, "")
+	if !hasArgPair(tensorArgs, "--tensor-parallel-size", "2") || slices.Contains(tensorArgs, "--pipeline-parallel-size") {
+		t.Fatalf("tensor args=%v", tensorArgs)
+	}
+	if slices.Contains(tensorArgs, "--dtype") || slices.Contains(tensorArgs, "--block-size") {
+		t.Fatalf("default GUI args unexpectedly emit dtype or block size: %v", tensorArgs)
+	}
+
+	pipelineArgs := buildVLLMServeArgs(LaunchSpec{
+		Model:           "test/model",
+		Port:            8080,
+		GPUs:            4,
+		MemUtil:         "0.9",
+		DType:           "float32",
+		ParallelismMode: ParallelismPipeline,
+		ExtraVLLMArgs:   []string{"--block-size", "256"},
+	}, "")
+	if !hasArgPair(pipelineArgs, "--pipeline-parallel-size", "4") || slices.Contains(pipelineArgs, "--tensor-parallel-size") {
+		t.Fatalf("pipeline args=%v", pipelineArgs)
+	}
+	if !hasArgPair(pipelineArgs, "--dtype", "float32") || !hasArgPair(pipelineArgs, "--block-size", "256") {
+		t.Fatalf("pipeline args did not preserve dtype and legacy block-size extra: %v", pipelineArgs)
+	}
+}
+
+func hasArgPair(args []string, flag string, value string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag && args[i+1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestNormalizeKVCacheDType(t *testing.T) {
@@ -327,6 +376,92 @@ func TestNormalizeKVCacheDTypeRejectsInvalidValue(t *testing.T) {
 		t.Fatal("normalizeKVCacheDType returned nil error for invalid dtype")
 	} else if !IsValidationError(err) {
 		t.Fatalf("error type=%T, want ValidationError", err)
+	}
+}
+
+func TestNormalizeDTypeAliases(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  string
+	}{
+		{value: "", want: "auto"},
+		{value: "auto", want: "auto"},
+		{value: "bfloat16", want: "bfloat16"},
+		{value: "half", want: "float16"},
+		{value: "float16", want: "float16"},
+		{value: "float", want: "float32"},
+		{value: "float32", want: "float32"},
+	} {
+		got, err := normalizeDType(test.value)
+		if err != nil || got != test.want {
+			t.Fatalf("normalizeDType(%q)=%q, %v; want %q", test.value, got, err, test.want)
+		}
+	}
+	if _, err := normalizeDType("int8"); err == nil {
+		t.Fatal("normalizeDType accepted unsupported dtype")
+	}
+}
+
+func TestNormalizeParallelismMode(t *testing.T) {
+	if got, err := normalizeParallelismMode("", 1); err != nil || got != ParallelismTensor {
+		t.Fatalf("normalizeParallelismMode(empty)=%q, %v", got, err)
+	}
+	if got, err := normalizeParallelismMode(ParallelismPipeline, 2); err != nil || got != ParallelismPipeline {
+		t.Fatalf("normalizeParallelismMode(pipeline)=%q, %v", got, err)
+	}
+	if _, err := normalizeParallelismMode(ParallelismPipeline, 1); err == nil {
+		t.Fatal("normalizeParallelismMode accepted single-GPU pipeline mode")
+	}
+	if _, err := normalizeParallelismMode("hybrid", 4); err == nil {
+		t.Fatal("normalizeParallelismMode accepted unsupported mode")
+	}
+}
+
+func TestStartModelRejectsIneligibleParallelismSettingsBeforeDocker(t *testing.T) {
+	tests := []struct {
+		name           string
+		gpus           int
+		parallelism    string
+		moeBackend     string
+		expertParallel bool
+		want           string
+	}{
+		{
+			name:        "single GPU pipeline",
+			gpus:        1,
+			parallelism: ParallelismPipeline,
+			moeBackend:  "auto",
+			want:        "pipeline parallelism requires at least 2 GPUs",
+		},
+		{
+			name:           "single GPU expert parallel",
+			gpus:           1,
+			parallelism:    ParallelismTensor,
+			moeBackend:     "auto",
+			expertParallel: true,
+			want:           "expert parallelism requires at least 2 GPUs",
+		},
+		{
+			name:        "MoE backend without expert parallel",
+			gpus:        2,
+			parallelism: ParallelismTensor,
+			moeBackend:  "cutlass",
+			want:        "non-default MoE backend requires expert parallelism",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := StartModel(
+				"test/model", "", 8080, test.gpus, "all", "0.9", "32768", "256", "0",
+				"auto", test.parallelism, "auto", "", "auto", "", false, "", test.moeBackend,
+				test.expertParallel, false, "", t.TempDir(), "", "", false, false, "127.0.0.1",
+				ContainerExposureDirect, "", nil,
+			)
+			if err == nil || !IsValidationError(err) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("StartModel() error=%v, want validation error containing %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -568,8 +703,8 @@ func TestNormalizeMoeBackend(t *testing.T) {
 	}{
 		{value: "", want: "auto"},
 		{value: "auto", want: "auto"},
-		{value: "FlashInfer", want: "flashinfer"},
-		{value: "deepep_low_latency", want: "deepep_low_latency"},
+		{value: "FlashInfer_Cutlass", want: "flashinfer_cutlass"},
+		{value: "deep_gemm_mega_moe", want: "deep_gemm_mega_moe"},
 	} {
 		got, err := normalizeMoeBackend(test.value)
 		if err != nil {
@@ -610,8 +745,60 @@ func TestNormalizeSpeculativeConfig(t *testing.T) {
 	}
 }
 
+func TestNormalizeCPUOffloadGB(t *testing.T) {
+	tests := []struct {
+		value string
+		want  int
+	}{
+		{value: "", want: 0},
+		{value: "0", want: 0},
+		{value: "16", want: 16},
+		{value: " 32 ", want: 32},
+	}
+	for _, test := range tests {
+		got, err := normalizeCPUOffloadGB(test.value)
+		if err != nil {
+			t.Fatalf("normalizeCPUOffloadGB(%q) error=%v", test.value, err)
+		}
+		if got != test.want {
+			t.Fatalf("normalizeCPUOffloadGB(%q)=%d, want %d", test.value, got, test.want)
+		}
+	}
+
+	for _, value := range []string{"-1", "1.5", "bad"} {
+		if _, err := normalizeCPUOffloadGB(value); err == nil {
+			t.Fatalf("normalizeCPUOffloadGB(%q) accepted invalid value", value)
+		}
+	}
+}
+
+func TestValidateCPUOffloadRAM(t *testing.T) {
+	ram := SystemRAM{Free: 40 * bytesPerGiB}
+	if err := validateCPUOffloadRAM(16, 2, ram); err != nil {
+		t.Fatalf("validateCPUOffloadRAM returned error: %v", err)
+	}
+	if err := validateCPUOffloadRAM(17, 2, ram); err == nil {
+		t.Fatal("validateCPUOffloadRAM accepted insufficient RAM")
+	} else if !IsValidationError(err) {
+		t.Fatalf("error type=%T, want ValidationError", err)
+	}
+	if err := validateCPUOffloadRAM(0, 2, SystemRAM{}); err != nil {
+		t.Fatalf("validateCPUOffloadRAM disabled returned error: %v", err)
+	}
+}
+
+func TestCPUOffloadUlimits(t *testing.T) {
+	if got := cpuOffloadUlimits(0); got != nil {
+		t.Fatalf("cpuOffloadUlimits(0)=%v, want nil", got)
+	}
+	got := cpuOffloadUlimits(1)
+	if len(got) != 1 || got[0].Name != "memlock" || got[0].Soft != -1 || got[0].Hard != -1 {
+		t.Fatalf("cpuOffloadUlimits(1)=%+v, want memlock -1:-1", got)
+	}
+}
+
 func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", ContainerExposureDirect, "per-server-key", nil)
+	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "0", "auto", ParallelismTensor, "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", ContainerExposureDirect, "per-server-key", nil)
 	if err == nil {
 		t.Fatal("StartModel accepted both global and per-server key; want validation error")
 	}
@@ -624,7 +811,7 @@ func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
 }
 
 func TestStartModelRejectsWhitespaceInPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "", false, false, "0.0.0.0", ContainerExposureDirect, "key with space", nil)
+	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "0", "auto", ParallelismTensor, "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "", false, false, "0.0.0.0", ContainerExposureDirect, "key with space", nil)
 	if err == nil {
 		t.Fatal("StartModel accepted whitespace in per-server key; want validation error")
 	}

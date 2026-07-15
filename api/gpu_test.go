@@ -66,3 +66,26 @@ func TestParseNvidiaSMIProcessCSVEmptyAndMalformed(t *testing.T) {
 		t.Fatalf("malformed CSV yielded %d entries, want 0 (no valid PIDs)", len(parsed))
 	}
 }
+
+func TestParseNvidiaSMITopology(t *testing.T) {
+	out := []byte(`
+	GPU0	GPU1	GPU2	CPU Affinity	NUMA Affinity
+GPU0	X	NV4	SYS	0-31	0
+GPU1	NV4	X	PHB	0-31	0
+GPU2	SYS	PHB	X	32-63	1
+`)
+	links := parseNvidiaSMITopology(out)
+	if len(links) != 3 {
+		t.Fatalf("len(links)=%d, want 3", len(links))
+	}
+	want := []GPUTopologyLink{
+		{GPUA: 0, GPUB: 1, Link: "NV4"},
+		{GPUA: 0, GPUB: 2, Link: "SYS"},
+		{GPUA: 1, GPUB: 2, Link: "PHB"},
+	}
+	for i := range want {
+		if links[i] != want[i] {
+			t.Fatalf("links[%d]=%+v, want %+v", i, links[i], want[i])
+		}
+	}
+}

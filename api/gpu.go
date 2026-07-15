@@ -29,6 +29,12 @@ type GPUInfo struct {
 	Processes         []GPUProcess `json:"processes,omitempty"`
 }
 
+type GPUTopologyLink struct {
+	GPUA int    `json:"gpu_a"`
+	GPUB int    `json:"gpu_b"`
+	Link string `json:"link"`
+}
+
 var getGPUInfo = GetGPUInfo
 
 func RequireDetectedGPUs() ([]GPUInfo, error) {
@@ -81,6 +87,75 @@ func queryNvidiaSMIProcesses(ctx context.Context) map[string][]GPUProcess {
 		procsByUUID[uuid] = list
 	}
 	return procsByUUID
+}
+
+func GetGPUTopologyLinks() ([]GPUTopologyLink, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "nvidia-smi", "topo", "-m").Output()
+	if err != nil {
+		return nil, fmt.Sprintf("nvidia-smi topo -m failed: %v", err)
+	}
+	links := parseNvidiaSMITopology(out)
+	if len(links) == 0 {
+		return nil, "nvidia-smi topo -m returned no GPU links"
+	}
+	return links, ""
+}
+
+func parseNvidiaSMITopology(out []byte) []GPUTopologyLink {
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) < 2 {
+		return nil
+	}
+	header := strings.Fields(lines[0])
+	type gpuColumn struct {
+		column int
+		gpuID  int
+	}
+	gpuColumns := make([]gpuColumn, 0, len(header))
+	for column, value := range header {
+		id, ok := parseTopologyGPUHeader(value)
+		if ok {
+			gpuColumns = append(gpuColumns, gpuColumn{column: column, gpuID: id})
+		}
+	}
+	var links []GPUTopologyLink
+	for _, line := range lines[1:] {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		rowGPU, ok := parseTopologyGPUHeader(fields[0])
+		if !ok {
+			continue
+		}
+		for _, gpuColumn := range gpuColumns {
+			valueIndex := gpuColumn.column + 1
+			otherGPU := gpuColumn.gpuID
+			if valueIndex >= len(fields) || rowGPU >= otherGPU {
+				continue
+			}
+			link := strings.TrimSpace(fields[valueIndex])
+			if link == "" || link == "X" {
+				continue
+			}
+			links = append(links, GPUTopologyLink{GPUA: rowGPU, GPUB: otherGPU, Link: link})
+		}
+	}
+	return links
+}
+
+func parseTopologyGPUHeader(value string) (int, bool) {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "GPU") {
+		return 0, false
+	}
+	id, err := strconv.Atoi(strings.TrimPrefix(value, "GPU"))
+	if err != nil {
+		return 0, false
+	}
+	return id, true
 }
 
 func parseNvidiaSMICSV(out []byte) []GPUInfo {
