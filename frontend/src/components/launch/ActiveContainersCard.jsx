@@ -53,9 +53,15 @@ export const ActiveContainersCard = ({ activeModels, handleRestart, onDeployServ
               const active = ['running', 'restarting', 'paused'].includes(model.state);
               const isRestarting = restartingId === model.container_id;
               const actionLabel = model.state === 'running' ? 'Restart' : 'Start';
+              const servedModelName = String(model.served_model_name || '').trim();
               return (
                 <tr key={model.container_id}>
-                  <td className="active-container-model">{model.model}</td>
+                  <td className="active-container-model">
+                    <span className="active-container-model-primary">{model.model}</span>
+                    {servedModelName && (
+                      <span className="active-container-served-name">Served as {servedModelName}</span>
+                    )}
+                  </td>
                   <td>{formatGPUIds(model)}</td>
                   <td>{model.port}</td>
                   <td>{model.mem_util || '-'}</td>

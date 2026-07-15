@@ -38,7 +38,10 @@ func TestParseImportedDockerRunCommand(t *testing.T) {
 	if got.Fields.SpeculativeConfig != `{"method":"dspark","num_speculative_tokens":7}` {
 		t.Fatalf("speculative_config=%q", got.Fields.SpeculativeConfig)
 	}
-	if !reflect.DeepEqual(got.ExtraVLLMArgs, []string{"--served-model-name", "DeepSeek-V4", "--enable-chunked-prefill"}) {
+	if got.Fields.ServedModelName != "DeepSeek-V4" {
+		t.Fatalf("served_model_name=%q", got.Fields.ServedModelName)
+	}
+	if !reflect.DeepEqual(got.ExtraVLLMArgs, []string{"--enable-chunked-prefill"}) {
 		t.Fatalf("extra=%v", got.ExtraVLLMArgs)
 	}
 	if !containsString(got.Unsupported, "--privileged") {
@@ -70,14 +73,17 @@ func TestParseImportedCommandRejectsBadQuoting(t *testing.T) {
 }
 
 func TestNormalizeExtraVLLMArgs(t *testing.T) {
-	got, err := NormalizeExtraVLLMArgs([]string{"--served-model-name=alias", "--disable-log-requests", "--language-model-only"})
+	got, err := NormalizeExtraVLLMArgs([]string{"--disable-log-requests", "--language-model-only"})
 	if err != nil {
 		t.Fatalf("NormalizeExtraVLLMArgs() error=%v", err)
 	}
-	if !reflect.DeepEqual(got, []string{"--served-model-name", "alias", "--disable-log-requests", "--language-model-only"}) {
+	if !reflect.DeepEqual(got, []string{"--disable-log-requests", "--language-model-only"}) {
 		t.Fatalf("NormalizeExtraVLLMArgs()=%v", got)
 	}
 
+	if _, err := NormalizeExtraVLLMArgs([]string{"--served-model-name=alias"}); err == nil {
+		t.Fatal("NormalizeExtraVLLMArgs accepted managed --served-model-name")
+	}
 	if _, err := NormalizeExtraVLLMArgs([]string{"--model", "Qwen/Qwen3"}); err == nil {
 		t.Fatal("NormalizeExtraVLLMArgs accepted managed --model")
 	}

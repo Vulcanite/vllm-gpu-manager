@@ -30,6 +30,7 @@ type dashboardOptions struct {
 
 type startModelRequest struct {
 	Model                     string   `json:"model"`
+	ServedModelName           string   `json:"served_model_name"`
 	Port                      int      `json:"port"`
 	GPUs                      int      `json:"gpus"`
 	GPUIDs                    string   `json:"gpu_ids"`
@@ -447,8 +448,8 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			return
 		}
 
-		log.Printf("[API] /api/models/start requested! Model=%s Port=%d GPUs=%d GPUIDs=%s MemUtil=%s MaxLen=%s MaxNumSeqs=%s KVCacheDType=%s Parser=%s TokenizerMode=%s ReasoningParser=%s TrustRemoteCode=%t BlockSize=%s MoeBackend=%s ExpertParallel=%t DisableFlashInferAutotune=%t SpeculativeConfigSet=%t\n",
-			req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, strings.TrimSpace(req.SpeculativeConfig) != "")
+		log.Printf("[API] /api/models/start requested! Model=%s ServedModelName=%s Port=%d GPUs=%d GPUIDs=%s MemUtil=%s MaxLen=%s MaxNumSeqs=%s KVCacheDType=%s Parser=%s TokenizerMode=%s ReasoningParser=%s TrustRemoteCode=%t BlockSize=%s MoeBackend=%s ExpertParallel=%t DisableFlashInferAutotune=%t SpeculativeConfigSet=%t\n",
+			req.Model, req.ServedModelName, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, strings.TrimSpace(req.SpeculativeConfig) != "")
 
 		_, err := api.RequireDetectedGPUs()
 		if err != nil {
@@ -479,7 +480,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			vllmAPIKey = ""
 		}
 		auditParams := auditLaunchParams(req, containerExposure, hostBindIP)
-		if err := api.StartModel(req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, req.SpeculativeConfig, settings.HFCache, settings.HFToken, vllmAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, containerExposure, serverAPIKey, req.ExtraVLLMArgs); err != nil {
+		if err := api.StartModel(req.Model, req.ServedModelName, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, req.SpeculativeConfig, settings.HFCache, settings.HFToken, vllmAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, containerExposure, serverAPIKey, req.ExtraVLLMArgs); err != nil {
 			appendAuditEvent(auditEvent{
 				Action:  "model_deploy",
 				Result:  "failed",

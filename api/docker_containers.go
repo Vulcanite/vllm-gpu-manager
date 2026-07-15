@@ -219,6 +219,7 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 		ContainerID:               vc.id,
 		ContainerName:             vc.name,
 		Model:                     vc.name, // fallback
+		ServedModelName:           "",
 		Port:                      "unknown",
 		GPUs:                      "unknown",
 		GPUIDs:                    "all",
@@ -265,6 +266,9 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 		}
 		if args[i] == "--model" && i+1 < len(args) && vc.labels[containerModelLabel] == "" {
 			model.Model = args[i+1]
+		}
+		if args[i] == "--served-model-name" && i+1 < len(args) {
+			model.ServedModelName = args[i+1]
 		}
 		if args[i] == "--port" && i+1 < len(args) {
 			model.Port = args[i+1]
@@ -373,6 +377,7 @@ func launchSpecFromLabels(labels map[string]string) (LaunchSpec, bool) {
 
 func applyLaunchSpecToActiveModel(model *ActiveModel, spec LaunchSpec) {
 	model.Model = spec.Model
+	model.ServedModelName = spec.ServedModelName
 	model.Port = strconv.Itoa(spec.Port)
 	model.GPUs = strconv.Itoa(spec.GPUs)
 	model.GPUIDs = spec.GPUIDs
@@ -909,7 +914,7 @@ func NormalizeModelKeyForMatch(model string) string {
 	return model
 }
 
-func StartModel(model string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, kvCacheDType string, toolParser string, tokenizerMode string, reasoningParser string, trustRemoteCode bool, blockSize string, moeBackend string, enableExpertParallel bool, disableFlashInferAutotune bool, speculativeConfig string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, containerExposure string, serverAPIKey string, extraVLLMArgs []string) error {
+func StartModel(model string, servedModelName string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, kvCacheDType string, toolParser string, tokenizerMode string, reasoningParser string, trustRemoteCode bool, blockSize string, moeBackend string, enableExpertParallel bool, disableFlashInferAutotune bool, speculativeConfig string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, containerExposure string, serverAPIKey string, extraVLLMArgs []string) error {
 	hfCache = NormalizeHFHome(hfCache)
 	if hfCache == "" {
 		return validationError("hugging face cache directory is required")
@@ -934,6 +939,7 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 		effectiveAPIKey = serverAPIKey
 	}
 	model = strings.TrimSpace(model)
+	servedModelName = strings.TrimSpace(servedModelName)
 	if model == "" {
 		return validationError("model is required")
 	}
@@ -1110,6 +1116,7 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 
 	launchSpec := LaunchSpec{
 		Model:                     model,
+		ServedModelName:           servedModelName,
 		Port:                      port,
 		GPUs:                      gpus,
 		GPUIDs:                    effectiveGPUIDsValue,
@@ -1159,6 +1166,9 @@ func StartModel(model string, port int, gpus int, gpuIds string, memUtil string,
 
 	if maxLen != "" {
 		cmd = append(cmd, "--max-model-len", maxLen)
+	}
+	if servedModelName != "" {
+		cmd = append(cmd, "--served-model-name", servedModelName)
 	}
 	if maxNumSeqs != "" {
 		cmd = append(cmd, "--max-num-seqs", maxNumSeqs)

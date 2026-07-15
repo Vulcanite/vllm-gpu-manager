@@ -312,6 +312,7 @@ Optional launch parameters currently exposed by the UI/API:
 
 - `--max-model-len`
 - `--max-num-seqs`
+- `--served-model-name`
 - `--kv-cache-dtype`
 - `--tool-call-parser`
 - `--enable-auto-tool-choice`

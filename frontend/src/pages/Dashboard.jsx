@@ -116,11 +116,7 @@ export const Dashboard = ({
                 {pinned.length > 0 && (
                   <div className="model-meta mt-2">
                     <span>PINNED BY</span>
-                    {pinned.map((item) => (
-                      <span key={`${item.model}-${item.port}`}>
-                        {item.model} |
-                      </span>
-                    ))}
+                    <span>{pinned.map((item) => item.model).join(', ')}</span>
                   </div>
                 )}
 
@@ -159,7 +155,7 @@ export const Dashboard = ({
                   <span className="deployment-meta-item"><span>SEQS</span>{model.max_num_seqs || 'default'}</span>
                   <span className="deployment-meta-item"><span>KV</span>{model.kv_cache_dtype || 'auto'}</span>
                 </div>
-                <div className="model-meta model-url mt-2"><span>API URL :</span>{model.api_url}</div>
+                <div className="model-meta model-url mt-2"><span>Serving:</span>{model.api_url}</div>
               </div>
               <div className="model-actions">
                 <Link to={`/logs?container_id=${encodeURIComponent(model.container_id)}`} className="btn btn-outline btn-link-clean" style={{ padding: '6px 10px', marginRight: '6px' }}>

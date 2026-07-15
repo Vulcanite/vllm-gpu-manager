@@ -8,6 +8,7 @@ import (
 
 type ImportedCommandFields struct {
 	Model                     string `json:"model,omitempty"`
+	ServedModelName           string `json:"served_model_name,omitempty"`
 	Port                      int    `json:"port,omitempty"`
 	GPUs                      int    `json:"gpus,omitempty"`
 	GPUIDs                    string `json:"gpu_ids,omitempty"`
@@ -45,6 +46,7 @@ type vllmFlagSpec struct {
 
 var managedVLLMValueFlags = map[string]func(*ImportedCommandFields, string){
 	"--model":                  func(f *ImportedCommandFields, v string) { f.Model = v },
+	"--served-model-name":      func(f *ImportedCommandFields, v string) { f.ServedModelName = v },
 	"--host":                   func(*ImportedCommandFields, string) {},
 	"--port":                   func(f *ImportedCommandFields, v string) { f.Port, _ = strconv.Atoi(v) },
 	"--tensor-parallel-size":   func(f *ImportedCommandFields, v string) { f.GPUs, _ = strconv.Atoi(v) },
@@ -77,7 +79,6 @@ var managedVLLMBoolFlags = map[string]func(*ImportedCommandFields){
 }
 
 var allowedExtraVLLMFlags = map[string]vllmFlagSpec{
-	"--served-model-name":            {hasValue: true},
 	"--max-num-batched-tokens":       {hasValue: true},
 	"--max-num-partial-prefills":     {hasValue: true},
 	"--max-long-partial-prefills":    {hasValue: true},
