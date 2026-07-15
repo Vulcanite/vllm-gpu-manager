@@ -144,6 +144,16 @@ func filterDashboardModels(models []api.ActiveModel, proxyEnabled bool) []api.Ac
 	return filtered
 }
 
+func auditContainerDisplayName(containerID string, model api.ActiveModel) string {
+	if strings.TrimSpace(model.ContainerName) != "" {
+		return model.ContainerName
+	}
+	if strings.TrimSpace(containerID) != "" {
+		return containerID
+	}
+	return "container"
+}
+
 func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) http.HandlerFunc, opts dashboardOptions) {
 	proxyEnabled := opts.ProxyEnabled
 	mux.HandleFunc("/api/settings", apiHandler(func(w http.ResponseWriter, r *http.Request) {
@@ -593,13 +603,14 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		if cleanupErr != nil {
 			log.Printf("[API] warning: failed to resolve managed container %s for state cleanup: %v", req.ContainerID, cleanupErr)
 		}
+		containerDisplayName := auditContainerDisplayName(req.ContainerID, modelState)
 		if err := api.RemoveModel(req.ContainerID); err != nil {
 			appendAuditEvent(auditEvent{
 				Action:      "model_remove",
 				Result:      "failed",
 				ContainerID: req.ContainerID,
 				Error:       err.Error(),
-				Summary:     "Failed to remove container " + req.ContainerID,
+				Summary:     "Failed to remove " + containerDisplayName,
 			})
 			writeAPIError(w, err)
 			return
@@ -610,7 +621,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			Model:         modelState.Model,
 			ContainerID:   req.ContainerID,
 			ContainerName: modelState.ContainerName,
-			Summary:       "Removed container " + req.ContainerID,
+			Summary:       "Removed " + containerDisplayName,
 		})
 		var removedKeys []string
 		if cleanupState {

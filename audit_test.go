@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"vllm-manager/api"
 )
 
 func TestAppendAuditEventSanitizesSecretsAndReadsNewestFirst(t *testing.T) {
@@ -77,6 +79,16 @@ func TestAuditLogsEndpointReturnsEvents(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Username != "alice" {
 		t.Fatalf("events=%+v, want alice audit event", events)
+	}
+}
+
+func TestAuditContainerDisplayNamePrefersContainerName(t *testing.T) {
+	model := api.ActiveModel{ContainerName: "vllm-qwen3-8084"}
+	if got := auditContainerDisplayName("abcdef123456", model); got != "vllm-qwen3-8084" {
+		t.Fatalf("display name=%q, want container name", got)
+	}
+	if got := auditContainerDisplayName("abcdef123456", api.ActiveModel{}); got != "abcdef123456" {
+		t.Fatalf("display name=%q, want container id fallback", got)
 	}
 }
 
