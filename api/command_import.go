@@ -16,6 +16,8 @@ type ImportedCommandFields struct {
 	MaxLen            string `json:"max_len,omitempty"`
 	MaxNumSeqs        string `json:"max_num_seqs,omitempty"`
 	CPUOffloadGB      string `json:"cpu_offload_gb,omitempty"`
+	DType             string `json:"dtype,omitempty"`
+	ParallelismMode   string `json:"parallelism_mode,omitempty"`
 	KVCacheDType      string `json:"kv_cache_dtype,omitempty"`
 	ToolParser        string `json:"tool_parser,omitempty"`
 	TokenizerMode     string `json:"tokenizer_mode,omitempty"`
@@ -25,6 +27,8 @@ type ImportedCommandFields struct {
 	MoeBackend        string `json:"moe_backend,omitempty"`
 	ExpertParallel    bool   `json:"enable_expert_parallel,omitempty"`
 	SpeculativeConfig string `json:"speculative_config,omitempty"`
+	TensorParallel    int    `json:"-"`
+	PipelineParallel  int    `json:"-"`
 }
 
 type ImportedCommand struct {
@@ -49,16 +53,17 @@ var managedVLLMValueFlags = map[string]func(*ImportedCommandFields, string){
 	"--served-model-name":      func(f *ImportedCommandFields, v string) { f.ServedModelName = v },
 	"--host":                   func(*ImportedCommandFields, string) {},
 	"--port":                   func(f *ImportedCommandFields, v string) { f.Port, _ = strconv.Atoi(v) },
-	"--tensor-parallel-size":   func(f *ImportedCommandFields, v string) { f.GPUs, _ = strconv.Atoi(v) },
+	"--tensor-parallel-size":   func(f *ImportedCommandFields, v string) { f.TensorParallel, _ = strconv.Atoi(v) },
+	"--pipeline-parallel-size": func(f *ImportedCommandFields, v string) { f.PipelineParallel, _ = strconv.Atoi(v) },
 	"--gpu-memory-utilization": func(f *ImportedCommandFields, v string) { f.MemUtil = v },
 	"--max-model-len":          func(f *ImportedCommandFields, v string) { f.MaxLen = v },
 	"--max-num-seqs":           func(f *ImportedCommandFields, v string) { f.MaxNumSeqs = v },
 	"--cpu-offload-gb":         func(f *ImportedCommandFields, v string) { f.CPUOffloadGB = v },
+	"--dtype":                  func(f *ImportedCommandFields, v string) { f.DType = v },
 	"--kv-cache-dtype":         func(f *ImportedCommandFields, v string) { f.KVCacheDType = v },
 	"--tool-call-parser":       func(f *ImportedCommandFields, v string) { f.ToolParser = v },
 	"--tokenizer-mode":         func(f *ImportedCommandFields, v string) { f.TokenizerMode = v },
 	"--reasoning-parser":       func(f *ImportedCommandFields, v string) { f.ReasoningParser = v },
-	"--block-size":             func(f *ImportedCommandFields, v string) { f.BlockSize = v },
 	"--moe-backend":            func(f *ImportedCommandFields, v string) { f.MoeBackend = v },
 	"--speculative-config":     func(f *ImportedCommandFields, v string) { f.SpeculativeConfig = v },
 	"--api-key":                func(*ImportedCommandFields, string) {},
@@ -100,6 +105,7 @@ var allowedExtraVLLMFlags = map[string]vllmFlagSpec{
 	"--override-generation-config":    {hasValue: true},
 	"--override-pooler-config":        {hasValue: true},
 	"--hf-overrides":                  {hasValue: true},
+	"--block-size":                    {hasValue: true},
 	"--disable-log-requests":          {hasValue: false},
 	"--disable-log-stats":             {hasValue: false},
 	"--enable-chunked-prefill":        {hasValue: false},
@@ -162,7 +168,37 @@ func ParseImportedCommand(command string) (ImportedCommand, error) {
 	if builder.result.Fields.Model == "" {
 		builder.result.Warnings = append(builder.result.Warnings, "No model was found in the imported command.")
 	}
+	if err := finalizeImportedParallelism(&builder.result.Fields); err != nil {
+		return ImportedCommand{}, err
+	}
+	if builder.result.Fields.DType != "" {
+		dtype, err := normalizeDType(builder.result.Fields.DType)
+		if err != nil {
+			return ImportedCommand{}, err
+		}
+		builder.result.Fields.DType = dtype
+	}
 	return builder.result, nil
+}
+
+func finalizeImportedParallelism(fields *ImportedCommandFields) error {
+	tp := fields.TensorParallel
+	pp := fields.PipelineParallel
+	if tp > 1 && pp > 1 {
+		return validationError("hybrid tensor and pipeline parallel commands are not supported; use either --tensor-parallel-size or --pipeline-parallel-size")
+	}
+	if pp > 1 {
+		fields.GPUs = pp
+		fields.ParallelismMode = ParallelismPipeline
+		return nil
+	}
+	fields.ParallelismMode = ParallelismTensor
+	if tp > 0 {
+		fields.GPUs = tp
+	} else if pp > 0 {
+		fields.GPUs = pp
+	}
+	return nil
 }
 
 func (b *importedCommandBuilder) parseDockerRun(tokens []string) error {
@@ -380,6 +416,16 @@ func NormalizeExtraVLLMArgs(args []string) ([]string, error) {
 		}
 	}
 	return normalized, nil
+}
+
+func extraVLLMArgsContainFlag(args []string, target string) bool {
+	for _, token := range args {
+		flag, _, _ := splitFlagValue(strings.TrimSpace(token))
+		if flag == target {
+			return true
+		}
+	}
+	return false
 }
 
 func splitFlagValue(token string) (string, string, bool) {

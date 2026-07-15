@@ -227,6 +227,8 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 		MaxLen:                    "default",
 		MaxNumSeqs:                "default",
 		CPUOffloadGB:              "0",
+		DType:                     "auto",
+		ParallelismMode:           ParallelismTensor,
 		KVCacheDType:              "auto",
 		ToolParser:                "disabled",
 		TokenizerMode:             "auto",
@@ -276,6 +278,11 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 		}
 		if args[i] == "--tensor-parallel-size" && i+1 < len(args) {
 			model.GPUs = args[i+1]
+			model.ParallelismMode = ParallelismTensor
+		}
+		if args[i] == "--pipeline-parallel-size" && i+1 < len(args) {
+			model.GPUs = args[i+1]
+			model.ParallelismMode = ParallelismPipeline
 		}
 		if args[i] == "--gpu-memory-utilization" && i+1 < len(args) {
 			model.MemUtil = args[i+1]
@@ -288,6 +295,9 @@ func buildActiveModel(vc managedVLLMContainer) (ActiveModel, bool) {
 		}
 		if args[i] == "--cpu-offload-gb" && i+1 < len(args) {
 			model.CPUOffloadGB = args[i+1]
+		}
+		if args[i] == "--dtype" && i+1 < len(args) {
+			model.DType = args[i+1]
 		}
 		if args[i] == "--kv-cache-dtype" && i+1 < len(args) {
 			model.KVCacheDType = args[i+1]
@@ -389,6 +399,8 @@ func applyLaunchSpecToActiveModel(model *ActiveModel, spec LaunchSpec) {
 	model.MaxLen = emptyStringAs(spec.MaxLen, "default")
 	model.MaxNumSeqs = emptyStringAs(spec.MaxNumSeqs, "default")
 	model.CPUOffloadGB = emptyStringAs(spec.CPUOffloadGB, "0")
+	model.DType = emptyStringAs(spec.DType, "auto")
+	model.ParallelismMode = emptyStringAs(spec.ParallelismMode, ParallelismTensor)
 	model.KVCacheDType = emptyStringAs(spec.KVCacheDType, "auto")
 	model.ToolParser = emptyStringAs(spec.ToolParser, "disabled")
 	model.TokenizerMode = emptyStringAs(spec.TokenizerMode, "auto")
@@ -796,15 +808,115 @@ func allowedReasoningParserNames() []string {
 var blockSizeOptions = []int{16, 32, 64, 128, 256, 512}
 
 var moeBackendOptions = []string{
+	"aiter",
 	"auto",
 	"cutlass",
-	"deepep_high_throughput",
-	"deepep_low_latency",
-	"flashinfer",
-	"flashinfer_all2allv",
-	"naive",
-	"pplx",
+	"deep_gemm",
+	"deep_gemm_mega_moe",
+	"emulation",
+	"flashinfer_b12x",
+	"flashinfer_cutedsl",
+	"flashinfer_cutlass",
+	"flashinfer_trtllm",
+	"humming",
+	"marlin",
 	"triton",
+	"triton_unfused",
+}
+
+func normalizeDType(dtype string) (string, error) {
+	dtype = strings.TrimSpace(strings.ToLower(dtype))
+	switch dtype {
+	case "", "auto":
+		return "auto", nil
+	case "bfloat16":
+		return dtype, nil
+	case "float16", "half":
+		return "float16", nil
+	case "float", "float32":
+		return "float32", nil
+	default:
+		return "", validationError("unsupported dtype %q; allowed: auto, bfloat16, float16, float32 (aliases: half, float)", dtype)
+	}
+}
+
+func normalizeParallelismMode(mode string, gpus int) (string, error) {
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	if mode == "" {
+		mode = ParallelismTensor
+	}
+	if mode != ParallelismTensor && mode != ParallelismPipeline {
+		return "", validationError("parallelism mode must be %q or %q", ParallelismTensor, ParallelismPipeline)
+	}
+	if mode == ParallelismPipeline && gpus < 2 {
+		return "", validationError("pipeline parallelism requires at least 2 GPUs")
+	}
+	return mode, nil
+}
+
+func buildVLLMServeArgs(spec LaunchSpec, apiKey string) []string {
+	cmd := []string{
+		"--model", spec.Model,
+		"--host", "0.0.0.0",
+		"--port", strconv.Itoa(spec.Port),
+		"--gpu-memory-utilization", spec.MemUtil,
+		"--enable-prefix-caching",
+	}
+	if spec.ParallelismMode == ParallelismPipeline {
+		cmd = append(cmd, "--pipeline-parallel-size", strconv.Itoa(spec.GPUs))
+	} else {
+		cmd = append(cmd, "--tensor-parallel-size", strconv.Itoa(spec.GPUs))
+	}
+	if spec.MaxLen != "" {
+		cmd = append(cmd, "--max-model-len", spec.MaxLen)
+	}
+	if spec.ServedModelName != "" {
+		cmd = append(cmd, "--served-model-name", spec.ServedModelName)
+	}
+	if spec.MaxNumSeqs != "" {
+		cmd = append(cmd, "--max-num-seqs", spec.MaxNumSeqs)
+	}
+	if spec.CPUOffloadGB != "" && spec.CPUOffloadGB != "0" {
+		cmd = append(cmd, "--cpu-offload-gb", spec.CPUOffloadGB)
+	}
+	if spec.DType != "" && spec.DType != "auto" {
+		cmd = append(cmd, "--dtype", spec.DType)
+	}
+	if spec.KVCacheDType != "" && spec.KVCacheDType != "auto" {
+		cmd = append(cmd, "--kv-cache-dtype", spec.KVCacheDType)
+	}
+	if spec.ToolParser != "" {
+		cmd = append(cmd, "--tool-call-parser", spec.ToolParser, "--enable-auto-tool-choice")
+	}
+	if spec.TokenizerMode != "" && spec.TokenizerMode != "auto" {
+		cmd = append(cmd, "--tokenizer-mode", spec.TokenizerMode)
+	}
+	if spec.ReasoningParser != "" {
+		cmd = append(cmd, "--reasoning-parser", spec.ReasoningParser)
+	}
+	if spec.TrustRemoteCode {
+		cmd = append(cmd, "--trust-remote-code")
+	}
+	if spec.BlockSize != "" {
+		cmd = append(cmd, "--block-size", spec.BlockSize)
+	}
+	if spec.MoeBackend != "" && spec.MoeBackend != "auto" {
+		cmd = append(cmd, "--moe-backend", spec.MoeBackend)
+	}
+	if spec.ExpertParallel {
+		cmd = append(cmd, "--enable-expert-parallel")
+	}
+	if spec.DisableFlashInferAutotune {
+		cmd = append(cmd, "--no-enable-flashinfer-autotune")
+	}
+	if spec.SpeculativeConfig != "" {
+		cmd = append(cmd, "--speculative-config", spec.SpeculativeConfig)
+	}
+	cmd = append(cmd, spec.ExtraVLLMArgs...)
+	if apiKey != "" {
+		cmd = append(cmd, "--api-key", apiKey)
+	}
+	return cmd
 }
 
 func normalizeTokenizerMode(mode string) (string, error) {
@@ -919,7 +1031,7 @@ func NormalizeModelKeyForMatch(model string) string {
 	return model
 }
 
-func StartModel(model string, servedModelName string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, cpuOffloadGB string, kvCacheDType string, toolParser string, tokenizerMode string, reasoningParser string, trustRemoteCode bool, blockSize string, moeBackend string, enableExpertParallel bool, disableFlashInferAutotune bool, speculativeConfig string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, containerExposure string, serverAPIKey string, extraVLLMArgs []string) error {
+func StartModel(model string, servedModelName string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, cpuOffloadGB string, dtype string, parallelismMode string, kvCacheDType string, toolParser string, tokenizerMode string, reasoningParser string, trustRemoteCode bool, blockSize string, moeBackend string, enableExpertParallel bool, disableFlashInferAutotune bool, speculativeConfig string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, containerExposure string, serverAPIKey string, extraVLLMArgs []string) error {
 	hfCache = NormalizeHFHome(hfCache)
 	if hfCache == "" {
 		return validationError("hugging face cache directory is required")
@@ -953,6 +1065,20 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 	}
 	if gpus < 1 {
 		return validationError("must specify at least 1 GPU")
+	}
+	parallelismMode, err := normalizeParallelismMode(parallelismMode, gpus)
+	if err != nil {
+		return err
+	}
+	if enableExpertParallel && (gpus < 2 || parallelismMode != ParallelismTensor) {
+		return validationError("expert parallelism requires at least 2 GPUs in tensor parallelism mode")
+	}
+	moeBackend, err = normalizeMoeBackend(moeBackend)
+	if err != nil {
+		return err
+	}
+	if moeBackend != "auto" && !enableExpertParallel {
+		return validationError("a non-default MoE backend requires expert parallelism")
 	}
 	hostBindAddr, err := normalizeHostBindIP(hostBindIP)
 	if err != nil {
@@ -1025,6 +1151,11 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 	}
 	cpuOffloadGB = strconv.Itoa(cpuOffloadGBValue)
 
+	dtype, err = normalizeDType(dtype)
+	if err != nil {
+		return err
+	}
+
 	kvCacheDType, err = normalizeKVCacheDType(kvCacheDType)
 	if err != nil {
 		return err
@@ -1048,10 +1179,6 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 	if err != nil {
 		return err
 	}
-	moeBackend, err = normalizeMoeBackend(moeBackend)
-	if err != nil {
-		return err
-	}
 	speculativeConfig, err = normalizeSpeculativeConfig(speculativeConfig)
 	if err != nil {
 		return err
@@ -1059,6 +1186,9 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 	extraVLLMArgs, err = NormalizeExtraVLLMArgs(extraVLLMArgs)
 	if err != nil {
 		return err
+	}
+	if blockSize != "" && extraVLLMArgsContainFlag(extraVLLMArgs, "--block-size") {
+		return validationError("block size was provided both as a legacy field and in extra vLLM args")
 	}
 
 	// Check if port is already in use and hold the listener until the container
@@ -1121,7 +1251,7 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 		logDockerMessage("WARNING: %s", warning)
 	}
 
-	if err := CheckModelFitsInVRAM(model, hfCache, selectedGPUs, gpus, memUtil, maxLen, kvCacheDType); err != nil {
+	if err := CheckModelFitsInVRAM(model, hfCache, selectedGPUs, gpus, parallelismMode, memUtil, maxLen, kvCacheDType); err != nil {
 		return err
 	}
 
@@ -1139,6 +1269,8 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 		MaxLen:                    maxLen,
 		MaxNumSeqs:                maxNumSeqs,
 		CPUOffloadGB:              cpuOffloadGB,
+		DType:                     dtype,
+		ParallelismMode:           parallelismMode,
 		KVCacheDType:              kvCacheDType,
 		ToolParser:                toolParser,
 		TokenizerMode:             tokenizerMode,
@@ -1171,61 +1303,7 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 	// Warn if the configured image is not present locally.
 	checkVLLMImageExists()
 
-	cmd := []string{
-		"--model", model,
-		"--host", "0.0.0.0",
-		"--tensor-parallel-size", strconv.Itoa(gpus),
-		"--port", strconv.Itoa(port),
-		"--gpu-memory-utilization", memUtil,
-		"--enable-prefix-caching",
-	}
-
-	if maxLen != "" {
-		cmd = append(cmd, "--max-model-len", maxLen)
-	}
-	if servedModelName != "" {
-		cmd = append(cmd, "--served-model-name", servedModelName)
-	}
-	if maxNumSeqs != "" {
-		cmd = append(cmd, "--max-num-seqs", maxNumSeqs)
-	}
-	if cpuOffloadGBValue > 0 {
-		cmd = append(cmd, "--cpu-offload-gb", cpuOffloadGB)
-	}
-	if kvCacheDType != "auto" {
-		cmd = append(cmd, "--kv-cache-dtype", kvCacheDType)
-	}
-	if toolParser != "" {
-		cmd = append(cmd, "--tool-call-parser", toolParser, "--enable-auto-tool-choice")
-	}
-	if tokenizerMode != "auto" {
-		cmd = append(cmd, "--tokenizer-mode", tokenizerMode)
-	}
-	if reasoningParser != "" {
-		cmd = append(cmd, "--reasoning-parser", reasoningParser)
-	}
-	if trustRemoteCode {
-		cmd = append(cmd, "--trust-remote-code")
-	}
-	if blockSize != "" {
-		cmd = append(cmd, "--block-size", blockSize)
-	}
-	if moeBackend != "auto" {
-		cmd = append(cmd, "--moe-backend", moeBackend)
-	}
-	if enableExpertParallel {
-		cmd = append(cmd, "--enable-expert-parallel")
-	}
-	if disableFlashInferAutotune {
-		cmd = append(cmd, "--no-enable-flashinfer-autotune")
-	}
-	if speculativeConfig != "" {
-		cmd = append(cmd, "--speculative-config", speculativeConfig)
-	}
-	cmd = append(cmd, extraVLLMArgs...)
-	if effectiveAPIKey != "" {
-		cmd = append(cmd, "--api-key", effectiveAPIKey)
-	}
+	cmd := buildVLLMServeArgs(launchSpec, effectiveAPIKey)
 
 	return withDockerClient(execTimeoutStart, func(ctx context.Context, cli *dockerclient.Client) error {
 		if err := ensureDockerImage(ctx, cli, VLLMImage); err != nil {

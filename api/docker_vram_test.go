@@ -39,6 +39,7 @@ func TestCheckModelFitsInVRAM(t *testing.T) {
 		name      string
 		gpus      []GPUInfo
 		gpusCount int
+		parallel  string
 		memUtil   string
 		maxLen    string
 		kvDType   string
@@ -48,6 +49,7 @@ func TestCheckModelFitsInVRAM(t *testing.T) {
 			name:      "Fits within VRAM",
 			gpus:      []GPUInfo{{ID: 0, MemoryTotal: 24 * 1024 * 1024 * 1024, MemoryFree: 24 * 1024 * 1024 * 1024}}, // 24GB
 			gpusCount: 1,
+			parallel:  ParallelismTensor,
 			memUtil:   "0.9", // budget ~21.6GB. Weights ~10.8GB. Fits.
 			maxLen:    "4096",
 			kvDType:   "auto",
@@ -57,6 +59,7 @@ func TestCheckModelFitsInVRAM(t *testing.T) {
 			name:      "Fails: weights don't fit in current free",
 			gpus:      []GPUInfo{{ID: 0, MemoryTotal: 24 * 1024 * 1024 * 1024, MemoryFree: 8 * 1024 * 1024 * 1024}}, // 8GB free
 			gpusCount: 1,
+			parallel:  ParallelismTensor,
 			memUtil:   "0.9",
 			maxLen:    "4096",
 			kvDType:   "auto",
@@ -66,6 +69,7 @@ func TestCheckModelFitsInVRAM(t *testing.T) {
 			name:      "Fails: max_model_len exceeds model limit",
 			gpus:      []GPUInfo{{ID: 0, MemoryTotal: 24 * 1024 * 1024 * 1024, MemoryFree: 24 * 1024 * 1024 * 1024}},
 			gpusCount: 1,
+			parallel:  ParallelismTensor,
 			memUtil:   "0.9",
 			maxLen:    "16384",
 			kvDType:   "auto",
@@ -75,16 +79,26 @@ func TestCheckModelFitsInVRAM(t *testing.T) {
 			name:      "Fails: KV heads not divisible by tensor parallel size",
 			gpus:      []GPUInfo{{ID: 0, MemoryTotal: 24 * 1024 * 1024 * 1024, MemoryFree: 24 * 1024 * 1024 * 1024}, {ID: 1, MemoryTotal: 24 * 1024 * 1024 * 1024, MemoryFree: 24 * 1024 * 1024 * 1024}, {ID: 2, MemoryTotal: 24 * 1024 * 1024 * 1024, MemoryFree: 24 * 1024 * 1024 * 1024}},
 			gpusCount: 3, // 8 KV heads % 3 != 0
+			parallel:  ParallelismTensor,
 			memUtil:   "0.9",
 			maxLen:    "4096",
 			kvDType:   "auto",
 			wantErr:   "not divisible by tensor_parallel_size (3)",
 		},
+		{
+			name:      "Pipeline mode skips tensor KV-head divisibility",
+			gpus:      []GPUInfo{{ID: 0, MemoryTotal: 24 * 1024 * 1024 * 1024, MemoryFree: 24 * 1024 * 1024 * 1024}, {ID: 1, MemoryTotal: 24 * 1024 * 1024 * 1024, MemoryFree: 24 * 1024 * 1024 * 1024}, {ID: 2, MemoryTotal: 24 * 1024 * 1024 * 1024, MemoryFree: 24 * 1024 * 1024 * 1024}},
+			gpusCount: 3,
+			parallel:  ParallelismPipeline,
+			memUtil:   "0.9",
+			maxLen:    "4096",
+			kvDType:   "auto",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := CheckModelFitsInVRAM(model, hfCache, tt.gpus, tt.gpusCount, tt.memUtil, tt.maxLen, tt.kvDType)
+			err := CheckModelFitsInVRAM(model, hfCache, tt.gpus, tt.gpusCount, tt.parallel, tt.memUtil, tt.maxLen, tt.kvDType)
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)

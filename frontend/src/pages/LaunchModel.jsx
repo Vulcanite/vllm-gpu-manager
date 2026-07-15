@@ -30,10 +30,10 @@ const DEFAULT_LAUNCH_CONFIG = {
   gpu_topology_links: [],
   gpu_topology_error: '',
   kv_cache_dtype_options: ['auto', 'fp8', 'fp8_e5m2', 'fp8_e4m3'],
+  dtype_options: ['auto', 'bfloat16', 'float16'],
   tokenizer_mode_options: ['auto', 'hf', 'slow', 'mistral', 'deepseek_v32', 'deepseek_v4'],
   reasoning_parser_options: ['deepseek_r1', 'deepseek_v4', 'ernie_x1', 'glm45', 'granite', 'hunyuan_a13b', 'mistral', 'openai_gptoss', 'qwen3'],
-  block_size_options: [16, 32, 64, 128, 256, 512],
-  moe_backend_options: ['auto', 'cutlass', 'deepep_high_throughput', 'deepep_low_latency', 'flashinfer', 'flashinfer_all2allv', 'naive', 'pplx', 'triton'],
+  moe_backend_options: ['aiter', 'auto', 'cutlass', 'deep_gemm', 'deep_gemm_mega_moe', 'emulation', 'flashinfer_b12x', 'flashinfer_cutedsl', 'flashinfer_cutlass', 'flashinfer_trtllm', 'humming', 'marlin', 'triton', 'triton_unfused'],
 };
 
 const createDefaultDeployConfig = () => ({
@@ -45,6 +45,8 @@ const createDefaultDeployConfig = () => ({
   maxLen: '32768',
   maxNumSeqs: DEFAULT_MAX_NUM_SEQS,
   cpuOffloadGB: '0',
+  dtype: 'auto',
+  parallelismMode: 'tensor',
   languageModelOnly: false,
   servedModelName: '',
   kvCacheDType: 'auto',
@@ -52,7 +54,6 @@ const createDefaultDeployConfig = () => ({
   tokenizerMode: 'auto',
   reasoningParser: '',
   trustRemoteCode: false,
-  blockSize: '16',
   moeBackend: 'auto',
   enableExpertParallel: false,
   speculativeConfig: '',
@@ -101,13 +102,14 @@ const CHANGE_FIELDS = [
   ['max_num_seqs', 'Max Num Seqs'],
   ['language_model_only', 'Language Model Only'],
   ['cpu_offload_gb', 'CPU Offload'],
+  ['dtype', 'DType'],
+  ['parallelism_mode', 'Parallelism Mode'],
   ['served_model_name', 'Served Model Name'],
   ['kv_cache_dtype', 'KV Cache DType'],
   ['tool_parser', 'Tool Call Parser'],
   ['tokenizer_mode', 'Tokenizer Mode'],
   ['reasoning_parser', 'Reasoning Parser'],
   ['trust_remote_code', 'Trust Remote Code'],
-  ['block_size', 'Block Size'],
   ['moe_backend', 'MoE Backend'],
   ['enable_expert_parallel', 'Expert Parallel'],
   ['speculative_config', 'Speculative Config'],
@@ -252,27 +254,31 @@ const buildDockerRunCommand = (payload, { dockerGpuFlag = 'all', hfCache, hostBi
     '--model', payload.model,
     '--host', '0.0.0.0',
     '--port', String(payload.port),
-    '--tensor-parallel-size', String(payload.gpus),
     '--gpu-memory-utilization', payload.mem_util,
     '--enable-prefix-caching',
   );
+  if (payload.parallelism_mode === 'pipeline') {
+    args.push('--pipeline-parallel-size', String(payload.gpus));
+  } else {
+    args.push('--tensor-parallel-size', String(payload.gpus));
+  }
   if (payload.served_model_name) args.push('--served-model-name', payload.served_model_name);
   if (payload.max_len) args.push('--max-model-len', payload.max_len);
   if (payload.max_num_seqs) args.push('--max-num-seqs', payload.max_num_seqs);
   if (cpuOffloadValue(payload.cpu_offload_gb) > 0) args.push('--cpu-offload-gb', String(payload.cpu_offload_gb));
+  if (payload.dtype && payload.dtype !== 'auto') args.push('--dtype', payload.dtype);
   if (payload.kv_cache_dtype && payload.kv_cache_dtype !== 'auto') args.push('--kv-cache-dtype', payload.kv_cache_dtype);
   if (payload.tool_parser) args.push('--tool-call-parser', payload.tool_parser, '--enable-auto-tool-choice');
   if (payload.tokenizer_mode && payload.tokenizer_mode !== 'auto') args.push('--tokenizer-mode', payload.tokenizer_mode);
   if (payload.reasoning_parser) args.push('--reasoning-parser', payload.reasoning_parser);
   if (payload.trust_remote_code) args.push('--trust-remote-code');
-  if (payload.block_size) args.push('--block-size', payload.block_size);
   if (payload.moe_backend && payload.moe_backend !== 'auto') args.push('--moe-backend', payload.moe_backend);
   if (payload.enable_expert_parallel) args.push('--enable-expert-parallel');
   if (payload.speculative_config) args.push('--speculative-config', payload.speculative_config);
   if (Array.isArray(payload.extra_vllm_args)) args.push(...payload.extra_vllm_args);
   if (payload.use_api_key) args.push('--api-key', includeAPIKey && payload.server_api_key ? payload.server_api_key : '<redacted>');
 
-  const valueFlags = new Set(['--gpus', '--name', '--ulimit', '-p', '-v', '-e', '--model', '--served-model-name', '--host', '--port', '--tensor-parallel-size', '--gpu-memory-utilization', '--max-model-len', '--max-num-seqs', '--cpu-offload-gb', '--kv-cache-dtype', '--tool-call-parser', '--tokenizer-mode', '--reasoning-parser', '--block-size', '--moe-backend', '--speculative-config', '--api-key']);
+  const valueFlags = new Set(['--gpus', '--name', '--ulimit', '-p', '-v', '-e', '--model', '--served-model-name', '--host', '--port', '--tensor-parallel-size', '--pipeline-parallel-size', '--gpu-memory-utilization', '--max-model-len', '--max-num-seqs', '--cpu-offload-gb', '--dtype', '--kv-cache-dtype', '--tool-call-parser', '--tokenizer-mode', '--reasoning-parser', '--block-size', '--moe-backend', '--speculative-config', '--api-key']);
   const lines = [`${args[0]} ${args[1]}`];
   for (let i = 2; i < args.length; i += 1) {
     const arg = args[i];
@@ -320,15 +326,15 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const KV_CACHE_DTYPE_OPTIONS = launchConfig?.kv_cache_dtype_options?.length
     ? launchConfig.kv_cache_dtype_options
     : DEFAULT_LAUNCH_CONFIG.kv_cache_dtype_options;
+  const DTYPE_OPTIONS = launchConfig?.dtype_options?.length
+    ? launchConfig.dtype_options
+    : DEFAULT_LAUNCH_CONFIG.dtype_options;
   const TOKENIZER_MODE_OPTIONS = launchConfig?.tokenizer_mode_options?.length
     ? launchConfig.tokenizer_mode_options
     : DEFAULT_LAUNCH_CONFIG.tokenizer_mode_options;
   const REASONING_PARSER_OPTIONS = launchConfig?.reasoning_parser_options?.length
     ? launchConfig.reasoning_parser_options
     : DEFAULT_LAUNCH_CONFIG.reasoning_parser_options;
-  const BLOCK_SIZE_OPTIONS = launchConfig?.block_size_options?.length
-    ? launchConfig.block_size_options
-    : DEFAULT_LAUNCH_CONFIG.block_size_options;
   const MOE_BACKEND_OPTIONS = launchConfig?.moe_backend_options?.length
     ? launchConfig.moe_backend_options
     : DEFAULT_LAUNCH_CONFIG.moe_backend_options;
@@ -349,6 +355,8 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const startMaxLen = deployConfig.maxLen;
   const startMaxNumSeqs = deployConfig.maxNumSeqs;
   const startCPUOffloadGB = deployConfig.cpuOffloadGB;
+  const startDType = deployConfig.dtype;
+  const startParallelismMode = deployConfig.parallelismMode;
   const startLanguageModelOnly = deployConfig.languageModelOnly;
   const startServedModelName = deployConfig.servedModelName;
   const startKvCacheDType = deployConfig.kvCacheDType;
@@ -356,7 +364,6 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const startTokenizerMode = deployConfig.tokenizerMode;
   const startReasoningParser = deployConfig.reasoningParser;
   const startTrustRemoteCode = deployConfig.trustRemoteCode;
-  const startBlockSize = deployConfig.blockSize;
   const startMoeBackend = deployConfig.moeBackend;
   const startEnableExpertParallel = deployConfig.enableExpertParallel;
   const startSpeculativeConfig = deployConfig.speculativeConfig;
@@ -416,6 +423,8 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     () => normalizeGpuPinning(startGpuIds, availableGpuIds, requestedGpuCount, usesAllGpus),
     [availableGpuIds, requestedGpuCount, startGpuIds, usesAllGpus],
   );
+  const selectedDownloadedModel = downloadedModels.find((model) => model.name === startModelName);
+  const selectedModelIsMultimodal = Boolean(selectedDownloadedModel?.is_multimodal);
   const editingServer = Boolean(editTarget);
   const cpuOffloadGBNumber = Number(startCPUOffloadGB);
   const ramFreeBytes = Number(launchConfig?.ram_free) || 0;
@@ -480,12 +489,13 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         max_len: startMaxLen ? startMaxLen.toString() : '',
         max_num_seqs: startMaxNumSeqs ? startMaxNumSeqs.toString() : '',
         cpu_offload_gb: startCPUOffloadGB ? startCPUOffloadGB.toString() : '0',
+        dtype: startDType || 'auto',
+        parallelism_mode: startParallelismMode || 'tensor',
         kv_cache_dtype: startKvCacheDType,
         tool_parser: startParser || '',
         tokenizer_mode: startTokenizerMode || 'auto',
         reasoning_parser: startReasoningParser || '',
         trust_remote_code: Boolean(startTrustRemoteCode),
-        block_size: startBlockSize ? startBlockSize.toString() : '',
         moe_backend: startMoeBackend || 'auto',
         enable_expert_parallel: Boolean(startEnableExpertParallel),
         speculative_config: compactSpeculativeConfig,
@@ -514,12 +524,13 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       max_num_seqs: String(config.maxNumSeqs ?? ''),
       language_model_only: Boolean(config.languageModelOnly),
       cpu_offload_gb: String(config.cpuOffloadGB ?? '0'),
+      dtype: config.dtype || 'auto',
+      parallelism_mode: config.parallelismMode || 'tensor',
       kv_cache_dtype: config.kvCacheDType || 'auto',
       tool_parser: config.parser || '',
       tokenizer_mode: config.tokenizerMode || 'auto',
       reasoning_parser: config.reasoningParser || '',
       trust_remote_code: Boolean(config.trustRemoteCode),
-      block_size: String(config.blockSize ?? ''),
       moe_backend: config.moeBackend || 'auto',
       enable_expert_parallel: Boolean(config.enableExpertParallel),
       speculative_config: compactJSONString(config.speculativeConfig),
@@ -549,6 +560,9 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         .split(',')
         .map((value) => Number(value.trim()))
         .filter((value) => Number.isInteger(value));
+      const requestedParallelism = searchParams.get('parallelism_mode') || searchParams.get('parallelism') || 'tensor';
+      const parallelismMode = gpuCount > 1 && requestedParallelism === 'pipeline' ? 'pipeline' : 'tensor';
+      const expertParallel = gpuCount > 1 && parallelismMode === 'tensor' && searchParams.get('enable_expert_parallel') === 'true';
 
       setDeployConfig((prev) => ({
         ...prev,
@@ -561,13 +575,17 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         maxNumSeqs: searchParams.get('max_num_seqs') || prev.maxNumSeqs,
         languageModelOnly: searchParams.get('language_model_only') === 'true' || prev.languageModelOnly,
         cpuOffloadGB: searchParams.get('cpu_offload_gb') || prev.cpuOffloadGB,
+        dtype: searchParams.get('dtype') || prev.dtype,
+        parallelismMode,
         kvCacheDType: searchParams.get('kv_cache_dtype') || prev.kvCacheDType,
         tokenizerMode: searchParams.get('tokenizer_mode') || prev.tokenizerMode,
         reasoningParser: searchParams.get('reasoning_parser') || prev.reasoningParser,
         trustRemoteCode: searchParams.get('trust_remote_code') === 'true' || prev.trustRemoteCode,
-        blockSize: searchParams.get('block_size') || prev.blockSize,
-        moeBackend: searchParams.get('moe_backend') || prev.moeBackend,
-        enableExpertParallel: searchParams.get('enable_expert_parallel') === 'true' || prev.enableExpertParallel,
+        extraVLLMArgs: searchParams.get('block_size')
+          ? `${prev.extraVLLMArgs ? `${prev.extraVLLMArgs}\n` : ''}--block-size ${searchParams.get('block_size')}`
+          : prev.extraVLLMArgs,
+        moeBackend: expertParallel ? (searchParams.get('moe_backend') || 'auto') : 'auto',
+        enableExpertParallel: expertParallel,
       }));
       setDeployModalOpen(true);
     }, 0);
@@ -608,6 +626,18 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       ...prev,
       gpus: nextCount,
       gpuIds: normalizeGpuPinning(prev.gpuIds, availableGpuIds, nextCount, nextUsesAll),
+      parallelismMode: nextCount === 1 ? 'tensor' : prev.parallelismMode,
+      enableExpertParallel: nextCount === 1 ? false : prev.enableExpertParallel,
+      moeBackend: nextCount === 1 ? 'auto' : prev.moeBackend,
+    }));
+  };
+
+  const handleParallelismModeChange = (mode) => {
+    setDeployConfig((prev) => ({
+      ...prev,
+      parallelismMode: mode,
+      enableExpertParallel: mode === 'tensor' ? prev.enableExpertParallel : false,
+      moeBackend: mode === 'tensor' ? prev.moeBackend : 'auto',
     }));
   };
 
@@ -672,6 +702,10 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     if (spec.disable_flashinfer_autotune) {
       editExtraArgs.push('--no-enable-flashinfer-autotune');
     }
+    if (spec.block_size) {
+      editExtraArgs.push('--block-size', String(spec.block_size));
+    }
+    const editParallelismMode = spec.parallelism_mode || 'tensor';
     const nextConfig = {
       ...createDefaultDeployConfig(),
       modelName: spec.model || '',
@@ -683,15 +717,16 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       maxLen: spec.max_len || '',
       maxNumSeqs: spec.max_num_seqs || DEFAULT_MAX_NUM_SEQS,
       cpuOffloadGB: spec.cpu_offload_gb || extractedExtras.cpuOffloadGB || '0',
+      dtype: spec.dtype || 'auto',
+      parallelismMode: editParallelismMode,
       languageModelOnly: Boolean(extractedExtras.languageModelOnly),
       kvCacheDType: spec.kv_cache_dtype || 'auto',
       parser: spec.tool_parser || '',
       tokenizerMode: spec.tokenizer_mode || 'auto',
       reasoningParser: spec.reasoning_parser || '',
       trustRemoteCode: Boolean(spec.trust_remote_code),
-      blockSize: spec.block_size || '',
-      moeBackend: spec.moe_backend || 'auto',
-      enableExpertParallel: Boolean(spec.enable_expert_parallel),
+      moeBackend: editParallelismMode === 'tensor' && gpuCount > 1 ? (spec.moe_backend || 'auto') : 'auto',
+      enableExpertParallel: editParallelismMode === 'tensor' && gpuCount > 1 && Boolean(spec.enable_expert_parallel),
       speculativeConfig: spec.speculative_config || '',
       extraVLLMArgs: extraArgsTextFromTokens(editExtraArgs),
       bindIP: spec.bind_ip || '',
@@ -729,6 +764,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       const nextGpuCount = noGpuDetected ? startGpus : Math.min(maxGpus, Math.max(1, importedGpuCount));
       const nextUsesAll = !noGpuDetected && (importedGpuIds === 'all' || nextGpuCount >= maxGpus);
       const importedExtras = extractManagedFieldsFromExtraArgs(data.extra_vllm_args);
+      const importedParallelismMode = fields.parallelism_mode || 'tensor';
 
       setDeployConfig((prev) => ({
         ...prev,
@@ -741,14 +777,17 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         maxLen: fields.max_len || prev.maxLen,
         maxNumSeqs: fields.max_num_seqs || prev.maxNumSeqs,
         cpuOffloadGB: fields.cpu_offload_gb || prev.cpuOffloadGB,
+        dtype: fields.dtype || prev.dtype,
+        parallelismMode: nextGpuCount > 1 ? importedParallelismMode : 'tensor',
         kvCacheDType: fields.kv_cache_dtype || prev.kvCacheDType,
         parser: fields.tool_parser || prev.parser,
         tokenizerMode: fields.tokenizer_mode || prev.tokenizerMode,
         reasoningParser: fields.reasoning_parser || prev.reasoningParser,
         trustRemoteCode: Boolean(fields.trust_remote_code) || prev.trustRemoteCode,
-        blockSize: fields.block_size || prev.blockSize,
-        moeBackend: fields.moe_backend || prev.moeBackend,
-        enableExpertParallel: Boolean(fields.enable_expert_parallel) || prev.enableExpertParallel,
+        moeBackend: nextGpuCount > 1 && importedParallelismMode === 'tensor' && fields.enable_expert_parallel
+          ? (fields.moe_backend || 'auto')
+          : 'auto',
+        enableExpertParallel: nextGpuCount > 1 && importedParallelismMode === 'tensor' && Boolean(fields.enable_expert_parallel),
         speculativeConfig: fields.speculative_config || prev.speculativeConfig,
         languageModelOnly: importedExtras.languageModelOnly || prev.languageModelOnly,
         extraVLLMArgs: extraArgsTextFromTokens(importedExtras.extraArgs),
@@ -802,8 +841,12 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     if (startParser && !/^[a-zA-Z0-9_-]+$/.test(startParser)) return 'Tool parser must contain only letters, numbers, underscores, and hyphens';
     if (!TOKENIZER_MODE_OPTIONS.includes(startTokenizerMode)) return 'Tokenizer mode is not supported by this vLLM Manager build.';
     if (startReasoningParser && !REASONING_PARSER_OPTIONS.includes(startReasoningParser)) return 'Reasoning parser is not supported by this vLLM Manager build.';
-    if (startBlockSize && !BLOCK_SIZE_OPTIONS.map(String).includes(String(startBlockSize))) return 'Block size must be a supported power of 2.';
+    if (!String(startDType || '').trim()) return 'DType is required.';
+    if (!['tensor', 'pipeline'].includes(startParallelismMode)) return 'Parallelism mode must be Tensor or Pipeline.';
+    if (startParallelismMode === 'pipeline' && gpusToSend < 2) return 'Pipeline parallelism requires at least 2 GPUs.';
+    if (startEnableExpertParallel && (gpusToSend < 2 || startParallelismMode !== 'tensor')) return 'Expert parallelism requires at least 2 GPUs in Tensor mode.';
     if (!MOE_BACKEND_OPTIONS.includes(startMoeBackend || 'auto')) return 'MoE backend is not supported by this vLLM Manager build.';
+    if (startMoeBackend !== 'auto' && !startEnableExpertParallel) return 'Select a non-default MoE backend only when Expert Parallel is enabled.';
     if (startSpeculativeConfig.trim()) {
       try {
         JSON.parse(startSpeculativeConfig);
@@ -1129,10 +1172,12 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             gpuList={gpuList}
             gpuUnavailableMessage={gpuUnavailableMessage}
             handleGpuCountChange={handleGpuCountChange}
+            handleParallelismModeChange={handleParallelismModeChange}
             handleStart={handleStart}
             hasGlobalVllmAPIKey={vllmAPIKeySet}
             proxyEnabled={proxyEnabled}
             kvCacheDTypeOptions={KV_CACHE_DTYPE_OPTIONS}
+            dtypeOptions={DTYPE_OPTIONS}
             launchError={launchError}
             launching={launching}
             maxGpus={maxGpus}
@@ -1141,7 +1186,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             selectedGpuIds={selectedGpuIds}
             serverApiKey={startServerApiKey}
             setServerApiKey={(v) => updateDeployConfig('serverApiKey', v)}
-            setStartBlockSize={(v) => updateDeployConfig('blockSize', v)}
+            setStartDType={(v) => updateDeployConfig('dtype', v)}
             setStartMoeBackend={(v) => updateDeployConfig('moeBackend', v)}
             setStartEnableExpertParallel={(v) => updateDeployConfig('enableExpertParallel', v)}
             setStartLanguageModelOnly={(v) => updateDeployConfig('languageModelOnly', v)}
@@ -1163,13 +1208,14 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             setStartExtraVLLMArgs={(v) => updateDeployConfig('extraVLLMArgs', v)}
             setStartBindIP={(v) => updateDeployConfig('bindIP', v)}
             setStartPort={(v) => updateDeployConfig('port', v)}
-            startBlockSize={startBlockSize}
             startMoeBackend={startMoeBackend}
             startEnableExpertParallel={startEnableExpertParallel}
             startLanguageModelOnly={startLanguageModelOnly}
             startExtraVLLMArgs={startExtraVLLMArgs}
             startSpeculativeConfig={startSpeculativeConfig}
             startGpus={startGpus}
+            startDType={startDType}
+            startParallelismMode={startParallelismMode}
             startKvCacheDType={startKvCacheDType}
             startMaxLen={startMaxLen}
             startMaxNumSeqs={startMaxNumSeqs}
@@ -1183,12 +1229,12 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             startReasoningParser={startReasoningParser}
             startTokenizerMode={startTokenizerMode}
             startTrustRemoteCode={startTrustRemoteCode}
+            selectedModelIsMultimodal={selectedModelIsMultimodal}
             submitLabel={editingServer ? 'Update Server' : 'Deploy Server'}
             startBindIP={startBindIP}
             startPort={startPort}
             useServerApiKey={startUseServerApiKey}
             useCustomServerApiKey={startUseCustomServerApiKey}
-            blockSizeOptions={BLOCK_SIZE_OPTIONS}
             moeBackendOptions={MOE_BACKEND_OPTIONS}
             reasoningParserOptions={REASONING_PARSER_OPTIONS}
             toggleGpu={toggleGpu}

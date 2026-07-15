@@ -432,6 +432,16 @@ body {
   margin-bottom: 1rem;
 }
 
+.launch-deploy-card .form-help {
+  margin: 0.45rem 0 0;
+  line-height: 1.4;
+}
+
+.deploy-server-panel .form-control:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
 .launch-side-stack {
   height: auto;
   min-height: 0;
