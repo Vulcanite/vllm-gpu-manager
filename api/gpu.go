@@ -109,11 +109,15 @@ func parseNvidiaSMITopology(out []byte) []GPUTopologyLink {
 		return nil
 	}
 	header := strings.Fields(lines[0])
-	gpuColumns := make(map[int]int)
+	type gpuColumn struct {
+		column int
+		gpuID  int
+	}
+	gpuColumns := make([]gpuColumn, 0, len(header))
 	for column, value := range header {
 		id, ok := parseTopologyGPUHeader(value)
 		if ok {
-			gpuColumns[column] = id
+			gpuColumns = append(gpuColumns, gpuColumn{column: column, gpuID: id})
 		}
 	}
 	var links []GPUTopologyLink
@@ -126,8 +130,9 @@ func parseNvidiaSMITopology(out []byte) []GPUTopologyLink {
 		if !ok {
 			continue
 		}
-		for column, otherGPU := range gpuColumns {
-			valueIndex := column + 1
+		for _, gpuColumn := range gpuColumns {
+			valueIndex := gpuColumn.column + 1
+			otherGPU := gpuColumn.gpuID
 			if valueIndex >= len(fields) || rowGPU >= otherGPU {
 				continue
 			}
