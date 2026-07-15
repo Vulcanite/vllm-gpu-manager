@@ -13,6 +13,7 @@ type ActiveModel struct {
 	ContainerID               string      `json:"container_id"`
 	ContainerName             string      `json:"container_name"`
 	Model                     string      `json:"model"`
+	ServedModelName           string      `json:"served_model_name"`
 	Port                      string      `json:"port"`
 	GPUs                      string      `json:"gpus"`
 	GPUIDs                    string      `json:"gpu_ids"`
@@ -49,6 +50,7 @@ type ActiveModel struct {
 
 type LaunchSpec struct {
 	Model                     string   `json:"model"`
+	ServedModelName           string   `json:"served_model_name"`
 	Port                      int      `json:"port"`
 	GPUs                      int      `json:"gpus"`
 	GPUIDs                    string   `json:"gpu_ids"`

@@ -64,7 +64,7 @@ export const RecommendedModels = ({ downloadedModels = [] }) => {
   };
 
   return (
-    <div className="card full-span">
+    <div className="card full-span recommendation-card">
       <div className="card-header recommendation-header">
         <div>
           <h2 className="card-title">
@@ -106,39 +106,43 @@ export const RecommendedModels = ({ downloadedModels = [] }) => {
               <span>Ctx</span>
               <span>Action</span>
             </div>
-          {visibleModels.map((model) => {
-            const isDownloaded = downloaded.has(model.name);
-            return (
-              <div key={model.name} className="recommendation-row" role="row">
-                <div className="recommendation-model-cell" role="cell">
-                  <span className="model-name">{model.name}</span>
-                  <span className="recommendation-reason">{model.reason}</span>
-                </div>
-                <span role="cell"><span className={`badge ${fitBadgeClass(model.fit_level)}`}>{model.fit_level}</span></span>
-                <span role="cell">{model.parameter_count}</span>
-                <span role="cell">{model.quantization}</span>
-                <span role="cell" className="metric-value">{model.score}</span>
-                <span role="cell" className="metric-value">{model.model_quality}</span>
-                <span role="cell" className="metric-value">~{model.estimated_tokens_sec}</span>
-                <span role="cell">{model.recommended_gpus || '-'} <span className="text-secondary">({model.recommended_gpu_ids || '-'})</span></span>
-                <span role="cell">{model.required_gb_per_gpu || 0} GiB</span>
-                <span role="cell">{model.recommended_max_len || model.context_length}</span>
-                <div className="recommendation-actions" role="cell">
-                  {isDownloaded ? (
-                    <button className="btn btn-primary" type="button" onClick={() => openLaunch(model)} disabled={model.fit_level === 'too_tight'}>
-                      <Play size={14} /> Launch
-                    </button>
-                  ) : (
-                    <button className="btn btn-outline" type="button" onClick={() => openDownload(model)}>
-                      <Download size={14} /> Download
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+            <div className="recommendation-table-body">
+              {visibleModels.map((model) => {
+                const isDownloaded = downloaded.has(model.name);
+                return (
+                  <div key={model.name} className="recommendation-row" role="row">
+                    <div className="recommendation-model-cell" role="cell">
+                      <span className="model-name">{model.name}</span>
+                      <span className="recommendation-reason">{model.reason}</span>
+                    </div>
+                    <span role="cell"><span className={`badge ${fitBadgeClass(model.fit_level)}`}>{model.fit_level}</span></span>
+                    <span role="cell">{model.parameter_count}</span>
+                    <span role="cell">{model.quantization}</span>
+                    <span role="cell" className="metric-value">{model.score}</span>
+                    <span role="cell" className="metric-value">{model.model_quality}</span>
+                    <span role="cell" className="metric-value">~{model.estimated_tokens_sec}</span>
+                    <span role="cell">{model.recommended_gpus || '-'} <span className="text-secondary">({model.recommended_gpu_ids || '-'})</span></span>
+                    <span role="cell">{model.required_gb_per_gpu || 0} GiB</span>
+                    <span role="cell">{model.recommended_max_len || model.context_length}</span>
+                    <div className="recommendation-actions" role="cell">
+                      {isDownloaded ? (
+                        <button className="btn btn-primary" type="button" onClick={() => openLaunch(model)} disabled={model.fit_level === 'too_tight'}>
+                          <Play size={14} /> Launch
+                        </button>
+                      ) : (
+                        <button className="btn btn-outline" type="button" onClick={() => openDownload(model)}>
+                          <Download size={14} /> Download
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {visibleModels.length === 0 && (
+                <div className="empty-state recommendation-empty-state">No recommendations match this filter.</div>
+              )}
+            </div>
           </div>
-          {visibleModels.length === 0 && <div className="empty-state">No recommendations match this filter.</div>}
         </div>
       )}
     </div>

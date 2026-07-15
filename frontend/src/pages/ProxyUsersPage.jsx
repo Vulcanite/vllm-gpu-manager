@@ -61,6 +61,50 @@ export const ProxyUsersPage = ({ notify }) => {
     }
   };
 
+  const copyToClipboard = async (value) => {
+    const text = String(value || '');
+    if (!text) throw new Error('No API key available to copy');
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return;
+      } catch {
+        // Fall through to the textarea fallback below.
+      }
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    if (!copied) throw new Error('Clipboard copy failed');
+  };
+
+  const handleCopyExistingUser = async (targetUsername) => {
+    setError('');
+    let key = revealedKeys[targetUsername] || '';
+    try {
+      if (!key) {
+        setRevealingUser(targetUsername);
+        const response = await getProxyUserKey(targetUsername);
+        key = response.data?.api_key || '';
+        setRevealedKeys((prev) => ({ ...prev, [targetUsername]: key }));
+      }
+      await copyToClipboard(key);
+      notify?.(`Copied API key for ${targetUsername}.`);
+    } catch (requestError) {
+      setError(getErrorDetail(requestError, 'Failed to copy API key'));
+    } finally {
+      setRevealingUser('');
+    }
+  };
+
   const handleCreate = async (event) => {
     event.preventDefault();
     setCreating(true);
@@ -100,8 +144,14 @@ export const ProxyUsersPage = ({ notify }) => {
     }
   };
 
-  const copyKey = (key) => {
-    navigator.clipboard?.writeText(key);
+  const copyKey = async (key) => {
+    setError('');
+    try {
+      await copyToClipboard(key);
+      notify?.('Copied API key.');
+    } catch (requestError) {
+      setError(getErrorDetail(requestError, 'Failed to copy API key'));
+    }
   };
 
   const closeCreatedModal = () => {
@@ -153,10 +203,10 @@ export const ProxyUsersPage = ({ notify }) => {
                       <button
                         className="icon-button"
                         type="button"
-                        onClick={() => copyKey(fullKey)}
-                        disabled={!fullKey}
+                        onClick={() => handleCopyExistingUser(user.username)}
+                        disabled={revealingUser === user.username}
                         aria-label={`Copy API key for ${user.username}`}
-                        title="Copy API key"
+                        title={fullKey ? 'Copy API key' : 'Reveal and copy API key'}
                       >
                         <Copy size={15} />
                       </button>

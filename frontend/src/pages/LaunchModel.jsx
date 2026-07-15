@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ClipboardPaste } from 'lucide-react';
+import { ClipboardPaste, ExternalLink, X } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { ActiveContainersCard } from '../components/launch/ActiveContainersCard.jsx';
@@ -10,6 +10,7 @@ import { ConfirmModal } from '../components/ConfirmModal.jsx';
 import { useAutoDismiss } from '../hooks/useAutoDismiss.js';
 import { deleteDownloadedModel, downloadModel, getErrorDetail, getModelInfo, getServerAPIKey, importModelCommand, removeModel, restartModel, startModel } from '../lib/api.js';
 import { formatBytes } from '../lib/format.js';
+import { getVLLMDocsUrl } from '../lib/vllmDocs.js';
 
 const ACTIVE_DOWNLOAD_STORAGE_KEY = 'vllm-manager-active-download';
 
@@ -37,6 +38,7 @@ const createDefaultDeployConfig = () => ({
   mem: '0.5',
   maxLen: '32768',
   maxNumSeqs: '',
+  servedModelName: '',
   kvCacheDType: 'auto',
   parser: '',
   tokenizerMode: 'auto',
@@ -47,7 +49,7 @@ const createDefaultDeployConfig = () => ({
   enableExpertParallel: false,
   disableFlashInferAutotune: false,
   speculativeConfig: '',
-  extraVLLMArgs: [],
+  extraVLLMArgs: '',
   bindIP: '',
   useServerApiKey: false,
   useCustomServerApiKey: false,
@@ -90,6 +92,7 @@ const CHANGE_FIELDS = [
   ['mem_util', 'Memory Utilization'],
   ['max_len', 'Max Context Length'],
   ['max_num_seqs', 'Max Num Seqs'],
+  ['served_model_name', 'Served Model Name'],
   ['kv_cache_dtype', 'KV Cache DType'],
   ['tool_parser', 'Tool Call Parser'],
   ['tokenizer_mode', 'Tokenizer Mode'],
@@ -121,6 +124,74 @@ const shellQuote = (value) => {
   return `'${text.replaceAll("'", "'\"'\"'")}'`;
 };
 
+const parseExtraVLLMArgsText = (text) => {
+  if (Array.isArray(text)) return text;
+  const source = String(text || '');
+  const tokens = [];
+  let current = '';
+  let quote = '';
+  let escaping = false;
+
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i];
+    if (escaping) {
+      current += char;
+      escaping = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaping = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = '';
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (escaping) current += '\\';
+  if (quote) throw new Error('Extra vLLM args contain an unterminated quote.');
+  if (current) tokens.push(current);
+  return tokens;
+};
+
+const extraArgsTextFromTokens = (tokens) => (Array.isArray(tokens) ? tokens.map(shellQuote).join('\n') : '');
+
+const extractServedModelNameFromExtraArgs = (tokens) => {
+  const extraArgs = [];
+  let servedModelName = '';
+  const values = Array.isArray(tokens) ? tokens : [];
+  for (let i = 0; i < values.length; i += 1) {
+    const token = String(values[i] ?? '');
+    if (token === '--served-model-name') {
+      servedModelName = String(values[i + 1] ?? '').trim();
+      i += 1;
+      continue;
+    }
+    if (token.startsWith('--served-model-name=')) {
+      servedModelName = token.slice('--served-model-name='.length).trim();
+      continue;
+    }
+    extraArgs.push(token);
+  }
+  return { servedModelName, extraArgs };
+};
+
 const dockerContainerName = (model, port) => {
   const shortName = String(model || '').split('/').pop() || 'model';
   const safeName = shortName.toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'model';
@@ -148,6 +219,7 @@ const buildDockerRunCommand = (payload, { dockerGpuFlag = 'all', hfCache, hostBi
     '--gpu-memory-utilization', payload.mem_util,
     '--enable-prefix-caching',
   ];
+  if (payload.served_model_name) args.push('--served-model-name', payload.served_model_name);
   if (payload.max_len) args.push('--max-model-len', payload.max_len);
   if (payload.max_num_seqs) args.push('--max-num-seqs', payload.max_num_seqs);
   if (payload.kv_cache_dtype && payload.kv_cache_dtype !== 'auto') args.push('--kv-cache-dtype', payload.kv_cache_dtype);
@@ -163,7 +235,7 @@ const buildDockerRunCommand = (payload, { dockerGpuFlag = 'all', hfCache, hostBi
   if (Array.isArray(payload.extra_vllm_args)) args.push(...payload.extra_vllm_args);
   if (payload.use_api_key) args.push('--api-key', includeAPIKey && payload.server_api_key ? payload.server_api_key : '<redacted>');
 
-  const valueFlags = new Set(['--gpus', '--name', '-p', '-v', '-e', '--model', '--host', '--port', '--tensor-parallel-size', '--gpu-memory-utilization', '--max-model-len', '--max-num-seqs', '--kv-cache-dtype', '--tool-call-parser', '--tokenizer-mode', '--reasoning-parser', '--block-size', '--moe-backend', '--speculative-config', '--api-key']);
+  const valueFlags = new Set(['--gpus', '--name', '-p', '-v', '-e', '--model', '--served-model-name', '--host', '--port', '--tensor-parallel-size', '--gpu-memory-utilization', '--max-model-len', '--max-num-seqs', '--kv-cache-dtype', '--tool-call-parser', '--tokenizer-mode', '--reasoning-parser', '--block-size', '--moe-backend', '--speculative-config', '--api-key']);
   const lines = [`${args[0]} ${args[1]}`];
   for (let i = 2; i < args.length; i += 1) {
     const arg = args[i];
@@ -177,7 +249,7 @@ const buildDockerRunCommand = (payload, { dockerGpuFlag = 'all', hfCache, hostBi
   return lines.join(' \\\n');
 };
 
-const ImportCommandFeedback = ({ result }) => {
+const ImportCommandFeedback = ({ result, onDismiss }) => {
   if (!result) return null;
   const warnings = Array.isArray(result.warnings) ? result.warnings : [];
   const unsupported = Array.isArray(result.unsupported) ? result.unsupported : [];
@@ -187,13 +259,20 @@ const ImportCommandFeedback = ({ result }) => {
 
   return (
     <div className="import-command-feedback">
-      <div className="import-command-feedback-header">Imported command review</div>
+      <div className="import-command-feedback-header">
+        <span>Imported command review</span>
+        {onDismiss && (
+          <button className="btn btn-icon btn-ghost" type="button" onClick={onDismiss} aria-label="Dismiss imported command review">
+            <X size={14} />
+          </button>
+        )}
+      </div>
       {result.image && <div className="text-sm text-secondary">Image detected: <span className="text-primary">{result.image}</span>. The manager still uses the configured vLLM image.</div>}
       {extras.length > 0 && <div className="text-sm text-secondary">Extra vLLM args: <code>{extras.join(' ')}</code></div>}
       {warnings.map((warning) => (
         <div key={warning} className="text-sm text-warning">{warning}</div>
       ))}
-      {ignored.length > 0 && <div className="text-sm text-secondary">Ignored Docker args: <code>{ignored.join(' ')}</code></div>}
+      {ignored.length > 0 && <div className="text-sm text-secondary">Handled by manager: <code>{ignored.join(' ')}</code></div>}
       {unsupported.length > 0 && <div className="text-sm text-danger">Unsupported args were not imported: <code>{unsupported.join(' ')}</code></div>}
     </div>
   );
@@ -216,6 +295,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const MOE_BACKEND_OPTIONS = launchConfig?.moe_backend_options?.length
     ? launchConfig.moe_backend_options
     : DEFAULT_LAUNCH_CONFIG.moe_backend_options;
+  const vllmDocsUrl = getVLLMDocsUrl(launchConfig?.vllm_image || DEFAULT_LAUNCH_CONFIG.vllm_image, 'cli/serve');
 
   const [deployConfig, setDeployConfig] = useState(createDefaultDeployConfig);
 
@@ -230,6 +310,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const startMem = deployConfig.mem;
   const startMaxLen = deployConfig.maxLen;
   const startMaxNumSeqs = deployConfig.maxNumSeqs;
+  const startServedModelName = deployConfig.servedModelName;
   const startKvCacheDType = deployConfig.kvCacheDType;
   const startParser = deployConfig.parser;
   const startTokenizerMode = deployConfig.tokenizerMode;
@@ -304,9 +385,11 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     const effectiveUseServerApiKey = !proxyEnabled && vllmAPIKeySet && startUseServerApiKey;
     const effectiveServerApiKey = effectiveUseServerApiKey && startUseCustomServerApiKey ? startServerApiKey.trim() : '';
     const compactSpeculativeConfig = compactJSONString(startSpeculativeConfig);
+    const extraVLLMArgs = parseExtraVLLMArgsText(startExtraVLLMArgs);
     return {
       payload: {
         model: startModelName,
+        served_model_name: startServedModelName.trim(),
         port: Number(startPort),
         gpus: gpusToSend,
         gpu_ids: gpuIdsParam,
@@ -323,7 +406,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         enable_expert_parallel: Boolean(startEnableExpertParallel),
         disable_flashinfer_autotune: Boolean(startDisableFlashInferAutotune),
         speculative_config: compactSpeculativeConfig,
-        extra_vllm_args: Array.isArray(startExtraVLLMArgs) ? startExtraVLLMArgs : [],
+        extra_vllm_args: extraVLLMArgs,
         bind_ip: !proxyEnabled ? startBindIP.trim() : '',
         use_api_key: effectiveUseServerApiKey,
         server_api_key: effectiveServerApiKey,
@@ -339,6 +422,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     const gpuIdsParam = nextUsesAll ? 'all' : pinnedIds.sort((a, b) => a - b).join(',');
     return {
       model: config.modelName,
+      served_model_name: String(config.servedModelName || '').trim(),
       port: Number(config.port),
       gpus: gpuCount,
       gpu_ids: gpuIdsParam,
@@ -355,7 +439,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       enable_expert_parallel: Boolean(config.enableExpertParallel),
       disable_flashinfer_autotune: Boolean(config.disableFlashInferAutotune),
       speculative_config: compactJSONString(config.speculativeConfig),
-      extra_vllm_args: Array.isArray(config.extraVLLMArgs) ? config.extraVLLMArgs : [],
+      extra_vllm_args: parseExtraVLLMArgsText(config.extraVLLMArgs),
       bind_ip: !proxyEnabled ? String(config.bindIP || '').trim() : '',
       use_api_key: !proxyEnabled && vllmAPIKeySet && Boolean(config.useServerApiKey),
     };
@@ -385,6 +469,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       setDeployConfig((prev) => ({
         ...prev,
         modelName: model,
+        servedModelName: searchParams.get('served_model_name') || prev.servedModelName,
         gpus: gpuCount,
         gpuIds,
         mem: searchParams.get('mem_util') || prev.mem,
@@ -497,9 +582,11 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       }
     }
 
+    const extractedExtras = extractServedModelNameFromExtraArgs(spec.extra_vllm_args);
     const nextConfig = {
       ...createDefaultDeployConfig(),
       modelName: spec.model || '',
+      servedModelName: spec.served_model_name || extractedExtras.servedModelName || '',
       port: spec.port ? String(spec.port) : '8080',
       gpus: gpuCount,
       gpuIds: nextUsesAll ? [] : normalizeGpuPinning(parsedGpuIds, availableGpuIds, gpuCount, false),
@@ -516,7 +603,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       enableExpertParallel: Boolean(spec.enable_expert_parallel),
       disableFlashInferAutotune: Boolean(spec.disable_flashinfer_autotune),
       speculativeConfig: spec.speculative_config || '',
-      extraVLLMArgs: Array.isArray(spec.extra_vllm_args) ? spec.extra_vllm_args : [],
+      extraVLLMArgs: extraArgsTextFromTokens(extractedExtras.extraArgs),
       bindIP: spec.bind_ip || '',
       useServerApiKey: !proxyEnabled && apiKeyMode !== 'none',
       useCustomServerApiKey: !proxyEnabled && usesCustomServerKey,
@@ -555,6 +642,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       setDeployConfig((prev) => ({
         ...prev,
         modelName: fields.model || prev.modelName,
+        servedModelName: fields.served_model_name || prev.servedModelName,
         port: fields.port ? String(fields.port) : prev.port,
         gpus: nextGpuCount,
         gpuIds: nextUsesAll ? [] : normalizeGpuPinning(importedGpuIdList, availableGpuIds, nextGpuCount, false),
@@ -571,7 +659,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         enableExpertParallel: Boolean(fields.enable_expert_parallel) || prev.enableExpertParallel,
         disableFlashInferAutotune: Boolean(fields.disable_flashinfer_autotune) || prev.disableFlashInferAutotune,
         speculativeConfig: fields.speculative_config || prev.speculativeConfig,
-        extraVLLMArgs: Array.isArray(data.extra_vllm_args) ? data.extra_vllm_args : [],
+        extraVLLMArgs: extraArgsTextFromTokens(data.extra_vllm_args),
       }));
       setImportCommandResult(data);
       setImportModalOpen(false);
@@ -622,6 +710,14 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         return 'Speculative config must be valid JSON.';
       }
     }
+    try {
+      const extraArgs = parseExtraVLLMArgsText(startExtraVLLMArgs);
+      if (extraArgs.some((arg) => arg === '--served-model-name' || arg.startsWith('--served-model-name='))) {
+        return 'Served model name has a dedicated field. Remove --served-model-name from Extra vLLM Args.';
+      }
+    } catch (error) {
+      return error.message || 'Extra vLLM args could not be parsed.';
+    }
     if (!proxyEnabled && startBindIP.trim() && !/^[0-9a-fA-F:.]+$/.test(startBindIP.trim())) return 'Bind IP must be a valid IPv4 or IPv6 address.';
     if (!KV_CACHE_DTYPE_OPTIONS.includes(startKvCacheDType)) return 'KV cache dtype must be auto, fp8, fp8_e5m2, or fp8_e4m3';
     if (!usesAllGpus && selectedGpuIds.length !== gpusToSend) return `Select exactly ${gpusToSend} GPU${gpusToSend === 1 ? '' : 's'} for pinning.`;
@@ -640,7 +736,14 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
     }
 
     const gpusToSend = Number(startGpus);
-    const { payload, gpuIdsParam } = buildPayloadFromCurrentConfig();
+    let payloadData;
+    try {
+      payloadData = buildPayloadFromCurrentConfig();
+    } catch (error) {
+      setLaunchError(error.message || 'Extra vLLM args could not be parsed.');
+      return;
+    }
+    const { payload, gpuIdsParam } = payloadData;
 
     setLaunchConfirmData({
       payload,
@@ -879,17 +982,24 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
           contentClassName="deploy-server-modal"
           hideActions
           loading={launching}
-          titleAction={!editingServer && (
-            <button
-              className="btn btn-outline btn-compact"
-              type="button"
-              onClick={() => {
-                setImportCommandError('');
-                setImportModalOpen(true);
-              }}
-            >
-              <ClipboardPaste size={14} /> Import Command
-            </button>
+          titleAction={(
+            <div className="modal-title-actions">
+              <a className="btn btn-outline btn-compact" href={vllmDocsUrl} target="_blank" rel="noreferrer">
+                <ExternalLink size={14} /> vLLM Docs
+              </a>
+              {!editingServer && (
+                <button
+                  className="btn btn-outline btn-compact"
+                  type="button"
+                  onClick={() => {
+                    setImportCommandError('');
+                    setImportModalOpen(true);
+                  }}
+                >
+                  <ClipboardPaste size={14} /> Import Command
+                </button>
+              )}
+            </div>
           )}
           onCancel={() => {
             if (!launching) {
@@ -899,7 +1009,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             }
           }}
         >
-          <ImportCommandFeedback result={importCommandResult} />
+          <ImportCommandFeedback result={importCommandResult} onDismiss={() => setImportCommandResult(null)} />
           {editingServer && (
             <div className="edit-server-note">
               This stopped container will be removed and recreated with the updated settings. The model cannot be changed while editing.
@@ -933,6 +1043,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             setStartKvCacheDType={(v) => updateDeployConfig('kvCacheDType', v)}
             setStartMaxLen={(v) => updateDeployConfig('maxLen', v)}
             setStartMaxNumSeqs={(v) => updateDeployConfig('maxNumSeqs', v)}
+            setStartServedModelName={(v) => updateDeployConfig('servedModelName', v)}
             scaleMaxLen={scaleMaxLen}
             setStartMem={(v) => updateDeployConfig('mem', v)}
             setStartModelName={(v) => updateDeployConfig('modelName', v)}
@@ -940,6 +1051,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             setStartReasoningParser={(v) => updateDeployConfig('reasoningParser', v)}
             setStartTokenizerMode={(v) => updateDeployConfig('tokenizerMode', v)}
             setStartTrustRemoteCode={(v) => updateDeployConfig('trustRemoteCode', v)}
+            setStartExtraVLLMArgs={(v) => updateDeployConfig('extraVLLMArgs', v)}
             setStartBindIP={(v) => updateDeployConfig('bindIP', v)}
             setStartPort={(v) => updateDeployConfig('port', v)}
             startBlockSize={startBlockSize}
@@ -952,6 +1064,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             startKvCacheDType={startKvCacheDType}
             startMaxLen={startMaxLen}
             startMaxNumSeqs={startMaxNumSeqs}
+            startServedModelName={startServedModelName}
             startMem={startMem}
             startModelName={startModelName}
             startParser={startParser}
@@ -1002,6 +1115,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         <ConfirmModal
           title={launchConfirmData.editTarget ? 'Review Update Command' : 'Review Deploy Command'}
           confirmLabel={launchConfirmData.editTarget ? 'Update Server' : 'Deploy Server'}
+          cancelLabel="Back"
           contentClassName="deploy-command-modal"
           loading={launching}
           onCancel={() => {

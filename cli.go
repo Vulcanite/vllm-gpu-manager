@@ -200,7 +200,7 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 			if strings.TrimSpace(bindIP) != "" {
 				hostBindIP = strings.TrimSpace(bindIP)
 			}
-			if err := api.StartModel(args[0], port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, kvCacheDType, toolParser, tokenizerMode, reasoningParser, trustRemoteCode, blockSize, moeBackend, enableExpertParallel, disableFlashInferAutotune, speculativeConfig, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, api.ContainerExposureDirect, "", nil); err != nil {
+			if err := api.StartModel(args[0], "", port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, kvCacheDType, toolParser, tokenizerMode, reasoningParser, trustRemoteCode, blockSize, moeBackend, enableExpertParallel, disableFlashInferAutotune, speculativeConfig, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, api.ContainerExposureDirect, "", nil); err != nil {
 				return err
 			}
 			upsertRoute(args[0], port)

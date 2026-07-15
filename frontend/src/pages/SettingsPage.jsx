@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Activity, Copy, Cpu, Eye, KeyRound, RefreshCw, Settings } from 'lucide-react';
+import { Activity, Copy, Cpu, ExternalLink, Eye, KeyRound, RefreshCw, Settings } from 'lucide-react';
 
 import { ConfirmModal } from '../components/ConfirmModal.jsx';
 import { getErrorDetail, getSettings, getVllmAPIKey, saveSettings } from '../lib/api.js';
 import { generateVLLMToken } from '../lib/tokens.js';
+import { getVLLMDocsUrl } from '../lib/vllmDocs.js';
 import { ResourceMeter } from '../components/settings/ResourceMeter.jsx';
 
 const credentialStatus = (isSet, suffix) => {
@@ -205,6 +206,7 @@ export const SettingsPage = ({ fetchData, notify, proxyEnabled = false }) => {
   };
 
   const vllmAPIKeyInUse = vllmAPIKeyContainerCount > 0;
+  const vllmDocsUrl = getVLLMDocsUrl(vllmImage);
   const vllmRemoveKeyTitle = vllmAPIKeyInUse
     ? `${vllmAPIKeyContainerCount} existing vLLM container${vllmAPIKeyContainerCount === 1 ? ' is' : 's are'} using this API key. Remove those containers before removing the key.`
     : 'Remove the stored vLLM API key.';
@@ -215,14 +217,14 @@ export const SettingsPage = ({ fetchData, notify, proxyEnabled = false }) => {
         <div className="card settings-card">
           <div className="card-header">
             <h2 className="card-title">
-              <Settings size={18} /> Configuration
+              <Settings size={18} /> Model Storage Settings
             </h2>
           </div>
-          <form onSubmit={handleGeneralSave}>
+          <form className="serving-environment-form" onSubmit={handleGeneralSave}>
             <div className="form-group">
-              <label className="form-label" htmlFor="hfCache">Hugging Face Home Directory</label>
+              <label className="form-label" htmlFor="hfCache">Hugging Face Model Directory</label>
               <input id="hfCache" type="text" className="form-control" value={hfCache} onChange={(event) => setHfCache(event.target.value)} required disabled={saving || loading} />
-              <p className="text-secondary text-sm mt-1">Absolute path containing the Hugging Face hub directory.</p>
+              <p className="text-secondary text-sm mt-1">Absolute path containing the Hugging Face Model hub directory.</p>
             </div>
             <button type="submit" className="btn btn-primary mt-2" disabled={saving || loading}>
               {saving ? 'Saving...' : 'Save directory'}
@@ -382,8 +384,13 @@ export const SettingsPage = ({ fetchData, notify, proxyEnabled = false }) => {
               </label>
             </div>
 
-            <div className="form-group mt-4">
-              <label className="form-label" htmlFor="vllmImage">vLLM Docker Image</label>
+            <div className="form-group serving-vllm-image-field">
+              <div className="form-label-row">
+                <label className="form-label" htmlFor="vllmImage">vLLM Docker Image</label>
+                <a className="inline-doc-link" href={vllmDocsUrl} target="_blank" rel="noreferrer">
+                  Docs <ExternalLink size={13} aria-hidden="true" />
+                </a>
+              </div>
               <input id="vllmImage" type="text" className="form-control" value={vllmImage} onChange={(event) => setVllmImage(event.target.value)} placeholder="vllm/vllm-openai:v0.23.0-cu129" disabled={saving || loading} />
               <p className="text-secondary text-sm mt-1">Docker image used to launch serving containers and perform downloads. Defaults to <code>vllm/vllm-openai:v0.23.0-cu129</code>.</p>
             </div>
@@ -396,7 +403,7 @@ export const SettingsPage = ({ fetchData, notify, proxyEnabled = false }) => {
               </div>
             )}
 
-            <button type="submit" className="btn btn-primary mt-4" disabled={saving || loading}>
+            <button type="submit" className="btn btn-primary serving-environment-save" disabled={saving || loading}>
               {saving ? 'Saving...' : 'Save environment'}
             </button>
           </form>

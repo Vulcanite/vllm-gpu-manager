@@ -28,6 +28,31 @@ type dashboardOptions struct {
 	Monitoring   monitoringOptions
 }
 
+type startModelRequest struct {
+	Model                     string   `json:"model"`
+	ServedModelName           string   `json:"served_model_name"`
+	Port                      int      `json:"port"`
+	GPUs                      int      `json:"gpus"`
+	GPUIDs                    string   `json:"gpu_ids"`
+	MemUtil                   string   `json:"mem_util"`
+	MaxLen                    string   `json:"max_len"`
+	MaxNumSeqs                string   `json:"max_num_seqs"`
+	KVCacheDType              string   `json:"kv_cache_dtype"`
+	ToolParser                string   `json:"tool_parser"`
+	TokenizerMode             string   `json:"tokenizer_mode"`
+	ReasoningParser           string   `json:"reasoning_parser"`
+	TrustRemoteCode           bool     `json:"trust_remote_code"`
+	BlockSize                 string   `json:"block_size"`
+	MoeBackend                string   `json:"moe_backend"`
+	ExpertParallel            bool     `json:"enable_expert_parallel"`
+	DisableFlashInferAutotune bool     `json:"disable_flashinfer_autotune"`
+	SpeculativeConfig         string   `json:"speculative_config"`
+	BindIP                    string   `json:"bind_ip"`
+	UseAPIKey                 bool     `json:"use_api_key"`
+	ServerAPIKey              string   `json:"server_api_key"`
+	ExtraVLLMArgs             []string `json:"extra_vllm_args"`
+}
+
 func newDashboardMuxWithOptions(opts dashboardOptions) (*http.ServeMux, dashboardAuth) {
 	mux := http.NewServeMux()
 	auth := newDashboardAuth()
@@ -120,6 +145,16 @@ func filterDashboardModels(models []api.ActiveModel, proxyEnabled bool) []api.Ac
 	return filtered
 }
 
+func auditContainerDisplayName(containerID string, model api.ActiveModel) string {
+	if strings.TrimSpace(model.ContainerName) != "" {
+		return model.ContainerName
+	}
+	if strings.TrimSpace(containerID) != "" {
+		return containerID
+	}
+	return "container"
+}
+
 func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) http.HandlerFunc, opts dashboardOptions) {
 	proxyEnabled := opts.ProxyEnabled
 	mux.HandleFunc("/api/settings", apiHandler(func(w http.ResponseWriter, r *http.Request) {
@@ -194,6 +229,12 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 				writeAPIError(w, err)
 				return
 			}
+			appendAuditEvent(auditEvent{
+				Action:   "proxy_api_key_created",
+				Result:   "success",
+				Username: user.Username,
+				Summary:  "Created proxy API key for " + user.Username,
+			})
 			writeJSON(w, map[string]interface{}{
 				"username":      user.Username,
 				"api_key":       user.APIKey,
@@ -232,6 +273,12 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			writeAPIError(w, err)
 			return
 		}
+		appendAuditEvent(auditEvent{
+			Action:   "proxy_api_key_deleted",
+			Result:   "success",
+			Username: strings.TrimSpace(req.Username),
+			Summary:  "Revoked proxy API key for " + strings.TrimSpace(req.Username),
+		})
 		writeJSON(w, map[string]string{"status": "revoked"})
 	}))
 
@@ -303,6 +350,19 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		config := api.LaunchDefaults()
 		config.HFCache = getSettings().HFCache
 		writeJSON(w, config)
+	}))
+
+	mux.HandleFunc("/api/audit-logs", apiHandler(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		events, err := readAuditEvents(parseAuditLimit(r.URL.Query().Get("limit")))
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("failed to read audit log: %v", err))
+			return
+		}
+		writeJSON(w, events)
 	}))
 
 	mux.HandleFunc("/api/recommendations", apiHandler(func(w http.ResponseWriter, r *http.Request) {
@@ -383,35 +443,13 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		var req struct {
-			Model                     string   `json:"model"`
-			Port                      int      `json:"port"`
-			GPUs                      int      `json:"gpus"`
-			GPUIDs                    string   `json:"gpu_ids"`
-			MemUtil                   string   `json:"mem_util"`
-			MaxLen                    string   `json:"max_len"`
-			MaxNumSeqs                string   `json:"max_num_seqs"`
-			KVCacheDType              string   `json:"kv_cache_dtype"`
-			ToolParser                string   `json:"tool_parser"`
-			TokenizerMode             string   `json:"tokenizer_mode"`
-			ReasoningParser           string   `json:"reasoning_parser"`
-			TrustRemoteCode           bool     `json:"trust_remote_code"`
-			BlockSize                 string   `json:"block_size"`
-			MoeBackend                string   `json:"moe_backend"`
-			ExpertParallel            bool     `json:"enable_expert_parallel"`
-			DisableFlashInferAutotune bool     `json:"disable_flashinfer_autotune"`
-			SpeculativeConfig         string   `json:"speculative_config"`
-			BindIP                    string   `json:"bind_ip"`
-			UseAPIKey                 bool     `json:"use_api_key"`
-			ServerAPIKey              string   `json:"server_api_key"`
-			ExtraVLLMArgs             []string `json:"extra_vllm_args"`
-		}
+		var req startModelRequest
 		if !decodeJSONBody(w, r, &req) {
 			return
 		}
 
-		log.Printf("[API] /api/models/start requested! Model=%s Port=%d GPUs=%d GPUIDs=%s MemUtil=%s MaxLen=%s MaxNumSeqs=%s KVCacheDType=%s Parser=%s TokenizerMode=%s ReasoningParser=%s TrustRemoteCode=%t BlockSize=%s MoeBackend=%s ExpertParallel=%t DisableFlashInferAutotune=%t SpeculativeConfigSet=%t\n",
-			req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, strings.TrimSpace(req.SpeculativeConfig) != "")
+		log.Printf("[API] /api/models/start requested! Model=%s ServedModelName=%s Port=%d GPUs=%d GPUIDs=%s MemUtil=%s MaxLen=%s MaxNumSeqs=%s KVCacheDType=%s Parser=%s TokenizerMode=%s ReasoningParser=%s TrustRemoteCode=%t BlockSize=%s MoeBackend=%s ExpertParallel=%t DisableFlashInferAutotune=%t SpeculativeConfigSet=%t\n",
+			req.Model, req.ServedModelName, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, strings.TrimSpace(req.SpeculativeConfig) != "")
 
 		_, err := api.RequireDetectedGPUs()
 		if err != nil {
@@ -441,10 +479,28 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		if serverAPIKey != "" {
 			vllmAPIKey = ""
 		}
-		if err := api.StartModel(req.Model, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, req.SpeculativeConfig, settings.HFCache, settings.HFToken, vllmAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, containerExposure, serverAPIKey, req.ExtraVLLMArgs); err != nil {
+		auditParams := auditLaunchParams(req, containerExposure, hostBindIP)
+		if err := api.StartModel(req.Model, req.ServedModelName, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, req.SpeculativeConfig, settings.HFCache, settings.HFToken, vllmAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, containerExposure, serverAPIKey, req.ExtraVLLMArgs); err != nil {
+			appendAuditEvent(auditEvent{
+				Action:  "model_deploy",
+				Result:  "failed",
+				Model:   req.Model,
+				Port:    req.Port,
+				Params:  auditParams,
+				Error:   err.Error(),
+				Summary: fmt.Sprintf("Failed to deploy %s on port %d", req.Model, req.Port),
+			})
 			writeAPIError(w, err)
 			return
 		}
+		appendAuditEvent(auditEvent{
+			Action:  "model_deploy",
+			Result:  "success",
+			Model:   req.Model,
+			Port:    req.Port,
+			Params:  auditParams,
+			Summary: fmt.Sprintf("Deployed %s on port %d", req.Model, req.Port),
+		})
 		// Persist the per-server API key against the container name we just
 		// created. The proxy and the per-server-key map both use this name
 		// as a stable identifier, so the routing table alone is not enough.
@@ -456,6 +512,14 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			shortName = api.SanitizeDockerNamePart(shortName)
 			containerName := fmt.Sprintf("vllm-%s-%d", shortName, req.Port)
 			upsertServerAPIKey(containerName, serverAPIKey)
+			appendAuditEvent(auditEvent{
+				Action:        "server_api_key_created",
+				Result:        "success",
+				ContainerName: containerName,
+				Model:         req.Model,
+				Port:          req.Port,
+				Summary:       "Created per-server API key for " + containerName,
+			})
 		}
 		upsertRoute(req.Model, req.Port)
 		syncMonitoringTargets(opts.Monitoring)
@@ -498,10 +562,24 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		}
 
 		if err := api.StopModel(req.Port); err != nil {
+			appendAuditEvent(auditEvent{
+				Action:  "model_stop",
+				Result:  "failed",
+				Port:    req.Port,
+				Error:   err.Error(),
+				Summary: fmt.Sprintf("Failed to stop server on port %d", req.Port),
+			})
 			writeAPIError(w, err)
 			return
 		}
-		cleanupModelStateForPort(req.Port)
+		removedKeys := cleanupModelStateForPort(req.Port)
+		appendAuditEvent(auditEvent{
+			Action:  "model_stop",
+			Result:  "success",
+			Port:    req.Port,
+			Summary: fmt.Sprintf("Stopped server on port %d", req.Port),
+		})
+		auditedServerAPIKeyDeletes(removedKeys)
 		syncMonitoringTargets(opts.Monitoring)
 		writeJSON(w, map[string]string{"status": "stopped"})
 	}))
@@ -526,13 +604,31 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		if cleanupErr != nil {
 			log.Printf("[API] warning: failed to resolve managed container %s for state cleanup: %v", req.ContainerID, cleanupErr)
 		}
+		containerDisplayName := auditContainerDisplayName(req.ContainerID, modelState)
 		if err := api.RemoveModel(req.ContainerID); err != nil {
+			appendAuditEvent(auditEvent{
+				Action:      "model_remove",
+				Result:      "failed",
+				ContainerID: req.ContainerID,
+				Error:       err.Error(),
+				Summary:     "Failed to remove " + containerDisplayName,
+			})
 			writeAPIError(w, err)
 			return
 		}
+		appendAuditEvent(auditEvent{
+			Action:        "model_remove",
+			Result:        "success",
+			Model:         modelState.Model,
+			ContainerID:   req.ContainerID,
+			ContainerName: modelState.ContainerName,
+			Summary:       "Removed " + containerDisplayName,
+		})
+		var removedKeys []string
 		if cleanupState {
-			cleanupModelStateForActiveModel(modelState)
+			removedKeys = cleanupModelStateForActiveModel(modelState)
 		}
+		auditedServerAPIKeyDeletes(removedKeys)
 		syncMonitoringTargets(opts.Monitoring)
 		writeJSON(w, map[string]string{"status": "removed"})
 	}))
@@ -577,9 +673,22 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		}
 
 		if err := api.RestartModel(req.ContainerID); err != nil {
+			appendAuditEvent(auditEvent{
+				Action:      "model_restart",
+				Result:      "failed",
+				ContainerID: req.ContainerID,
+				Error:       err.Error(),
+				Summary:     "Failed to start/restart container " + req.ContainerID,
+			})
 			writeAPIError(w, err)
 			return
 		}
+		appendAuditEvent(auditEvent{
+			Action:      "model_restart",
+			Result:      "success",
+			ContainerID: req.ContainerID,
+			Summary:     "Started/restarted container " + req.ContainerID,
+		})
 		syncMonitoringTargets(opts.Monitoring)
 		writeJSON(w, map[string]string{"status": "restarted"})
 	}))

@@ -76,6 +76,11 @@ func runDoctor() doctorReport {
 		add("nvidia-smi", doctorFail, "nvidia-smi not found in PATH", true)
 	} else {
 		add("nvidia-smi", doctorPass, "nvidia-smi found", true)
+		if detail, err := nvidiaSMIDriverCUDAInfo(); err != nil {
+			add("NVIDIA driver CUDA", doctorWarn, err.Error(), false)
+		} else {
+			add("NVIDIA driver CUDA", doctorPass, detail, false)
+		}
 	}
 
 	gpus, err := api.GetGPUInfo()
@@ -165,6 +170,49 @@ func dockerNVIDIASignal() (string, bool) {
 		return "docker info exposes NVIDIA/containerd runtime signals", true
 	}
 	return "", false
+}
+
+func nvidiaSMIDriverCUDAInfo() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "nvidia-smi").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("nvidia-smi failed while reading driver CUDA version: %s", strings.TrimSpace(string(out)))
+	}
+	text := string(out)
+	driver := extractNvidiaSMIField(text, "Driver Version:")
+	cuda := extractNvidiaSMIField(text, "CUDA Version:")
+	if driver == "" && cuda == "" {
+		return "", fmt.Errorf("could not parse driver or CUDA version from nvidia-smi")
+	}
+	if driver == "" {
+		return "CUDA " + cuda, nil
+	}
+	if cuda == "" {
+		return "driver " + driver, nil
+	}
+	return fmt.Sprintf("driver %s; CUDA %s", driver, cuda), nil
+}
+
+func extractNvidiaSMIField(text string, label string) string {
+	idx := strings.Index(text, label)
+	if idx == -1 {
+		return ""
+	}
+	value := strings.TrimSpace(text[idx+len(label):])
+	if value == "" {
+		return ""
+	}
+	for _, sep := range []string{"|", "\n", "\r"} {
+		if end := strings.Index(value, sep); end != -1 {
+			value = value[:end]
+		}
+	}
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
 }
 
 func checkWritable(dir string) error {

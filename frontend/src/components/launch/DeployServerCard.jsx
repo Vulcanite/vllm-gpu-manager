@@ -6,6 +6,7 @@ import { generateVLLMToken } from '../../lib/tokens.js';
 
 const FIELD_HELP = {
   model: 'The downloaded Hugging Face model to serve with vLLM.',
+  servedModelName: 'Optional public model alias passed to vLLM as --served-model-name.',
   port: 'The host port that clients or the proxy use to reach this model server.',
   gpus: 'Tensor parallel GPU count for this vLLM server.',
   gpuPinning: 'Choose the exact GPU IDs assigned to this server when you are not using every GPU.',
@@ -119,6 +120,7 @@ export const DeployServerCard = ({
   setStartKvCacheDType,
   setStartMaxLen,
   setStartMaxNumSeqs,
+  setStartServedModelName,
   setStartMem,
   setStartBindIP,
   setStartModelName,
@@ -126,12 +128,14 @@ export const DeployServerCard = ({
   setStartReasoningParser,
   setStartTokenizerMode,
   setStartTrustRemoteCode,
+  setStartExtraVLLMArgs,
   setStartPort,
   startBlockSize,
   startGpus,
   startKvCacheDType,
   startMaxLen,
   startMaxNumSeqs,
+  startServedModelName,
   startMem,
   startBindIP,
   startModelName,
@@ -246,6 +250,19 @@ export const DeployServerCard = ({
               </option>
             ))}
           </select>
+        </div>
+
+        <div className="form-group">
+          <FieldLabel htmlFor="startServedModelName" help={FIELD_HELP.servedModelName}>Served Model Name</FieldLabel>
+          <input
+            id="startServedModelName"
+            type="text"
+            className="form-control"
+            value={startServedModelName}
+            onChange={(event) => setStartServedModelName(event.target.value)}
+            placeholder="Optional alias exposed by vLLM"
+            disabled={launching}
+          />
         </div>
 
         <div className="form-grid">
@@ -458,19 +475,19 @@ export const DeployServerCard = ({
               />
             </div>
 
-            {Array.isArray(startExtraVLLMArgs) && startExtraVLLMArgs.length > 0 && (
-              <div className="form-group">
-                <FieldLabel htmlFor="startExtraVLLMArgs" help={FIELD_HELP.extraVLLMArgs}>Extra vLLM Args</FieldLabel>
-                <textarea
-                  id="startExtraVLLMArgs"
-                  className="form-control code-textarea"
-                  value={startExtraVLLMArgs.join('\n')}
-                  readOnly
-                  rows={Math.min(6, Math.max(2, startExtraVLLMArgs.length))}
-                  spellCheck="false"
-                />
-              </div>
-            )}
+            <div className="form-group">
+              <FieldLabel htmlFor="startExtraVLLMArgs" help={FIELD_HELP.extraVLLMArgs}>Extra vLLM Args</FieldLabel>
+              <textarea
+                id="startExtraVLLMArgs"
+                className="form-control code-textarea"
+                value={startExtraVLLMArgs}
+                onChange={(event) => setStartExtraVLLMArgs(event.target.value)}
+                placeholder={'--language-model-only\n--max-num-batched-tokens 8192'}
+                rows={4}
+                spellCheck="false"
+                disabled={launching}
+              />
+            </div>
 
             <div className="form-grid">
               <div className="form-group">

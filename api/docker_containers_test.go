@@ -176,7 +176,10 @@ func TestBuildActiveModelParsesAdvancedEditFields(t *testing.T) {
 	if model.SpeculativeConfig != `{"method":"dspark"}` {
 		t.Fatalf("SpeculativeConfig=%q", model.SpeculativeConfig)
 	}
-	wantExtra := []string{"--served-model-name", "alias", "--enable-chunked-prefill"}
+	if model.ServedModelName != "alias" {
+		t.Fatalf("ServedModelName=%q, want alias", model.ServedModelName)
+	}
+	wantExtra := []string{"--enable-chunked-prefill"}
 	if !reflect.DeepEqual(model.ExtraVLLMArgs, wantExtra) {
 		t.Fatalf("ExtraVLLMArgs=%v, want %v", model.ExtraVLLMArgs, wantExtra)
 	}
@@ -185,6 +188,7 @@ func TestBuildActiveModelParsesAdvancedEditFields(t *testing.T) {
 func TestBuildActiveModelUsesLaunchSpecLabelsForEditMetadata(t *testing.T) {
 	spec := LaunchSpec{
 		Model:                     "label/model",
+		ServedModelName:           "alias",
 		Port:                      9090,
 		GPUs:                      2,
 		GPUIDs:                    "0,1",
@@ -202,7 +206,7 @@ func TestBuildActiveModelUsesLaunchSpecLabelsForEditMetadata(t *testing.T) {
 		DisableFlashInferAutotune: true,
 		SpeculativeConfig:         `{"method":"dspark"}`,
 		BindIP:                    "127.0.0.1",
-		ExtraVLLMArgs:             []string{"--served-model-name", "alias"},
+		ExtraVLLMArgs:             []string{"--enable-chunked-prefill"},
 	}
 	specBytes, err := json.Marshal(spec)
 	if err != nil {
@@ -243,6 +247,9 @@ func TestBuildActiveModelUsesLaunchSpecLabelsForEditMetadata(t *testing.T) {
 	if model.Model != spec.Model || model.Port != "9090" || model.GPUs != "2" {
 		t.Fatalf("model fields=%q/%q/%q, want launch spec values", model.Model, model.Port, model.GPUs)
 	}
+	if model.ServedModelName != spec.ServedModelName {
+		t.Fatalf("ServedModelName=%q, want %q", model.ServedModelName, spec.ServedModelName)
+	}
 	if !reflect.DeepEqual(model.LaunchSpec.ExtraVLLMArgs, spec.ExtraVLLMArgs) {
 		t.Fatalf("LaunchSpec.ExtraVLLMArgs=%v, want %v", model.LaunchSpec.ExtraVLLMArgs, spec.ExtraVLLMArgs)
 	}
@@ -253,17 +260,18 @@ func TestBuildActiveModelUsesLaunchSpecLabelsForEditMetadata(t *testing.T) {
 
 func TestServerContainerLabelsIncludeExposureAndLaunchSpec(t *testing.T) {
 	spec := LaunchSpec{
-		Model:         "test/model",
-		Port:          8082,
-		GPUs:          2,
-		GPUIDs:        "0,1",
-		MemUtil:       "0.9",
-		MaxLen:        "32768",
-		KVCacheDType:  "auto",
-		TokenizerMode: "auto",
-		MoeBackend:    "auto",
-		BindIP:        "127.0.0.1",
-		ExtraVLLMArgs: []string{"--served-model-name", "alias"},
+		Model:           "test/model",
+		ServedModelName: "alias",
+		Port:            8082,
+		GPUs:            2,
+		GPUIDs:          "0,1",
+		MemUtil:         "0.9",
+		MaxLen:          "32768",
+		KVCacheDType:    "auto",
+		TokenizerMode:   "auto",
+		MoeBackend:      "auto",
+		BindIP:          "127.0.0.1",
+		ExtraVLLMArgs:   []string{"--enable-chunked-prefill"},
 	}
 	labels, err := serverContainerLabels(spec.Model, ContainerExposureProxy, spec)
 	if err != nil {
@@ -603,7 +611,7 @@ func TestNormalizeSpeculativeConfig(t *testing.T) {
 }
 
 func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", ContainerExposureDirect, "per-server-key", nil)
+	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", ContainerExposureDirect, "per-server-key", nil)
 	if err == nil {
 		t.Fatal("StartModel accepted both global and per-server key; want validation error")
 	}
@@ -616,7 +624,7 @@ func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
 }
 
 func TestStartModelRejectsWhitespaceInPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "", false, false, "0.0.0.0", ContainerExposureDirect, "key with space", nil)
+	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "", false, false, "0.0.0.0", ContainerExposureDirect, "key with space", nil)
 	if err == nil {
 		t.Fatal("StartModel accepted whitespace in per-server key; want validation error")
 	}
