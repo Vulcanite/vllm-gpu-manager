@@ -49,3 +49,11 @@ jobs:
 
       - name: Test backend
         run: go test ./...
+
+      - name: Check dependency licenses
+        run: ./scripts/check-licenses.sh
+
+      - name: Validate packaging scripts
+        run: |
+          bash -n scripts/*.sh
+          sh -n packaging/scripts/*.sh

@@ -28,7 +28,7 @@ The manager currently targets:
 - NVIDIA GPUs
 - Docker
 - NVIDIA Container Toolkit
-- Configurable vLLM Docker image (defaults to `vllm/vllm-openai:v0.23.0-cu129`)
+- Configurable vLLM Docker image (defaults to `vllm/vllm-openai:v0.23.0`)
 - Hugging Face Hub model cache layout
 - internal/private network usage
 
@@ -61,9 +61,9 @@ Runtime host:
 - NVIDIA GPU drivers
 - `nvidia-smi` available in `PATH`
 - Docker installed and running
-- NVIDIA Container Toolkit configured so Docker supports `--runtime nvidia`
-- Configured vLLM Docker image (defaults to `vllm/vllm-openai:v0.23.0-cu129`) available locally or pullable by Docker
-- `alpine` image available locally for cached model deletion
+- NVIDIA Container Toolkit configured so Docker can satisfy NVIDIA GPU device requests
+- Configured vLLM Docker image (defaults to `vllm/vllm-openai:v0.23.0`) available locally or pullable by Docker
+- Read/write access to the configured Hugging Face cache directory
 
 Build machine:
 
@@ -82,22 +82,70 @@ cd ..
 
 The build script runs the frontend build and compiles a standalone backend binary named `vllm-manager`.
 
+To build directly from source without the helper:
+
+```bash
+cd frontend
+npm ci
+npm run build
+cd ..
+go test ./...
+CGO_ENABLED=0 go build -trimpath -o vllm-manager .
+```
+
+The optional Alpine helper image is not a prerequisite. The manager pulls it automatically when a GPU runtime probe or cache deletion first needs it.
+
+## Installation
+
+GitHub Releases provide portable Linux binaries and Debian packages for AMD64 and ARM64. A Debian install places the binary and runtime files at:
+
+```text
+/usr/bin/vllm-manager
+/usr/lib/systemd/system/vllm-manager.service
+/etc/vllm-manager/service.env
+/var/lib/vllm-manager/settings.json
+/var/lib/vllm-manager/audit.log
+/var/lib/vllm-manager/certs/
+/var/lib/vllm-manager/monitoring/
+```
+
+Install a downloaded package with:
+
+```bash
+sudo apt install ./vllm-manager_<version>_<arch>.deb
+sudo vllm-manager service configure
+sudo systemctl enable --now vllm-manager
+```
+
+Installation does not enable or start the service automatically. Packaged operational CLI commands normally need `sudo` because settings and secrets are owned by the dedicated `vllm-manager` service account.
+
+Fresh installs initialize the Hugging Face home at `/var/lib/vllm-manager/.cache/huggingface`. Change it from Settings after the first start if models live on another filesystem.
+
+For a source installation into `/usr/local/bin`:
+
+```bash
+./scripts/install.sh
+```
+
+The source installer builds and tests the project, installs the systemd unit, creates the `vllm-manager` user, and leaves the service disabled. Remove a source install with `./scripts/uninstall.sh`, or a packaged install with `sudo /usr/share/vllm-manager/scripts/uninstall.sh`. The helper asks before removing each managed model container and cached model, then separately confirms manager state and monitoring-volume deletion. Docker images are always preserved. Enter or `N` preserves the item. For noninteractive cleanup, pair `--yes` with the explicit `--remove-model-containers`, `--remove-model-cache`, `--purge`, and/or `--remove-monitoring-data` flags; `--yes` alone does not delete retained data.
+
 ## Release
 
-Pushing a version tag that starts with `v` creates a GitHub Release and uploads Linux AMD64 and ARM64 binaries plus SHA256 checksums.
+Pushing a version tag that starts with `v` creates a GitHub Release and uploads portable Linux AMD64/ARM64 binaries, AMD64/ARM64 Debian packages, license files, and `SHA256SUMS`.
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The release workflow builds the React frontend first, embeds it into the Go binary, runs frontend linting and backend tests, then publishes:
+The release workflow builds the React frontend first, embeds it into the Go binary, runs linting, backend tests, dependency-license checks, nFPM packaging, and Lintian validation, then publishes artifacts such as:
 
 ```text
 vllm-manager-<tag>-linux-amd64
-vllm-manager-<tag>-linux-amd64.sha256
 vllm-manager-<tag>-linux-arm64
-vllm-manager-<tag>-linux-arm64.sha256
+vllm-manager_<version>_amd64.deb
+vllm-manager_<version>_arm64.deb
+SHA256SUMS
 ```
 
 ## CLI
@@ -137,7 +185,7 @@ By default, the dashboard binds to `127.0.0.1`. Bind the dashboard to a specific
 ./vllm-manager --dashboard --host 0.0.0.0 --port 9090
 ```
 
-Dashboard HTTP is the default. Add `--https` to serve the dashboard with local self-signed TLS files (`server.crt` and `server.key`, generated on first use):
+Dashboard HTTP is the default. Add `--https` to serve the dashboard with generated self-signed TLS files (`certs/server.crt` and `certs/server.key` for portable runs):
 
 ```bash
 ./vllm-manager --dashboard --port 9090 --https
@@ -164,6 +212,8 @@ Run host checks before setup or after driver/Docker changes:
 
 `doctor` checks Linux, `nvidia-smi`, visible NVIDIA GPUs, driver-supported CUDA, Docker access, NVIDIA container runtime signals, Hugging Face cache access, and dashboard TLS files. The host CUDA toolkit (`nvcc`) is reported when present but remains optional for Docker-based serving.
 
+Dashboard startup and operational `gpu`, `model`, and `cache` commands run strict prerequisite checks first. They require Linux, at least one visible NVIDIA GPU, Docker API access, a successful short-lived Docker GPU provisioning probe, and a readable/writable Hugging Face cache. Help, version, doctor, settings, and service configuration remain available for diagnosis or repair. A missing local vLLM image is only a warning because Docker can pull it on first use.
+
 Then open:
 
 ```text
@@ -180,7 +230,7 @@ You can also use the helper script:
 ./manager.sh start 8080 change-me --no-proxy
 ./manager.sh start 8080 change-me --https
 ./manager.sh start 8080 change-me --monitoring
-./manager.sh start 8080 change-me --monitoring --monitoring-targets-file monitoring/runtime/vllm-targets.yml
+./manager.sh start 8080 change-me --monitoring --monitoring-targets-file monitoring/vllm-targets.yml
 ./manager.sh status
 ./manager.sh stop
 ./manager.sh restart
@@ -188,15 +238,30 @@ You can also use the helper script:
 
 Logs are written to `vllm-manager.log` when started through `manager.sh`.
 
-When `--monitoring` is set without `--monitoring-targets-file`, the binary uses its default Prometheus file-SD path: `monitoring/runtime/vllm-targets.yml`.
+When `--monitoring` is set without `--monitoring-targets-file`, a portable/source binary uses `monitoring/vllm-targets.yml`. A packaged binary uses `/var/lib/vllm-manager/monitoring/vllm-targets.yml`.
 
 The helper writes `.vllm-manager.state` with the last port, host, no-proxy flag state, HTTPS flag state, monitoring flag state, monitoring targets file, and dashboard password so `./manager.sh restart` reuses them. The state file is written with `0600` permissions but stores the password as plaintext.
 
 Dashboard mode handles `SIGINT` and `SIGTERM` with a graceful HTTP shutdown timeout, so in-flight API requests get a short window to finish during restarts.
 
+### Systemd
+
+The packaged service runs as the dedicated `vllm-manager` user, uses Docker group access, and writes stdout/stderr to journald:
+
+```bash
+sudo vllm-manager service configure --host 127.0.0.1 --port 9090
+sudo vllm-manager service configure --https --proxy=false --monitoring
+sudo vllm-manager service configure --password-file /root/vllm-manager-password
+sudo systemctl enable --now vllm-manager
+systemctl status vllm-manager
+journalctl -u vllm-manager -f
+```
+
+Use `--https=false`, `--proxy=true`, or `--monitoring=false` to reverse boolean settings. Configuration is written atomically to `/etc/vllm-manager/service.env` with restricted permissions. An active service is restarted after a change; an inactive service stays stopped. Add `--no-restart` to suppress the restart.
+
 ## Settings
 
-Settings are stored in `settings.json` beside the binary.
+Portable/source runs store settings in `settings.json` under the current working directory. Debian and source-systemd installs use `/var/lib/vllm-manager/settings.json`. `VLLM_MANAGER_CONFIG_DIR` and `VLLM_MANAGER_STATE_DIR` override packaged paths when needed.
 
 ```json
 {
@@ -215,7 +280,7 @@ Settings are stored in `settings.json` beside the binary.
   },
   "enable_cuda_compatibility": false,
   "hf_hub_offline": false,
-  "vllm_image": "vllm/vllm-openai:v0.23.0-cu129",
+  "vllm_image": "vllm/vllm-openai:v0.23.0",
   "server_bind_ip": "0.0.0.0",
   "routing_table": {
     "Qwen/Qwen2.5-Coder-7B-Instruct": 8080
@@ -231,7 +296,7 @@ Settings are stored in `settings.json` beside the binary.
 
 `server_api_keys` stores optional per-container API key overrides for containers launched outside proxy mode. The keys are indexed by managed container name and are not used as proxy client keys.
 
-`enable_cuda_compatibility` sets `VLLM_ENABLE_CUDA_COMPATIBILITY=1` on newly created serving containers. `hf_hub_offline` sets `HF_HUB_OFFLINE=1` on newly created serving containers and should only be enabled after required models are cached locally. `vllm_image` is optional and specifies the Docker image name and tag used to run serving containers and model downloads (defaults to `vllm/vllm-openai:v0.23.0-cu129`). When set online, it verifies the tag exists on Docker Hub. Existing containers keep their original environment/image; recreate a container to apply changed settings.
+`enable_cuda_compatibility` sets `VLLM_ENABLE_CUDA_COMPATIBILITY=1` on newly created serving containers. `hf_hub_offline` sets `HF_HUB_OFFLINE=1` on newly created serving containers and should only be enabled after required models are cached locally. `vllm_image` is optional and specifies the Docker image name and tag used to run serving containers and model downloads (defaults to `vllm/vllm-openai:v0.23.0`). When set online, it verifies the tag exists on Docker Hub. Existing containers keep their original environment/image; recreate a container to apply changed settings.
 
 `server_bind_ip` is the default host IP for direct serving containers outside proxy mode. It must be a valid IPv4 or IPv6 address assigned to the server, or a wildcard/loopback address. In proxy mode, serving containers are always bound to `127.0.0.1`.
 
@@ -364,15 +429,17 @@ Monitoring is optional. The helper script sets up Grafana, Prometheus, and NVIDI
 
 The setup prompts for Grafana admin username/password, Grafana bind IP/port, HTTPS mode, and certificate handling. Grafana is the only service exposed on the selected network IP. Prometheus and DCGM exporter bind to `127.0.0.1` by default.
 
-Provisioned Grafana dashboards are based on Grafana.com dashboard `22515` for NVIDIA DCGM and dashboard `25263` for vLLM metrics. The bundled JSON is normalized to use the provisioned Prometheus datasource UID `Prometheus`.
+The setup downloads pinned revisions of [NVIDIA DCGM Dashboard 22515](https://grafana.com/grafana/dashboards/22515-nvidia-dcgm-dashboard/) and [vLLM Metrics Dashboard 25263](https://grafana.com/grafana/dashboards/25263-vllm-metrics/), then normalizes their Prometheus datasource UID. Dashboard JSON is not bundled in the repository or release packages.
 
 Start the dashboard with monitoring target sync enabled:
 
 ```bash
-./vllm-manager --dashboard --port 9090 --monitoring --monitoring-targets-file monitoring/runtime/vllm-targets.yml
+./vllm-manager --dashboard --port 9090 --monitoring --monitoring-targets-file monitoring/vllm-targets.yml
 ```
 
-When `--monitoring` is set, the dashboard mirrors running managed vLLM containers into the Prometheus file-SD target file. Stopped or removed containers are removed from the target file, but Prometheus history remains in the `prometheus-data` Docker volume until the operator explicitly removes that volume.
+When `--monitoring` is set, the dashboard mirrors running managed vLLM containers into the Prometheus file-SD target file. Stopped or removed containers are removed from the target file, but history remains in the named `vllm-manager-prometheus-data` volume. Grafana state is stored in `vllm-manager-grafana-data`. Neither volume is removed automatically.
+
+For a Debian or source-systemd installation, run `sudo /usr/share/vllm-manager/scripts/setup-monitoring.sh` or `sudo /usr/local/share/vllm-manager/scripts/setup-monitoring.sh`. The monitoring state is written under `/var/lib/vllm-manager/monitoring`.
 
 ## Deleting Cached Models
 
@@ -435,3 +502,9 @@ This is an internal utility. It provides:
 - Request-level `Authorization: Bearer <proxy_user_api_key>` for `/v1/` proxy endpoints
 
 Anyone who can access the web interface can inspect GPU state, start and stop model containers, trigger model downloads, delete cached models, and use configured Hugging Face or vLLM API keys indirectly.
+
+The `vllm-manager` service account is added to the Docker group. Docker group membership is effectively root-equivalent; only trusted administrators should control the service configuration or account.
+
+## License
+
+vLLM Manager is licensed under the [Apache License 2.0](LICENSE). It permits commercial and private use, modification, and redistribution while preserving copyright/license notices and providing an express patent grant. Dependency licenses are checked in CI and summarized in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

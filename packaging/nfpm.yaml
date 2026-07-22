@@ -1,0 +1,78 @@
+name: vllm-manager
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: Amish <opensource@vulcanite.dev>
+description: |-
+  Single-host NVIDIA GPU and vLLM container manager
+  Provides a command-line interface and embedded web dashboard for managing
+  local vLLM Docker containers, Hugging Face model cache data, API routing,
+  audit events, and optional Prometheus/Grafana monitoring.
+vendor: Vulcanite
+homepage: https://github.com/Vulcanite/vllm-gpu-manager
+license: Apache-2.0
+depends:
+  - adduser
+  - init-system-helpers (>= 1.18~)
+
+contents:
+  - src: ./dist/vllm-manager-linux-${ARCH}
+    dst: /usr/bin/vllm-manager
+    expand: true
+    file_info:
+      mode: 0755
+  - src: ./packaging/vllm-manager.service
+    dst: /usr/lib/systemd/system/vllm-manager.service
+    file_info:
+      mode: 0644
+  - src: ./packaging/service.env
+    dst: /etc/vllm-manager/service.env
+    type: config
+    file_info:
+      mode: 0640
+  - src: ./packaging/copyright
+    dst: /usr/share/doc/vllm-manager/copyright
+    file_info:
+      mode: 0644
+  - src: ./dist/changelog.gz
+    dst: /usr/share/doc/vllm-manager/changelog.gz
+    file_info:
+      mode: 0644
+  - src: ./packaging/lintian-overrides
+    dst: /usr/share/lintian/overrides/vllm-manager
+    file_info:
+      mode: 0644
+  - src: ./THIRD_PARTY_NOTICES.md
+    dst: /usr/share/doc/vllm-manager/THIRD_PARTY_NOTICES.md
+    file_info:
+      mode: 0644
+  - src: ./scripts/setup-monitoring.sh
+    dst: /usr/share/vllm-manager/scripts/setup-monitoring.sh
+    file_info:
+      mode: 0755
+  - src: ./scripts/uninstall.sh
+    dst: /usr/share/vllm-manager/scripts/uninstall.sh
+    file_info:
+      mode: 0755
+  - src: ./monitoring/docker-compose.yml
+    dst: /usr/share/vllm-manager/monitoring/docker-compose.yml
+    file_info:
+      mode: 0644
+  - src: ./monitoring/grafana/provisioning
+    dst: /usr/share/vllm-manager/monitoring/grafana/provisioning
+    type: tree
+  - dst: /var/lib/vllm-manager
+    type: dir
+    file_info:
+      mode: 0750
+  - dst: /var/lib/vllm-manager/monitoring
+    type: dir
+    file_info:
+      mode: 0750
+
+scripts:
+  postinstall: ./packaging/scripts/postinstall.sh
+  preremove: ./packaging/scripts/preremove.sh
+  postremove: ./packaging/scripts/postremove.sh

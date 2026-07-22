@@ -28,6 +28,7 @@ type ActiveModel struct {
 	TokenizerMode             string      `json:"tokenizer_mode"`
 	ReasoningParser           string      `json:"reasoning_parser"`
 	TrustRemoteCode           bool        `json:"trust_remote_code"`
+	EnablePrefixCaching       bool        `json:"enable_prefix_caching"`
 	DisableFlashInferAutotune bool        `json:"disable_flashinfer_autotune"`
 	BlockSize                 string      `json:"block_size"`
 	MoeBackend                string      `json:"moe_backend"`
@@ -68,6 +69,7 @@ type LaunchSpec struct {
 	TokenizerMode             string   `json:"tokenizer_mode"`
 	ReasoningParser           string   `json:"reasoning_parser"`
 	TrustRemoteCode           bool     `json:"trust_remote_code"`
+	EnablePrefixCaching       bool     `json:"enable_prefix_caching"`
 	BlockSize                 string   `json:"block_size"`
 	MoeBackend                string   `json:"moe_backend"`
 	ExpertParallel            bool     `json:"enable_expert_parallel"`
@@ -121,12 +123,14 @@ const (
 	ParallelismTensor               = "tensor"
 	ParallelismPipeline             = "pipeline"
 	LaunchSpecVersion               = "1"
-	managerVersion                  = "0.1.0"
 )
 
-const DefaultVLLMImage = "vllm/vllm-openai:v0.23.0-cu129"
+const DefaultVLLMImage = "vllm/vllm-openai:v0.23.0"
 
-var VLLMImage = DefaultVLLMImage
+var (
+	VLLMImage      = DefaultVLLMImage
+	ManagerVersion = "dev"
+)
 
 var invalidDockerNameChars = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)
 

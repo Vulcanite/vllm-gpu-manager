@@ -23,7 +23,7 @@ const DEFAULT_LAUNCH_CONFIG = {
   default_gpu_memory_utilization: 0.9,
   default_max_model_len: 32768,
   hf_cache: '~/.cache/huggingface',
-  vllm_image: 'vllm/vllm-openai:v0.23.0-cu129',
+  vllm_image: 'vllm/vllm-openai:v0.23.0',
   ram_total: 0,
   ram_free: 0,
   cpu_offload_ram_safety_factor: 1.25,
@@ -54,6 +54,7 @@ const createDefaultDeployConfig = () => ({
   tokenizerMode: 'auto',
   reasoningParser: '',
   trustRemoteCode: false,
+  enablePrefixCaching: true,
   moeBackend: 'auto',
   enableExpertParallel: false,
   speculativeConfig: '',
@@ -110,6 +111,7 @@ const CHANGE_FIELDS = [
   ['tokenizer_mode', 'Tokenizer Mode'],
   ['reasoning_parser', 'Reasoning Parser'],
   ['trust_remote_code', 'Trust Remote Code'],
+  ['enable_prefix_caching', 'Prefix Caching'],
   ['moe_backend', 'MoE Backend'],
   ['enable_expert_parallel', 'Expert Parallel'],
   ['speculative_config', 'Speculative Config'],
@@ -255,8 +257,8 @@ const buildDockerRunCommand = (payload, { dockerGpuFlag = 'all', hfCache, hostBi
     '--host', '0.0.0.0',
     '--port', String(payload.port),
     '--gpu-memory-utilization', payload.mem_util,
-    '--enable-prefix-caching',
   );
+  args.push(payload.enable_prefix_caching ? '--enable-prefix-caching' : '--no-enable-prefix-caching');
   if (payload.parallelism_mode === 'pipeline') {
     args.push('--pipeline-parallel-size', String(payload.gpus));
   } else {
@@ -364,6 +366,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
   const startTokenizerMode = deployConfig.tokenizerMode;
   const startReasoningParser = deployConfig.reasoningParser;
   const startTrustRemoteCode = deployConfig.trustRemoteCode;
+  const startEnablePrefixCaching = deployConfig.enablePrefixCaching;
   const startMoeBackend = deployConfig.moeBackend;
   const startEnableExpertParallel = deployConfig.enableExpertParallel;
   const startSpeculativeConfig = deployConfig.speculativeConfig;
@@ -496,6 +499,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         tokenizer_mode: startTokenizerMode || 'auto',
         reasoning_parser: startReasoningParser || '',
         trust_remote_code: Boolean(startTrustRemoteCode),
+        enable_prefix_caching: Boolean(startEnablePrefixCaching),
         moe_backend: startMoeBackend || 'auto',
         enable_expert_parallel: Boolean(startEnableExpertParallel),
         speculative_config: compactSpeculativeConfig,
@@ -531,6 +535,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       tokenizer_mode: config.tokenizerMode || 'auto',
       reasoning_parser: config.reasoningParser || '',
       trust_remote_code: Boolean(config.trustRemoteCode),
+      enable_prefix_caching: Boolean(config.enablePrefixCaching),
       moe_backend: config.moeBackend || 'auto',
       enable_expert_parallel: Boolean(config.enableExpertParallel),
       speculative_config: compactJSONString(config.speculativeConfig),
@@ -581,6 +586,9 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         tokenizerMode: searchParams.get('tokenizer_mode') || prev.tokenizerMode,
         reasoningParser: searchParams.get('reasoning_parser') || prev.reasoningParser,
         trustRemoteCode: searchParams.get('trust_remote_code') === 'true' || prev.trustRemoteCode,
+        enablePrefixCaching: searchParams.has('enable_prefix_caching')
+          ? searchParams.get('enable_prefix_caching') !== 'false'
+          : prev.enablePrefixCaching,
         extraVLLMArgs: searchParams.get('block_size')
           ? `${prev.extraVLLMArgs ? `${prev.extraVLLMArgs}\n` : ''}--block-size ${searchParams.get('block_size')}`
           : prev.extraVLLMArgs,
@@ -725,6 +733,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       tokenizerMode: spec.tokenizer_mode || 'auto',
       reasoningParser: spec.reasoning_parser || '',
       trustRemoteCode: Boolean(spec.trust_remote_code),
+      enablePrefixCaching: spec.enable_prefix_caching !== false,
       moeBackend: editParallelismMode === 'tensor' && gpuCount > 1 ? (spec.moe_backend || 'auto') : 'auto',
       enableExpertParallel: editParallelismMode === 'tensor' && gpuCount > 1 && Boolean(spec.enable_expert_parallel),
       speculativeConfig: spec.speculative_config || '',
@@ -784,6 +793,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
         tokenizerMode: fields.tokenizer_mode || prev.tokenizerMode,
         reasoningParser: fields.reasoning_parser || prev.reasoningParser,
         trustRemoteCode: Boolean(fields.trust_remote_code) || prev.trustRemoteCode,
+        enablePrefixCaching: typeof fields.enable_prefix_caching === 'boolean' ? fields.enable_prefix_caching : prev.enablePrefixCaching,
         moeBackend: nextGpuCount > 1 && importedParallelismMode === 'tensor' && fields.enable_expert_parallel
           ? (fields.moe_backend || 'auto')
           : 'auto',
@@ -1205,6 +1215,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             setStartReasoningParser={(v) => updateDeployConfig('reasoningParser', v)}
             setStartTokenizerMode={(v) => updateDeployConfig('tokenizerMode', v)}
             setStartTrustRemoteCode={(v) => updateDeployConfig('trustRemoteCode', v)}
+            setStartEnablePrefixCaching={(v) => updateDeployConfig('enablePrefixCaching', v)}
             setStartExtraVLLMArgs={(v) => updateDeployConfig('extraVLLMArgs', v)}
             setStartBindIP={(v) => updateDeployConfig('bindIP', v)}
             setStartPort={(v) => updateDeployConfig('port', v)}
@@ -1229,6 +1240,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
             startReasoningParser={startReasoningParser}
             startTokenizerMode={startTokenizerMode}
             startTrustRemoteCode={startTrustRemoteCode}
+            startEnablePrefixCaching={startEnablePrefixCaching}
             selectedModelIsMultimodal={selectedModelIsMultimodal}
             submitLabel={editingServer ? 'Update Server' : 'Deploy Server'}
             startBindIP={startBindIP}

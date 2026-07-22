@@ -6,25 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
 	dockerclient "github.com/moby/moby/client"
 )
-
-type modelSizeInfo struct {
-	Display  string
-	Bytes    uint64
-	CachedAt time.Time
-}
-
-var (
-	modelSizeCache   = make(map[string]modelSizeInfo)
-	modelSizeCacheMu sync.RWMutex
-)
-
-const modelSizeCacheTTL = 2 * time.Second
 
 func GetModelDirectorySize(model, hfCache string) (uint64, error) {
 	hubPath := HFHubPath(hfCache)
@@ -71,15 +57,6 @@ func GetDownloadedModelSize(hfCache string, model string) (uint64, string, error
 	}
 
 	path := modelCacheDir(hfCache, model)
-	cacheKey := filepath.Clean(path)
-
-	modelSizeCacheMu.RLock()
-	cached, ok := modelSizeCache[cacheKey]
-	modelSizeCacheMu.RUnlock()
-	if ok && time.Since(cached.CachedAt) < modelSizeCacheTTL {
-		return cached.Bytes, cached.Display, nil
-	}
-
 	stat, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -96,22 +73,7 @@ func GetDownloadedModelSize(hfCache string, model string) (uint64, string, error
 		return 0, "", fmt.Errorf("failed to calculate model size: %v", err)
 	}
 
-	display := FormatBytes(bytes)
-	modelSizeCacheMu.Lock()
-	modelSizeCache[cacheKey] = modelSizeInfo{
-		Display:  display,
-		Bytes:    bytes,
-		CachedAt: time.Now(),
-	}
-	modelSizeCacheMu.Unlock()
-	return bytes, display, nil
-}
-
-func clearDownloadedModelSizeCache(path string) {
-	cacheKey := filepath.Clean(path)
-	modelSizeCacheMu.Lock()
-	delete(modelSizeCache, cacheKey)
-	modelSizeCacheMu.Unlock()
+	return bytes, FormatBytes(bytes), nil
 }
 
 // downloadContainerModelName extracts the model a download container is fetching
@@ -269,7 +231,6 @@ func DeleteDownloadedModel(model string, hfCache string) error {
 		return fmt.Errorf("failed to delete downloaded model cache: %v", err)
 	}
 
-	clearDownloadedModelSizeCache(modelPath)
 	return nil
 }
 

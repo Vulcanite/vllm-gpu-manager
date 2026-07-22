@@ -95,3 +95,21 @@ func TestRootHelpIncludesDashboardMode(t *testing.T) {
 		t.Fatalf("help output should not advertise --proxy:\n%s", rendered)
 	}
 }
+
+func TestCLISettingsGetField(t *testing.T) {
+	cache := t.TempDir()
+	resetSettingsCache(t, Settings{HFCache: cache}, true)
+
+	got, err := captureStdout(t, func() error {
+		return cliSettingsGet(cliOptions{}, "hf_cache")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(got) != cache {
+		t.Fatalf("hf_cache=%q, want %q", strings.TrimSpace(got), cache)
+	}
+	if err := cliSettingsGet(cliOptions{}, "unknown"); err == nil {
+		t.Fatal("unknown field should fail")
+	}
+}

@@ -2,19 +2,18 @@
 
 This project should stay focused on single-binary deployment for one GPU host. Future features should improve day-to-day operations without turning the tool into a distributed platform.
 
+## Next Release Focus
+
+- **AMD GPU support:** Add ROCm device discovery, Docker runtime validation, compatible vLLM image handling, VRAM checks, and UI/CLI terminology that works for both NVIDIA and AMD hosts. NVIDIA remains the only supported GPU platform in the current release.
+- **RPM packages:** Extend the existing nFPM packaging and release workflow with RPM artifacts, systemd paths, maintainer scripts, and validation on a supported RPM-based distribution.
+
 ## Good Fits
 
 - **Model presets:** Save launch presets per model, including GPUs, GPU IDs, port, memory utilization, max model length, KV cache dtype, and tool parser.
-- **Container logs view:** Add an API and dashboard panel for recent vLLM container logs, especially startup failures.
 - **Readiness and startup progress:** Show states such as created, starting, loading weights, ready, and failed using Docker status, health checks, and logs.
-- **Disk usage breakdown:** Show Hugging Face cache usage per downloaded model.
-- **One-click recreate:** Recreate a managed model container with the same launch configuration, useful after changing global settings.
 - **Proxy request limits:** Add request body limits and simple concurrency controls for the opt-in `/v1/` proxy gateway.
 - **Settings export and import:** Export sanitized settings and routing table; import secrets only when explicitly provided.
-- **Health diagnostics page:** Check Docker socket, NVIDIA runtime, `nvidia-smi`, vLLM image availability, HF cache path, disk space, and TLS cert status.
-- **Configurable vLLM image tag:** Allow `vllm/vllm-openai:<tag>` instead of hardcoding `latest` for reproducible deployments.
 - **DeepGEMM MegaMoE backend support:** Add `deep_gemm_mega_moe` as a guarded advanced MoE backend for DeepSeek-V4-style models. Validate `--enable-expert-parallel`, `model_type=deepseek_v4`, `expert_dtype=fp4`, and SM100-class GPUs before allowing launch.
-- **Systemd unit generator:** Add a CLI command that prints a systemd unit for running the single binary in dashboard mode.
 - **Recommended model improvements:** Add sort controls, richer "why this model" explanations, downloaded/not-downloaded filters, family tags, launch-risk indicators, recommendation modes such as Balanced/Max Quality/Fastest/Lowest VRAM, suggested `max_num_seqs`, compare mode, and catalog metadata such as license, source URL, notes, and last-reviewed date.
 
 ## Avoid

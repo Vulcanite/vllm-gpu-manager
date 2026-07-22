@@ -49,7 +49,16 @@ jobs:
       - name: Test backend
         run: go test ./...
 
-      - name: Build Linux binaries
+      - name: Check dependency licenses
+        run: ./scripts/check-licenses.sh
+
+      - name: Install packaging tools
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+          sudo apt-get update
+          sudo apt-get install -y lintian
+
+      - name: Build portable Linux binaries
         env:
           CGO_ENABLED: "0"
           GOOS: linux
@@ -58,10 +67,30 @@ jobs:
           mkdir -p dist
           for arch in amd64 arm64; do
             binary_name="vllm-manager-${TAG_NAME}-linux-${arch}"
-            GOARCH="${arch}" go build -trimpath -ldflags="-s -w" -o "dist/${binary_name}" .
+            version="${TAG_NAME#v}"
+            GOARCH="${arch}" go build -trimpath -ldflags="-s -w -X main.version=${version}" -o "dist/${binary_name}" .
             chmod +x "dist/${binary_name}"
-            sha256sum "dist/${binary_name}" > "dist/${binary_name}.sha256"
           done
+
+      - name: Build Debian packages
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          NFPM_BIN="$(go env GOPATH)/bin/nfpm" ./scripts/build-packages.sh
+          rm -f dist/vllm-manager-linux-amd64 dist/vllm-manager-linux-arm64 dist/changelog.gz
+
+      - name: Validate Debian packages
+        run: |
+          for package in dist/*.deb; do
+            dpkg-deb --info "$package"
+            dpkg-deb --contents "$package" >/dev/null
+          done
+          lintian --fail-on error dist/*.deb
+
+      - name: Create checksums and license artifacts
+        run: |
+          cp LICENSE THIRD_PARTY_NOTICES.md dist/
+          (cd dist && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | xargs sha256sum > SHA256SUMS)
 
       - name: Publish GitHub release
         env:

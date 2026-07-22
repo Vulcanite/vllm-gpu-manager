@@ -1,0 +1,2 @@
+# The Go application is intentionally built with CGO_ENABLED=0 as a portable binary.
+vllm-manager binary: statically-linked-binary [usr/bin/vllm-manager]

@@ -302,6 +302,17 @@ func TestServerContainerLabelsIncludeExposureAndLaunchSpec(t *testing.T) {
 	}
 }
 
+func TestLaunchSpecWithoutPrefixCachingFieldDefaultsEnabled(t *testing.T) {
+	labels := map[string]string{
+		containerLaunchSpecVersionLabel: LaunchSpecVersion,
+		containerLaunchSpecLabel:        `{"model":"test/model","port":8080}`,
+	}
+	spec, ok := launchSpecFromLabels(labels)
+	if !ok || !spec.EnablePrefixCaching {
+		t.Fatalf("launchSpecFromLabels()=(%+v, %t), want prefix caching enabled", spec, ok)
+	}
+}
+
 func TestBuildVLLMServeArgsUsesSingleParallelismMode(t *testing.T) {
 	tensorArgs := buildVLLMServeArgs(LaunchSpec{
 		Model:           "test/model",
@@ -332,6 +343,17 @@ func TestBuildVLLMServeArgsUsesSingleParallelismMode(t *testing.T) {
 	}
 	if !hasArgPair(pipelineArgs, "--dtype", "float32") || !hasArgPair(pipelineArgs, "--block-size", "256") {
 		t.Fatalf("pipeline args did not preserve dtype and legacy block-size extra: %v", pipelineArgs)
+	}
+}
+
+func TestBuildVLLMServeArgsHonorsPrefixCaching(t *testing.T) {
+	enabled := buildVLLMServeArgs(LaunchSpec{Model: "test/model", Port: 8080, GPUs: 1, MemUtil: "0.9", EnablePrefixCaching: true}, "")
+	disabled := buildVLLMServeArgs(LaunchSpec{Model: "test/model", Port: 8080, GPUs: 1, MemUtil: "0.9"}, "")
+	if !slices.Contains(enabled, "--enable-prefix-caching") || slices.Contains(enabled, "--no-enable-prefix-caching") {
+		t.Fatalf("enabled args=%v", enabled)
+	}
+	if !slices.Contains(disabled, "--no-enable-prefix-caching") || slices.Contains(disabled, "--enable-prefix-caching") {
+		t.Fatalf("disabled args=%v", disabled)
 	}
 }
 
@@ -454,7 +476,7 @@ func TestStartModelRejectsIneligibleParallelismSettingsBeforeDocker(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			err := StartModel(
 				"test/model", "", 8080, test.gpus, "all", "0.9", "32768", "256", "0",
-				"auto", test.parallelism, "auto", "", "auto", "", false, "", test.moeBackend,
+				"auto", test.parallelism, "auto", "", "auto", "", false, true, "", test.moeBackend,
 				test.expertParallel, false, "", t.TempDir(), "", "", false, false, "127.0.0.1",
 				ContainerExposureDirect, "", nil,
 			)
@@ -798,7 +820,7 @@ func TestCPUOffloadUlimits(t *testing.T) {
 }
 
 func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "0", "auto", ParallelismTensor, "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", ContainerExposureDirect, "per-server-key", nil)
+	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "0", "auto", ParallelismTensor, "auto", "", "auto", "", false, true, "", "auto", false, false, "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", ContainerExposureDirect, "per-server-key", nil)
 	if err == nil {
 		t.Fatal("StartModel accepted both global and per-server key; want validation error")
 	}
@@ -811,7 +833,7 @@ func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
 }
 
 func TestStartModelRejectsWhitespaceInPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "0", "auto", ParallelismTensor, "auto", "", "auto", "", false, "", "auto", false, false, "", "/tmp/cache", "", "", false, false, "0.0.0.0", ContainerExposureDirect, "key with space", nil)
+	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "0", "auto", ParallelismTensor, "auto", "", "auto", "", false, true, "", "auto", false, false, "", "/tmp/cache", "", "", false, false, "0.0.0.0", ContainerExposureDirect, "key with space", nil)
 	if err == nil {
 		t.Fatal("StartModel accepted whitespace in per-server key; want validation error")
 	}

@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	execTimeoutShort = 10 * time.Second  // ps, inspect, rm, image inspect
-	execTimeoutLong  = 30 * time.Second  // stop
-	execTimeoutStart = 5 * time.Minute   // image pull + container create + start; bound for the model lock
+	execTimeoutShort = 10 * time.Second // ps, inspect, rm, image inspect
+	execTimeoutLong  = 30 * time.Second // stop
+	execTimeoutStart = 5 * time.Minute  // image pull + container create + start; bound for the model lock
 )
 
 func dockerClient(ctx context.Context) (*dockerclient.Client, error) {

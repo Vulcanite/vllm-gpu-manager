@@ -13,6 +13,7 @@ server.key
 # Go build/test artifacts
 coverage.out
 bin/
+dist/
 
 # Frontend dependencies and generated output
 frontend/node_modules/

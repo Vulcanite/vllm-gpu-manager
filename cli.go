@@ -38,9 +38,16 @@ func newCLICommand(out io.Writer, errOut io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "vllm-manager",
 		Short:         "Manage local vLLM serving containers",
+		Version:       displayVersion(),
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE:          showCommandHelp,
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if commandRequiresOperationalPreflight(cmd) {
+				return operationalPreflight()
+			}
+			return nil
+		},
 	}
 	cmd.SetOut(out)
 	cmd.SetErr(errOut)
@@ -50,7 +57,7 @@ func newCLICommand(out io.Writer, errOut io.Writer) *cobra.Command {
 	cmd.Flags().Bool("https", false, "enable HTTPS with local server.crt/server.key")
 	cmd.Flags().Bool("no-proxy", false, "disable the /v1/ proxy gateway in dashboard mode")
 	cmd.Flags().Bool("monitoring", false, "sync vLLM Prometheus targets while the dashboard is running")
-	cmd.Flags().String("monitoring-targets-file", defaultMonitoringTargetsFile, "Prometheus file-SD targets file for vLLM metrics")
+	cmd.Flags().String("monitoring-targets-file", defaultMonitoringTargetsPath(), "Prometheus file-SD targets file for vLLM metrics")
 	cmd.PersistentFlags().BoolVar(&opts.JSON, "json", false, "print JSON output")
 	cmd.AddCommand(
 		newGPUCommand(opts),
@@ -58,6 +65,16 @@ func newCLICommand(out io.Writer, errOut io.Writer) *cobra.Command {
 		newCacheCommand(opts),
 		newSettingsCommand(opts),
 		newDoctorCommand(opts),
+		newServiceCommand(),
+		&cobra.Command{
+			Use:   "version",
+			Short: "Print the vLLM Manager version",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				_, err := fmt.Fprintln(cmd.OutOrStdout(), displayVersion())
+				return err
+			},
+		},
 	)
 	cmd.Example = strings.Join([]string{
 		"  vllm-manager gpu list",
@@ -203,7 +220,7 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 			if strings.TrimSpace(bindIP) != "" {
 				hostBindIP = strings.TrimSpace(bindIP)
 			}
-			if err := api.StartModel(args[0], "", port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, cpuOffloadGB, dtype, parallelismMode, kvCacheDType, toolParser, tokenizerMode, reasoningParser, trustRemoteCode, blockSize, moeBackend, enableExpertParallel, disableFlashInferAutotune, speculativeConfig, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, api.ContainerExposureDirect, "", nil); err != nil {
+			if err := api.StartModel(args[0], "", port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, cpuOffloadGB, dtype, parallelismMode, kvCacheDType, toolParser, tokenizerMode, reasoningParser, trustRemoteCode, true, blockSize, moeBackend, enableExpertParallel, disableFlashInferAutotune, speculativeConfig, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, api.ContainerExposureDirect, "", nil); err != nil {
 				return err
 			}
 			upsertRoute(args[0], port)
@@ -398,15 +415,18 @@ func newSettingsCommand(opts *cliOptions) *cobra.Command {
 		Short: "View and update local settings",
 		RunE:  showCommandHelp,
 	}
-	cmd.AddCommand(
-		&cobra.Command{
-			Use:   "get",
-			Short: "Show local settings and system resources",
-			Args:  cobra.NoArgs,
-			RunE: func(_ *cobra.Command, _ []string) error {
-				return cliSettingsGet(*opts)
-			},
+	var field string
+	getCmd := &cobra.Command{
+		Use:   "get",
+		Short: "Show local settings and system resources",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return cliSettingsGet(*opts, field)
 		},
+	}
+	getCmd.Flags().StringVar(&field, "field", "", "print one setting: hf_cache")
+	cmd.AddCommand(
+		getCmd,
 		newSettingsSetCommand(opts),
 	)
 	return cmd
@@ -685,8 +705,16 @@ func cliModelRecommend(opts cliOptions, useCase string, fitOnly bool, limit int)
 	return nil
 }
 
-func cliSettingsGet(opts cliOptions) error {
+func cliSettingsGet(opts cliOptions, field string) error {
 	status := getSettingsStatus()
+	switch strings.TrimSpace(field) {
+	case "":
+	case "hf_cache":
+		_, err := fmt.Fprintln(os.Stdout, status.HFCache)
+		return err
+	default:
+		return fmt.Errorf("unknown settings field %q", field)
+	}
 	if opts.JSON {
 		return printJSON(status)
 	}
@@ -712,7 +740,7 @@ func confirmDestructive(yes bool, prompt string) error {
 	if yes {
 		return nil
 	}
-	if !isTerminal(os.Stdin) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return errors.New("confirmation required; rerun with --yes in non-interactive shells")
 	}
 	fmt.Fprintf(os.Stderr, "%s [y/N]: ", prompt)
@@ -729,10 +757,6 @@ func confirmDestructive(yes bool, prompt string) error {
 		return nil
 	}
 	return errors.New("cancelled")
-}
-
-func isTerminal(file *os.File) bool {
-	return term.IsTerminal(int(file.Fd()))
 }
 
 func printMutationResult(opts cliOptions, fields map[string]interface{}) error {
@@ -821,7 +845,7 @@ func markdownTable(headers []string, rows [][]string) string {
 
 func renderMarkdown(w io.Writer, markdown string) {
 	file, ok := w.(*os.File)
-	if !ok || !isTerminal(file) {
+	if !ok || !term.IsTerminal(int(file.Fd())) {
 		fmt.Fprint(w, markdown)
 		return
 	}

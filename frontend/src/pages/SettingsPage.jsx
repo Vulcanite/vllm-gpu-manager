@@ -391,8 +391,8 @@ export const SettingsPage = ({ fetchData, notify, proxyEnabled = false }) => {
                   Docs <ExternalLink size={13} aria-hidden="true" />
                 </a>
               </div>
-              <input id="vllmImage" type="text" className="form-control" value={vllmImage} onChange={(event) => setVllmImage(event.target.value)} placeholder="vllm/vllm-openai:v0.23.0-cu129" disabled={saving || loading} />
-              <p className="text-secondary text-sm mt-1">Docker image used to launch serving containers and perform downloads. Defaults to <code>vllm/vllm-openai:v0.23.0-cu129</code>.</p>
+              <input id="vllmImage" type="text" className="form-control" value={vllmImage} onChange={(event) => setVllmImage(event.target.value)} placeholder="vllm/vllm-openai:v0.23.0" disabled={saving || loading} />
+              <p className="text-secondary text-sm mt-1">Docker image used to launch serving containers and perform downloads. Defaults to <code>vllm/vllm-openai:v0.23.0</code>.</p>
             </div>
 
             {!proxyEnabled && (

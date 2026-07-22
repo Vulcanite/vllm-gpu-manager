@@ -7,28 +7,29 @@ import (
 )
 
 type ImportedCommandFields struct {
-	Model             string `json:"model,omitempty"`
-	ServedModelName   string `json:"served_model_name,omitempty"`
-	Port              int    `json:"port,omitempty"`
-	GPUs              int    `json:"gpus,omitempty"`
-	GPUIDs            string `json:"gpu_ids,omitempty"`
-	MemUtil           string `json:"mem_util,omitempty"`
-	MaxLen            string `json:"max_len,omitempty"`
-	MaxNumSeqs        string `json:"max_num_seqs,omitempty"`
-	CPUOffloadGB      string `json:"cpu_offload_gb,omitempty"`
-	DType             string `json:"dtype,omitempty"`
-	ParallelismMode   string `json:"parallelism_mode,omitempty"`
-	KVCacheDType      string `json:"kv_cache_dtype,omitempty"`
-	ToolParser        string `json:"tool_parser,omitempty"`
-	TokenizerMode     string `json:"tokenizer_mode,omitempty"`
-	ReasoningParser   string `json:"reasoning_parser,omitempty"`
-	TrustRemoteCode   bool   `json:"trust_remote_code,omitempty"`
-	BlockSize         string `json:"block_size,omitempty"`
-	MoeBackend        string `json:"moe_backend,omitempty"`
-	ExpertParallel    bool   `json:"enable_expert_parallel,omitempty"`
-	SpeculativeConfig string `json:"speculative_config,omitempty"`
-	TensorParallel    int    `json:"-"`
-	PipelineParallel  int    `json:"-"`
+	Model               string `json:"model,omitempty"`
+	ServedModelName     string `json:"served_model_name,omitempty"`
+	Port                int    `json:"port,omitempty"`
+	GPUs                int    `json:"gpus,omitempty"`
+	GPUIDs              string `json:"gpu_ids,omitempty"`
+	MemUtil             string `json:"mem_util,omitempty"`
+	MaxLen              string `json:"max_len,omitempty"`
+	MaxNumSeqs          string `json:"max_num_seqs,omitempty"`
+	CPUOffloadGB        string `json:"cpu_offload_gb,omitempty"`
+	DType               string `json:"dtype,omitempty"`
+	ParallelismMode     string `json:"parallelism_mode,omitempty"`
+	KVCacheDType        string `json:"kv_cache_dtype,omitempty"`
+	ToolParser          string `json:"tool_parser,omitempty"`
+	TokenizerMode       string `json:"tokenizer_mode,omitempty"`
+	ReasoningParser     string `json:"reasoning_parser,omitempty"`
+	TrustRemoteCode     bool   `json:"trust_remote_code,omitempty"`
+	EnablePrefixCaching *bool  `json:"enable_prefix_caching,omitempty"`
+	BlockSize           string `json:"block_size,omitempty"`
+	MoeBackend          string `json:"moe_backend,omitempty"`
+	ExpertParallel      bool   `json:"enable_expert_parallel,omitempty"`
+	SpeculativeConfig   string `json:"speculative_config,omitempty"`
+	TensorParallel      int    `json:"-"`
+	PipelineParallel    int    `json:"-"`
 }
 
 type ImportedCommand struct {
@@ -73,8 +74,8 @@ var managedVLLMBoolFlags = map[string]func(*ImportedCommandFields){
 	"--trust-remote-code":                func(f *ImportedCommandFields) { f.TrustRemoteCode = true },
 	"--enable-expert-parallel":           func(f *ImportedCommandFields) { f.ExpertParallel = true },
 	"--enable-auto-tool-choice":          func(*ImportedCommandFields) {},
-	"--enable-prefix-caching":            func(*ImportedCommandFields) {},
-	"--no-enable-prefix-caching":         func(*ImportedCommandFields) {},
+	"--enable-prefix-caching":            func(f *ImportedCommandFields) { enabled := true; f.EnablePrefixCaching = &enabled },
+	"--no-enable-prefix-caching":         func(f *ImportedCommandFields) { enabled := false; f.EnablePrefixCaching = &enabled },
 	"--disable-log-requests":             nil,
 	"--disable-log-stats":                nil,
 	"--enable-chunked-prefill":           nil,

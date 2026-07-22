@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -11,8 +10,6 @@ import (
 
 	"vllm-manager/api"
 )
-
-const defaultMonitoringTargetsFile = "monitoring/runtime/vllm-targets.yml"
 
 type monitoringOptions struct {
 	Enabled     bool
@@ -31,7 +28,7 @@ func syncMonitoringTargets(opts monitoringOptions) {
 func writeMonitoringTargets(opts monitoringOptions) error {
 	path := strings.TrimSpace(opts.TargetsFile)
 	if path == "" {
-		path = defaultMonitoringTargetsFile
+		path = defaultMonitoringTargetsPath()
 	}
 	models, err := api.GetActiveModels(getSettings().VLLMAPIKey)
 	if err != nil {
@@ -81,7 +78,7 @@ func writeMonitoringTargets(opts monitoringOptions) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	return nil
+	return os.Chmod(path, 0o644)
 }
 
 func writeYAMLLabel(b *strings.Builder, key string, value string) {
@@ -90,11 +87,4 @@ func writeYAMLLabel(b *strings.Builder, key string, value string) {
 	b.WriteString(": ")
 	b.WriteString(strconv.Quote(value))
 	b.WriteString("\n")
-}
-
-func monitoringStartMessage(opts monitoringOptions) string {
-	if !opts.Enabled {
-		return ""
-	}
-	return fmt.Sprintf("Prometheus target sync enabled: %s", opts.TargetsFile)
 }

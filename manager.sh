@@ -284,7 +284,7 @@ case "$1" in
         echo "  --no-proxy disables the /v1/ OpenAI-compatible proxy gateway."
         echo "  --https enables self-signed HTTPS on the dashboard port."
         echo "  --monitoring syncs running vLLM servers into the Prometheus file-SD targets file."
-        echo "  --monitoring-targets-file sets the Prometheus file-SD path; binary default is monitoring/runtime/vllm-targets.yml."
+        echo "  --monitoring-targets-file sets the Prometheus file-SD path; portable binary default is monitoring/vllm-targets.yml."
         exit 1
         ;;
 esac

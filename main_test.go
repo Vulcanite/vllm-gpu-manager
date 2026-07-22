@@ -88,6 +88,9 @@ func TestHasDashboardFlag(t *testing.T) {
 }
 
 func TestParseDashboardFlagsProxyDefaults(t *testing.T) {
+	for _, name := range []string{serviceHostEnv, servicePortEnv, serviceHTTPSEnv, serviceNoProxyEnv, serviceMonitoringEnv, serviceMonitoringTargetsEnv} {
+		t.Setenv(name, "")
+	}
 	tests := []struct {
 		name      string
 		args      []string
@@ -157,6 +160,23 @@ func TestParseDashboardFlagsProxyDefaults(t *testing.T) {
 				t.Fatalf("proxyEnabled=%v, want %v", proxyEnabled, tt.wantProxy)
 			}
 		})
+	}
+}
+
+func TestParseDashboardFlagsUsesServiceEnvironmentDefaults(t *testing.T) {
+	t.Setenv(serviceHostEnv, "0.0.0.0")
+	t.Setenv(servicePortEnv, "9443")
+	t.Setenv(serviceHTTPSEnv, "true")
+	t.Setenv(serviceNoProxyEnv, "true")
+	t.Setenv(serviceMonitoringEnv, "true")
+	t.Setenv(serviceMonitoringTargetsEnv, "/tmp/vllm-targets.yml")
+
+	values, proxyEnabled, err := parseDashboardFlags([]string{"--dashboard"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values.host != "0.0.0.0" || values.value != "9443" || !values.httpsEnabled || !values.monitoringEnabled || values.monitoringTargetsFile != "/tmp/vllm-targets.yml" || proxyEnabled {
+		t.Fatalf("parseDashboardFlags() values=%+v proxy=%v", values, proxyEnabled)
 	}
 }
 
@@ -287,7 +307,7 @@ func TestSaveSettingsWritesPrivateFileAndUpdatesCache(t *testing.T) {
 		t.Fatalf("saveSettings() error=%v", err)
 	}
 
-	info, err := os.Stat(settingsFile)
+	info, err := os.Stat(settingsFilePath())
 	if err != nil {
 		t.Fatalf("settings file stat error=%v", err)
 	}
@@ -383,7 +403,7 @@ func TestUpsertRoutePreservesDiskRoutesWhenCacheIsStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal settings: %v", err)
 	}
-	if err := os.WriteFile(settingsFile, raw, 0600); err != nil {
+	if err := os.WriteFile(settingsFilePath(), raw, 0600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}
 	resetSettingsCache(t, Settings{
@@ -394,7 +414,7 @@ func TestUpsertRoutePreservesDiskRoutesWhenCacheIsStale(t *testing.T) {
 	upsertRoute("new-model", 8001)
 
 	var saved Settings
-	data, err := os.ReadFile(settingsFile)
+	data, err := os.ReadFile(settingsFilePath())
 	if err != nil {
 		t.Fatalf("read settings: %v", err)
 	}
@@ -422,7 +442,7 @@ func TestWriteHeartbeatPreservesDiskRoutesWhenCacheIsStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal settings: %v", err)
 	}
-	if err := os.WriteFile(settingsFile, raw, 0600); err != nil {
+	if err := os.WriteFile(settingsFilePath(), raw, 0600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}
 	resetSettingsCache(t, Settings{
@@ -436,7 +456,7 @@ func TestWriteHeartbeatPreservesDiskRoutesWhenCacheIsStale(t *testing.T) {
 	}
 
 	var saved Settings
-	data, err := os.ReadFile(settingsFile)
+	data, err := os.ReadFile(settingsFilePath())
 	if err != nil {
 		t.Fatalf("read settings: %v", err)
 	}
@@ -465,7 +485,7 @@ func TestIncrementProxyUserRequestCountPreservesDiskRoutesWhenCacheIsStale(t *te
 	if err != nil {
 		t.Fatalf("marshal settings: %v", err)
 	}
-	if err := os.WriteFile(settingsFile, raw, 0600); err != nil {
+	if err := os.WriteFile(settingsFilePath(), raw, 0600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}
 	resetSettingsCache(t, Settings{
@@ -477,7 +497,7 @@ func TestIncrementProxyUserRequestCountPreservesDiskRoutesWhenCacheIsStale(t *te
 	incrementProxyUserRequestCount("alice")
 
 	var saved Settings
-	data, err := os.ReadFile(settingsFile)
+	data, err := os.ReadFile(settingsFilePath())
 	if err != nil {
 		t.Fatalf("read settings: %v", err)
 	}
@@ -868,7 +888,7 @@ func TestWriteAndReadHeartbeat(t *testing.T) {
 	if err := writeHeartbeat(os.Getpid(), now); err != nil {
 		t.Fatalf("writeHeartbeat() error=%v", err)
 	}
-	info, err := os.Stat(settingsFile)
+	info, err := os.Stat(settingsFilePath())
 	if err != nil {
 		t.Fatalf("stat settings: %v", err)
 	}
@@ -876,7 +896,7 @@ func TestWriteAndReadHeartbeat(t *testing.T) {
 		t.Fatalf("settings mode=%#o, want 0600", got)
 	}
 
-	raw, err := os.ReadFile(settingsFile)
+	raw, err := os.ReadFile(settingsFilePath())
 	if err != nil {
 		t.Fatalf("read settings: %v", err)
 	}
