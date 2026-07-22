@@ -20,6 +20,7 @@ const FIELD_HELP = {
   expertParallel: 'Enable vLLM expert parallelism for MoE models. Requires multiple GPUs in Tensor mode.',
   languageModelOnly: 'Disable multimodal inputs and serve only the language model component.',
   trustRemoteCode: 'Allow model repositories to execute custom Python code inside the vLLM container.',
+  prefixCaching: 'Reuse KV cache blocks when requests share the same token prefix. Disable it when cache isolation is preferred.',
   speculativeConfig: 'JSON object passed directly to vLLM --speculative-config for speculative decoding.',
   speculativeDecoding: 'Enable speculative decoding and provide its vLLM JSON configuration.',
   extraVLLMArgs: 'Validated vLLM flags imported from a command that do not have dedicated fields yet.',
@@ -134,6 +135,7 @@ export const DeployServerCard = ({
   setStartReasoningParser,
   setStartTokenizerMode,
   setStartTrustRemoteCode,
+  setStartEnablePrefixCaching,
   setStartExtraVLLMArgs,
   setStartPort,
   startGpus,
@@ -158,6 +160,7 @@ export const DeployServerCard = ({
   startSpeculativeConfig,
   startTokenizerMode,
   startTrustRemoteCode,
+  startEnablePrefixCaching,
   selectedModelIsMultimodal,
   submitLabel = 'Deploy Server',
   useServerApiKey,
@@ -502,7 +505,7 @@ export const DeployServerCard = ({
               </div>
             </div>
 
-            <div className={showLanguageModelOnly ? 'form-grid' : ''}>
+            <div className="form-grid">
               <div className="form-group launch-toggle-group">
                 <div className="setting-row launch-setting-row">
                   <div>
@@ -522,28 +525,47 @@ export const DeployServerCard = ({
                   </label>
                 </div>
               </div>
-              {showLanguageModelOnly && (
-                <div className="form-group launch-toggle-group">
-                  <div className="setting-row launch-setting-row">
-                    <div>
-                      <FieldLabel htmlFor="startLanguageModelOnly" help={FIELD_HELP.languageModelOnly}>Language Model Only</FieldLabel>
-                    </div>
-                    <label className="toggle-control" aria-label="Serve only the language model component">
-                      <input
-                        id="startLanguageModelOnly"
-                        type="checkbox"
-                        checked={Boolean(startLanguageModelOnly)}
-                        onChange={(event) => setStartLanguageModelOnly(event.target.checked)}
-                        disabled={launching}
-                      />
-                      <span className="toggle-track" aria-hidden="true">
-                        <span className="toggle-thumb" />
-                      </span>
-                    </label>
+              <div className="form-group launch-toggle-group">
+                <div className="setting-row launch-setting-row">
+                  <div>
+                    <FieldLabel htmlFor="startEnablePrefixCaching" help={FIELD_HELP.prefixCaching}>Prefix Caching</FieldLabel>
                   </div>
+                  <label className="toggle-control" aria-label="Enable prefix caching for this server">
+                    <input
+                      id="startEnablePrefixCaching"
+                      type="checkbox"
+                      checked={Boolean(startEnablePrefixCaching)}
+                      onChange={(event) => setStartEnablePrefixCaching(event.target.checked)}
+                      disabled={launching}
+                    />
+                    <span className="toggle-track" aria-hidden="true">
+                      <span className="toggle-thumb" />
+                    </span>
+                  </label>
                 </div>
-              )}
+              </div>
             </div>
+            {showLanguageModelOnly && (
+              <div className="form-group launch-toggle-group">
+                <div className="setting-row launch-setting-row">
+                  <div>
+                    <FieldLabel htmlFor="startLanguageModelOnly" help={FIELD_HELP.languageModelOnly}>Language Model Only</FieldLabel>
+                  </div>
+                  <label className="toggle-control" aria-label="Serve only the language model component">
+                    <input
+                      id="startLanguageModelOnly"
+                      type="checkbox"
+                      checked={Boolean(startLanguageModelOnly)}
+                      onChange={(event) => setStartLanguageModelOnly(event.target.checked)}
+                      disabled={launching}
+                    />
+                    <span className="toggle-track" aria-hidden="true">
+                      <span className="toggle-thumb" />
+                    </span>
+                  </label>
+                </div>
+              </div>
+            )}
 
             <div className="form-group extra-vllm-args-group">
               <div className="setting-row launch-setting-row">

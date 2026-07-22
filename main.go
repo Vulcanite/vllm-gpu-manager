@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"vllm-manager/api"
 )
 
 // The frontend/dist directory is cleaned by build.sh before npm run build,
@@ -20,6 +22,7 @@ var frontendDist embed.FS
 const defaultDashboardPort = "9090"
 
 func main() {
+	api.ManagerVersion = displayVersion()
 	if len(os.Args) == 1 {
 		printRootHelp(os.Stdout)
 		return
@@ -77,15 +80,16 @@ type dashboardFlagValues struct {
 }
 
 func parseDashboardFlags(args []string, errOut io.Writer) (dashboardFlagValues, bool, error) {
+	defaults := dashboardDefaultsFromEnv()
 	fs := flag.NewFlagSet("vllm-manager", flag.ContinueOnError)
 	fs.SetOutput(errOut)
 	fs.Bool("dashboard", false, "Run the web dashboard")
-	port := fs.String("port", defaultDashboardPort, "Port to run the dashboard on")
-	host := fs.String("host", "127.0.0.1", "Host IP address to bind the dashboard on")
-	httpsEnabled := fs.Bool("https", false, "enable HTTPS with local server.crt/server.key")
-	noProxy := fs.Bool("no-proxy", false, "disable the OpenAI-compatible proxy gateway on /v1/")
-	monitoring := fs.Bool("monitoring", false, "sync running vLLM servers into the Prometheus file-SD targets file")
-	monitoringTargetsFile := fs.String("monitoring-targets-file", defaultMonitoringTargetsFile, "Prometheus file-SD targets file for vLLM metrics")
+	port := fs.String("port", defaults.Port, "Port to run the dashboard on")
+	host := fs.String("host", defaults.Host, "Host IP address to bind the dashboard on")
+	httpsEnabled := fs.Bool("https", defaults.HTTPS, "enable HTTPS with generated local certificates")
+	noProxy := fs.Bool("no-proxy", defaults.NoProxy, "disable the OpenAI-compatible proxy gateway on /v1/")
+	monitoring := fs.Bool("monitoring", defaults.Monitoring, "sync running vLLM servers into the Prometheus file-SD targets file")
+	monitoringTargetsFile := fs.String("monitoring-targets-file", defaults.MonitoringTargets, "Prometheus file-SD targets file for vLLM metrics")
 	fs.Usage = func() { printRootHelp(errOut) }
 	if err := fs.Parse(args); err != nil {
 		return dashboardFlagValues{}, false, err

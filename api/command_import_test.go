@@ -56,7 +56,7 @@ func TestParseImportedDockerRunCommand(t *testing.T) {
 }
 
 func TestParseImportedVLLMServeCommand(t *testing.T) {
-	got, err := ParseImportedCommand(`vllm serve Qwen/Qwen3 --port 9000 --tensor-parallel-size=2 --max-num-batched-tokens 8192`)
+	got, err := ParseImportedCommand(`vllm serve Qwen/Qwen3 --port 9000 --tensor-parallel-size=2 --no-enable-prefix-caching --max-num-batched-tokens 8192`)
 	if err != nil {
 		t.Fatalf("ParseImportedCommand() error=%v", err)
 	}
@@ -65,6 +65,9 @@ func TestParseImportedVLLMServeCommand(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.ExtraVLLMArgs, []string{"--max-num-batched-tokens", "8192"}) {
 		t.Fatalf("extra=%v", got.ExtraVLLMArgs)
+	}
+	if got.Fields.EnablePrefixCaching == nil || *got.Fields.EnablePrefixCaching {
+		t.Fatalf("enable_prefix_caching=%v, want false", got.Fields.EnablePrefixCaching)
 	}
 }
 

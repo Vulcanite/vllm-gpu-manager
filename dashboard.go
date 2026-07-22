@@ -45,6 +45,7 @@ type startModelRequest struct {
 	TokenizerMode             string   `json:"tokenizer_mode"`
 	ReasoningParser           string   `json:"reasoning_parser"`
 	TrustRemoteCode           bool     `json:"trust_remote_code"`
+	EnablePrefixCaching       *bool    `json:"enable_prefix_caching"`
 	BlockSize                 string   `json:"block_size"`
 	MoeBackend                string   `json:"moe_backend"`
 	ExpertParallel            bool     `json:"enable_expert_parallel"`
@@ -454,9 +455,13 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		if !decodeJSONBody(w, r, &req) {
 			return
 		}
+		if req.EnablePrefixCaching == nil {
+			enabled := true
+			req.EnablePrefixCaching = &enabled
+		}
 
-		log.Printf("[API] /api/models/start requested! Model=%s ServedModelName=%s Port=%d GPUs=%d GPUIDs=%s MemUtil=%s MaxLen=%s MaxNumSeqs=%s CPUOffloadGB=%s DType=%s ParallelismMode=%s KVCacheDType=%s Parser=%s TokenizerMode=%s ReasoningParser=%s TrustRemoteCode=%t BlockSize=%s MoeBackend=%s ExpertParallel=%t DisableFlashInferAutotune=%t SpeculativeConfigSet=%t\n",
-			req.Model, req.ServedModelName, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.CPUOffloadGB, req.DType, req.ParallelismMode, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, strings.TrimSpace(req.SpeculativeConfig) != "")
+		log.Printf("[API] /api/models/start requested! Model=%s ServedModelName=%s Port=%d GPUs=%d GPUIDs=%s MemUtil=%s MaxLen=%s MaxNumSeqs=%s CPUOffloadGB=%s DType=%s ParallelismMode=%s KVCacheDType=%s Parser=%s TokenizerMode=%s ReasoningParser=%s TrustRemoteCode=%t EnablePrefixCaching=%t BlockSize=%s MoeBackend=%s ExpertParallel=%t DisableFlashInferAutotune=%t SpeculativeConfigSet=%t\n",
+			req.Model, req.ServedModelName, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.CPUOffloadGB, req.DType, req.ParallelismMode, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, *req.EnablePrefixCaching, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, strings.TrimSpace(req.SpeculativeConfig) != "")
 
 		_, err := api.RequireDetectedGPUs()
 		if err != nil {
@@ -487,7 +492,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			vllmAPIKey = ""
 		}
 		auditParams := auditLaunchParams(req, containerExposure, hostBindIP)
-		if err := api.StartModel(req.Model, req.ServedModelName, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.CPUOffloadGB, req.DType, req.ParallelismMode, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, req.SpeculativeConfig, settings.HFCache, settings.HFToken, vllmAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, containerExposure, serverAPIKey, req.ExtraVLLMArgs); err != nil {
+		if err := api.StartModel(req.Model, req.ServedModelName, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.CPUOffloadGB, req.DType, req.ParallelismMode, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, *req.EnablePrefixCaching, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, req.SpeculativeConfig, settings.HFCache, settings.HFToken, vllmAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, containerExposure, serverAPIKey, req.ExtraVLLMArgs); err != nil {
 			appendAuditEvent(auditEvent{
 				Action:  "model_deploy",
 				Result:  "failed",
@@ -921,6 +926,9 @@ func registerStaticRoutes(mux *http.ServeMux) {
 }
 
 func runDashboard(opts dashboardOptions) {
+	if err := operationalPreflight(); err != nil {
+		log.Fatalf("dashboard prerequisites failed: %v", err)
+	}
 	hostAddr, err := api.ValidateLocalBindIP(opts.Host)
 	if err != nil {
 		log.Fatalf("invalid dashboard host: %v", err)
@@ -929,7 +937,7 @@ func runDashboard(opts dashboardOptions) {
 		opts.Port = defaultDashboardPort
 	}
 	if strings.TrimSpace(opts.Monitoring.TargetsFile) == "" {
-		opts.Monitoring.TargetsFile = defaultMonitoringTargetsFile
+		opts.Monitoring.TargetsFile = defaultMonitoringTargetsPath()
 	}
 	opts.Host = hostAddr.String()
 	mux, auth := newDashboardMuxWithOptions(opts)
@@ -947,16 +955,20 @@ func runDashboard(opts dashboardOptions) {
 	}
 
 	scheme := "http"
+	certFile, keyFile := dashboardCertPaths()
 	if opts.HTTPSEnabled {
 		scheme = "https"
-		if err := ensureCerts("server.crt", "server.key"); err != nil {
+		if err := ensureRuntimeDir(certFile, 0o750); err != nil {
+			log.Fatalf("failed to prepare TLS certificate directory: %v", err)
+		}
+		if err := ensureCerts(certFile, keyFile); err != nil {
 			log.Fatalf("failed to generate TLS certificates: %v", err)
 		}
 	}
 
 	fmt.Printf("Starting vllm-manager server on %s (%s)\n", server.Addr, strings.ToUpper(scheme))
-	if msg := monitoringStartMessage(opts.Monitoring); msg != "" {
-		fmt.Println(msg)
+	if opts.Monitoring.Enabled {
+		fmt.Printf("Prometheus target sync enabled: %s\n", opts.Monitoring.TargetsFile)
 	}
 
 	if opts.ProxyEnabled {
@@ -973,7 +985,7 @@ func runDashboard(opts dashboardOptions) {
 	errCh := make(chan error, 1)
 	go func() {
 		if opts.HTTPSEnabled {
-			errCh <- server.ListenAndServeTLS("server.crt", "server.key")
+			errCh <- server.ListenAndServeTLS(certFile, keyFile)
 			return
 		}
 		errCh <- server.ListenAndServe()

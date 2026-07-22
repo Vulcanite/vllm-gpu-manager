@@ -21,8 +21,6 @@ import (
 	"github.com/distribution/reference"
 )
 
-const settingsFile = "settings.json"
-
 type Heartbeat struct {
 	PID      int       `json:"pid"`
 	LastSeen time.Time `json:"last_seen"`
@@ -180,10 +178,11 @@ func normalizeSettings(s Settings) Settings {
 
 func loadSettingsFromDisk() Settings {
 	s := defaultSettings()
-	data, err := os.ReadFile(settingsFile)
+	path := settingsFilePath()
+	data, err := os.ReadFile(path)
 	if err == nil {
 		if err := json.Unmarshal(data, &s); err != nil {
-			log.Printf("[SETTINGS] warning: failed to parse %s: %v", settingsFile, err)
+			log.Printf("[SETTINGS] warning: failed to parse %s: %v", path, err)
 		}
 	}
 	return normalizeSettings(s)
@@ -195,7 +194,7 @@ func loadAndCacheSettingsLocked() {
 }
 
 func refreshSettingsCacheFromDiskIfPresentLocked() {
-	if _, err := os.Stat(settingsFile); err == nil {
+	if _, err := os.Stat(settingsFilePath()); err == nil {
 		loadAndCacheSettingsLocked()
 		return
 	}
@@ -236,7 +235,11 @@ func saveSettingsLocked(s Settings) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(settingsFile, data, 0600); err != nil {
+	path := settingsFilePath()
+	if err := ensureRuntimeDir(path, 0o750); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return err
 	}
 	settingsCache = s
@@ -842,7 +845,11 @@ func writeHeartbeat(pid int, seen time.Time) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(settingsFile, data, 0600); err != nil {
+	path := settingsFilePath()
+	if err := ensureRuntimeDir(path, 0o750); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return err
 	}
 	return nil
@@ -865,7 +872,12 @@ func clearHeartbeat() {
 		log.Printf("[SETTINGS] failed to marshal settings while clearing heartbeat: %v", err)
 		return
 	}
-	if err := os.WriteFile(settingsFile, data, 0600); err != nil {
+	path := settingsFilePath()
+	if err := ensureRuntimeDir(path, 0o750); err != nil {
+		log.Printf("[SETTINGS] failed to prepare settings directory while clearing heartbeat: %v", err)
+		return
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		log.Printf("[SETTINGS] failed to write settings while clearing heartbeat: %v", err)
 		return
 	}

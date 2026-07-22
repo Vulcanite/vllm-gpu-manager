@@ -1,0 +1,21 @@
+[Unit]
+Description=vLLM Manager dashboard
+Documentation=https://github.com/Vulcanite/vllm-gpu-manager
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=vllm-manager
+Group=vllm-manager
+SupplementaryGroups=docker
+EnvironmentFile=-/etc/vllm-manager/service.env
+WorkingDirectory=/var/lib/vllm-manager
+ExecStart=/usr/bin/vllm-manager --dashboard
+Restart=on-failure
+RestartSec=5s
+UMask=0027
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -386,6 +386,13 @@ func launchSpecFromLabels(labels map[string]string) (LaunchSpec, bool) {
 	if err := json.Unmarshal([]byte(raw), &spec); err != nil {
 		return LaunchSpec{}, false
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+		return LaunchSpec{}, false
+	}
+	if _, ok := fields["enable_prefix_caching"]; !ok {
+		spec.EnablePrefixCaching = true
+	}
 	return spec, true
 }
 
@@ -406,6 +413,7 @@ func applyLaunchSpecToActiveModel(model *ActiveModel, spec LaunchSpec) {
 	model.TokenizerMode = emptyStringAs(spec.TokenizerMode, "auto")
 	model.ReasoningParser = emptyStringAs(spec.ReasoningParser, "disabled")
 	model.TrustRemoteCode = spec.TrustRemoteCode
+	model.EnablePrefixCaching = spec.EnablePrefixCaching
 	model.DisableFlashInferAutotune = spec.DisableFlashInferAutotune
 	model.BlockSize = emptyStringAs(spec.BlockSize, "default")
 	model.MoeBackend = emptyStringAs(spec.MoeBackend, "auto")
@@ -435,7 +443,7 @@ func serverContainerLabels(model string, exposure string, spec LaunchSpec) (map[
 		containerExposureLabel:          exposure,
 		containerLaunchSpecVersionLabel: LaunchSpecVersion,
 		containerLaunchSpecLabel:        string(specBytes),
-		"vllm-manager.version":          managerVersion,
+		"vllm-manager.version":          ManagerVersion,
 	}, nil
 }
 
@@ -860,7 +868,11 @@ func buildVLLMServeArgs(spec LaunchSpec, apiKey string) []string {
 		"--host", "0.0.0.0",
 		"--port", strconv.Itoa(spec.Port),
 		"--gpu-memory-utilization", spec.MemUtil,
-		"--enable-prefix-caching",
+	}
+	if spec.EnablePrefixCaching {
+		cmd = append(cmd, "--enable-prefix-caching")
+	} else {
+		cmd = append(cmd, "--no-enable-prefix-caching")
 	}
 	if spec.ParallelismMode == ParallelismPipeline {
 		cmd = append(cmd, "--pipeline-parallel-size", strconv.Itoa(spec.GPUs))
@@ -1031,7 +1043,7 @@ func NormalizeModelKeyForMatch(model string) string {
 	return model
 }
 
-func StartModel(model string, servedModelName string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, cpuOffloadGB string, dtype string, parallelismMode string, kvCacheDType string, toolParser string, tokenizerMode string, reasoningParser string, trustRemoteCode bool, blockSize string, moeBackend string, enableExpertParallel bool, disableFlashInferAutotune bool, speculativeConfig string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, containerExposure string, serverAPIKey string, extraVLLMArgs []string) error {
+func StartModel(model string, servedModelName string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, cpuOffloadGB string, dtype string, parallelismMode string, kvCacheDType string, toolParser string, tokenizerMode string, reasoningParser string, trustRemoteCode bool, enablePrefixCaching bool, blockSize string, moeBackend string, enableExpertParallel bool, disableFlashInferAutotune bool, speculativeConfig string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, containerExposure string, serverAPIKey string, extraVLLMArgs []string) error {
 	hfCache = NormalizeHFHome(hfCache)
 	if hfCache == "" {
 		return validationError("hugging face cache directory is required")
@@ -1251,7 +1263,7 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 		logDockerMessage("WARNING: %s", warning)
 	}
 
-	if err := CheckModelFitsInVRAM(model, hfCache, selectedGPUs, gpus, parallelismMode, memUtil, maxLen, kvCacheDType); err != nil {
+	if err := CheckModelFitsInVRAM(model, hfCache, selectedGPUs, gpus, parallelismMode, memUtil, maxLen, kvCacheDType, cpuOffloadGBValue); err != nil {
 		return err
 	}
 
@@ -1276,6 +1288,7 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 		TokenizerMode:             tokenizerMode,
 		ReasoningParser:           reasoningParser,
 		TrustRemoteCode:           trustRemoteCode,
+		EnablePrefixCaching:       enablePrefixCaching,
 		BlockSize:                 blockSize,
 		MoeBackend:                moeBackend,
 		ExpertParallel:            enableExpertParallel,

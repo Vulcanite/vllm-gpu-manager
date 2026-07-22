@@ -36,14 +36,15 @@ func TestCheckModelFitsInVRAM(t *testing.T) {
 	os.WriteFile(configPath, []byte(configJSON), 0644)
 
 	tests := []struct {
-		name      string
-		gpus      []GPUInfo
-		gpusCount int
-		parallel  string
-		memUtil   string
-		maxLen    string
-		kvDType   string
-		wantErr   string
+		name         string
+		gpus         []GPUInfo
+		gpusCount    int
+		parallel     string
+		memUtil      string
+		maxLen       string
+		kvDType      string
+		cpuOffloadGB int
+		wantErr      string
 	}{
 		{
 			name:      "Fits within VRAM",
@@ -64,6 +65,16 @@ func TestCheckModelFitsInVRAM(t *testing.T) {
 			maxLen:    "4096",
 			kvDType:   "auto",
 			wantErr:   "only has 8.00 GiB currently free",
+		},
+		{
+			name:         "Fits with CPU-offloaded weights",
+			gpus:         []GPUInfo{{ID: 0, MemoryTotal: 24 * 1024 * 1024 * 1024, MemoryFree: 8 * 1024 * 1024 * 1024}},
+			gpusCount:    1,
+			parallel:     ParallelismTensor,
+			memUtil:      "0.9",
+			maxLen:       "4096",
+			kvDType:      "auto",
+			cpuOffloadGB: 4,
 		},
 		{
 			name:      "Fails: max_model_len exceeds model limit",
@@ -98,7 +109,7 @@ func TestCheckModelFitsInVRAM(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := CheckModelFitsInVRAM(model, hfCache, tt.gpus, tt.gpusCount, tt.parallel, tt.memUtil, tt.maxLen, tt.kvDType)
+			err := CheckModelFitsInVRAM(model, hfCache, tt.gpus, tt.gpusCount, tt.parallel, tt.memUtil, tt.maxLen, tt.kvDType, tt.cpuOffloadGB)
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)

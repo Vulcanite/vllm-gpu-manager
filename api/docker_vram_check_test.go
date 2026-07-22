@@ -27,7 +27,6 @@ func writeVRAMTestModel(t *testing.T, hfCache string, model string, config strin
 	if err := os.WriteFile(filepath.Join(snapshot, "weights.bin"), make([]byte, weightBytes), 0600); err != nil {
 		t.Fatal(err)
 	}
-	clearDownloadedModelSizeCache(root)
 }
 
 func tinyVRAMConfig(maxLen int) string {
@@ -64,7 +63,7 @@ func TestCheckModelFitsInVRAMAllowsSmallModel(t *testing.T) {
 		ID:          0,
 		MemoryTotal: 16 * 1024 * 1024 * 1024,
 		MemoryFree:  16 * 1024 * 1024 * 1024,
-	}}, 1, ParallelismTensor, "0.9", "128", "auto")
+	}}, 1, ParallelismTensor, "0.9", "128", "auto", 0)
 	if err != nil {
 		t.Fatalf("CheckModelFitsInVRAM() error=%v", err)
 	}
@@ -79,7 +78,7 @@ func TestCheckModelFitsInVRAMRejectsMaxLenAboveModelLimit(t *testing.T) {
 		ID:          0,
 		MemoryTotal: 16 * 1024 * 1024 * 1024,
 		MemoryFree:  16 * 1024 * 1024 * 1024,
-	}}, 1, ParallelismTensor, "0.9", "256", "auto")
+	}}, 1, ParallelismTensor, "0.9", "256", "auto", 0)
 	if err == nil {
 		t.Fatal("CheckModelFitsInVRAM() error=nil, want max len validation error")
 	}
@@ -97,7 +96,7 @@ func TestCheckModelFitsInVRAMRejectsMaxLenAboveModelLimitWithPartialConfig(t *te
 		ID:          0,
 		MemoryTotal: 16 * 1024 * 1024 * 1024,
 		MemoryFree:  16 * 1024 * 1024 * 1024,
-	}}, 1, ParallelismTensor, "0.9", "256", "auto")
+	}}, 1, ParallelismTensor, "0.9", "256", "auto", 0)
 	if err == nil {
 		t.Fatal("CheckModelFitsInVRAM() error=nil, want max len validation error")
 	}
@@ -115,7 +114,7 @@ func TestCheckModelFitsInVRAMRejectsInsufficientFreeMemory(t *testing.T) {
 		ID:          0,
 		MemoryTotal: 16 * 1024 * 1024 * 1024,
 		MemoryFree:  1024 * 1024,
-	}}, 1, ParallelismTensor, "0.9", "128", "auto")
+	}}, 1, ParallelismTensor, "0.9", "128", "auto", 0)
 	if err == nil {
 		t.Fatal("CheckModelFitsInVRAM() error=nil, want free memory validation error")
 	}
@@ -132,7 +131,7 @@ func TestCheckModelFitsInVRAMAllowsDeepSeekV4MLAKVHeadsWithTensorParallel(t *tes
 	err := CheckModelFitsInVRAM(model, hfCache, []GPUInfo{
 		{ID: 0, MemoryTotal: 16 * 1024 * 1024 * 1024, MemoryFree: 16 * 1024 * 1024 * 1024},
 		{ID: 1, MemoryTotal: 16 * 1024 * 1024 * 1024, MemoryFree: 16 * 1024 * 1024 * 1024},
-	}, 2, ParallelismTensor, "0.95", "32768", "fp8")
+	}, 2, ParallelismTensor, "0.95", "32768", "fp8", 0)
 	if err != nil {
 		t.Fatalf("CheckModelFitsInVRAM() error=%v", err)
 	}

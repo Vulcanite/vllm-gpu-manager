@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-const auditLogFile = "audit.log"
-
 type auditEvent struct {
 	Timestamp     time.Time              `json:"timestamp"`
 	Action        string                 `json:"action"`
@@ -43,14 +41,19 @@ func appendAuditEvent(event auditEvent) {
 		log.Printf("[AUDIT] failed to marshal event %q: %v", event.Action, err)
 		return
 	}
-	file, err := os.OpenFile(auditLogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	path := auditLogFilePath()
+	if err := ensureRuntimeDir(path, 0o750); err != nil {
+		log.Printf("[AUDIT] failed to prepare audit directory: %v", err)
+		return
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
-		log.Printf("[AUDIT] failed to open %s: %v", auditLogFile, err)
+		log.Printf("[AUDIT] failed to open %s: %v", path, err)
 		return
 	}
 	defer file.Close()
 	if _, err := file.Write(append(data, '\n')); err != nil {
-		log.Printf("[AUDIT] failed to write %s: %v", auditLogFile, err)
+		log.Printf("[AUDIT] failed to write %s: %v", path, err)
 		return
 	}
 	log.Printf("[AUDIT] action=%s result=%s actor=%s summary=%q", event.Action, event.Result, event.Actor, event.Summary)
@@ -60,7 +63,7 @@ func readAuditEvents(limit int) ([]auditEvent, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	file, err := os.Open(auditLogFile)
+	file, err := os.Open(auditLogFilePath())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []auditEvent{}, nil

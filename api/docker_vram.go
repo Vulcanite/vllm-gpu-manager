@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -74,24 +73,6 @@ func LaunchDefaults() LaunchConfig {
 		MoeBackendOptions:           append([]string(nil), moeBackendOptions...),
 	}
 }
-
-// kvCacheEstimateCache memoizes parsed config.json estimates keyed by config
-// path. Entries are invalidated when the file's mtime changes (e.g. the model is
-// re-downloaded), so a poll of /api/models/downloaded no longer re-reads and
-// re-decodes every model config on every request. Uses LRU-style eviction when
-// the cache exceeds maxEntries to prevent unbounded growth.
-type kvCacheEstimateEntry struct {
-	estimate   modelKVCacheEstimate
-	modTime    time.Time
-	accessTime time.Time
-}
-
-const kvCacheEstimateMaxEntries = 500
-
-var (
-	kvCacheEstimateCache   = make(map[string]kvCacheEstimateEntry)
-	kvCacheEstimateCacheMu sync.RWMutex
-)
 
 func modelCacheDir(hfCache string, model string) string {
 	return filepath.Join(HFHubPath(hfCache), modelCacheDirName(model))
@@ -379,23 +360,6 @@ func GetModelKVCacheEstimate(hfCache string, model string) (modelKVCacheEstimate
 		return modelKVCacheEstimate{}, err
 	}
 
-	var modTime time.Time
-	if info, statErr := os.Stat(configPath); statErr == nil {
-		modTime = info.ModTime()
-		kvCacheEstimateCacheMu.RLock()
-		cached, ok := kvCacheEstimateCache[configPath]
-		kvCacheEstimateCacheMu.RUnlock()
-		if ok && cached.modTime.Equal(modTime) {
-			kvCacheEstimateCacheMu.Lock()
-			if entry, found := kvCacheEstimateCache[configPath]; found {
-				entry.accessTime = time.Now()
-				kvCacheEstimateCache[configPath] = entry
-			}
-			kvCacheEstimateCacheMu.Unlock()
-			return cached.estimate, nil
-		}
-	}
-
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return modelKVCacheEstimate{}, err
@@ -467,31 +431,7 @@ func GetModelKVCacheEstimate(hfCache string, model string) (modelKVCacheEstimate
 	estimate.HeadDim = headDim
 	estimate.DTypeBytes = kvElementBytes(dtype)
 
-	if !modTime.IsZero() {
-		kvCacheEstimateCacheMu.Lock()
-		evictKVCacheIfNeeded()
-		kvCacheEstimateCache[configPath] = kvCacheEstimateEntry{estimate: estimate, modTime: modTime, accessTime: time.Now()}
-		kvCacheEstimateCacheMu.Unlock()
-	}
-
 	return estimate, nil
-}
-
-func evictKVCacheIfNeeded() {
-	for len(kvCacheEstimateCache) >= kvCacheEstimateMaxEntries {
-		var oldest string
-		oldestTime := time.Now()
-		for path, entry := range kvCacheEstimateCache {
-			if entry.accessTime.Before(oldestTime) {
-				oldestTime = entry.accessTime
-				oldest = path
-			}
-		}
-		if oldest == "" {
-			return
-		}
-		delete(kvCacheEstimateCache, oldest)
-	}
 }
 
 func parseGPUMemoryUtilization(memUtil string) (float64, error) {
@@ -644,7 +584,7 @@ func checkGPUOverlap(active []ActiveModel, requestedIDs []int, totalGPUs int, re
 	return nil
 }
 
-func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, gpus int, parallelismMode string, memUtil string, maxLen string, kvCacheDType string) error {
+func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, gpus int, parallelismMode string, memUtil string, maxLen string, kvCacheDType string, cpuOffloadGB int) error {
 	if len(selectedGPUs) == 0 {
 		return nil
 	}
@@ -673,6 +613,12 @@ func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, 
 	}
 
 	modelBytesPerGPU := uint64((float64(modelBytes) / float64(gpus)) * modelVRAMSafetyMargin)
+	offloadBytesPerGPU := uint64(cpuOffloadGB) * bytesPerGiB
+	if offloadBytesPerGPU >= modelBytesPerGPU {
+		modelBytesPerGPU = 0
+	} else {
+		modelBytesPerGPU -= offloadBytesPerGPU
+	}
 
 	estimate, kvErr := GetModelKVCacheEstimate(hfCache, model)
 	kvEstimateOK := kvErr == nil && estimate.isComplete()

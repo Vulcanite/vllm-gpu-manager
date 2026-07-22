@@ -34,6 +34,17 @@ type doctorReport struct {
 	OK     bool          `json:"ok"`
 }
 
+var (
+	doctorGetGPUInfo        = api.GetGPUInfo
+	doctorCheckDockerAPI    = api.CheckDockerAPI
+	doctorCheckDockerGPU    = api.CheckDockerGPUAccess
+	doctorCheckDockerImage  = api.CheckDockerImageLocal
+	doctorCheckWritablePath = checkWritable
+	doctorLookPath          = exec.LookPath
+	doctorNvidiaInfo        = nvidiaSMIDriverCUDAInfo
+	doctorRuntimeSignal     = dockerNVIDIASignal
+)
+
 func newDoctorCommand(opts *cliOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
@@ -72,18 +83,18 @@ func runDoctor() doctorReport {
 		add("Operating system", doctorPass, "linux", true)
 	}
 
-	if _, err := exec.LookPath("nvidia-smi"); err != nil {
+	if _, err := doctorLookPath("nvidia-smi"); err != nil {
 		add("nvidia-smi", doctorFail, "nvidia-smi not found in PATH", true)
 	} else {
 		add("nvidia-smi", doctorPass, "nvidia-smi found", true)
-		if detail, err := nvidiaSMIDriverCUDAInfo(); err != nil {
+		if detail, err := doctorNvidiaInfo(); err != nil {
 			add("NVIDIA driver CUDA", doctorWarn, err.Error(), false)
 		} else {
 			add("NVIDIA driver CUDA", doctorPass, detail, false)
 		}
 	}
 
-	gpus, err := api.GetGPUInfo()
+	gpus, err := doctorGetGPUInfo()
 	if err != nil {
 		add("NVIDIA GPUs", doctorFail, err.Error(), true)
 	} else if len(gpus) == 0 {
@@ -96,23 +107,32 @@ func runDoctor() doctorReport {
 		add("NVIDIA GPUs", doctorPass, detail, true)
 	}
 
-	if _, err := exec.LookPath("docker"); err != nil {
+	if _, err := doctorLookPath("docker"); err != nil {
 		add("Docker CLI", doctorWarn, "docker CLI not found in PATH; Docker API may still work via DOCKER_HOST", false)
 	} else {
 		add("Docker CLI", doctorPass, "docker CLI found", false)
 	}
-	if err := dockerPingForDoctor(); err != nil {
+	dockerReady := true
+	if err := doctorCheckDockerAPI(); err != nil {
+		dockerReady = false
 		add("Docker API", doctorFail, err.Error(), true)
 	} else {
 		add("Docker API", doctorPass, "Docker API ping succeeded", true)
 	}
-	if detail, ok := dockerNVIDIASignal(); ok {
+	if detail, ok := doctorRuntimeSignal(); ok {
 		add("NVIDIA Container Toolkit", doctorPass, detail, true)
 	} else {
 		add("NVIDIA Container Toolkit", doctorWarn, "could not confirm Docker NVIDIA runtime/toolkit from docker info", false)
 	}
+	if dockerReady {
+		if err := doctorCheckDockerGPU(); err != nil {
+			add("Docker GPU access", doctorFail, err.Error(), true)
+		} else {
+			add("Docker GPU access", doctorPass, "short-lived GPU device request succeeded", true)
+		}
+	}
 
-	if _, err := exec.LookPath("nvcc"); err != nil {
+	if _, err := doctorLookPath("nvcc"); err != nil {
 		add("CUDA toolkit", doctorWarn, "nvcc not found; host CUDA toolkit is optional for Docker-based serving", false)
 	} else {
 		add("CUDA toolkit", doctorPass, "nvcc found", false)
@@ -123,7 +143,7 @@ func runDoctor() doctorReport {
 		add("HF cache path", doctorFail, fmt.Sprintf("%s is not a readable directory", settings.HFCache), true)
 	} else {
 		add("HF cache path", doctorPass, settings.HFCache, true)
-		if err := checkWritable(settings.HFCache); err != nil {
+		if err := doctorCheckWritablePath(settings.HFCache); err != nil {
 			add("HF cache writable", doctorFail, err.Error(), true)
 		} else {
 			add("HF cache writable", doctorPass, "cache directory is writable", true)
@@ -134,7 +154,13 @@ func runDoctor() doctorReport {
 			add("HF cache free space", doctorPass, api.FormatBytes(free)+" available", false)
 		}
 	}
-	add("vLLM image", doctorPass, settings.VLLMImage, true)
+	if dockerReady {
+		if err := doctorCheckDockerImage(settings.VLLMImage); err != nil {
+			add("vLLM image", doctorWarn, settings.VLLMImage+" is not local; Docker will pull it on first use", false)
+		} else {
+			add("vLLM image", doctorPass, settings.VLLMImage+" is available locally", false)
+		}
+	}
 	checkSettingsPermissions(&checks)
 	checkDashboardCerts(&checks)
 
@@ -146,16 +172,6 @@ func runDoctor() doctorReport {
 		}
 	}
 	return doctorReport{Checks: checks, OK: ok}
-}
-
-func dockerPingForDoctor() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "info")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("docker info failed: %s", strings.TrimSpace(string(out)))
-	}
-	return nil
 }
 
 func dockerNVIDIASignal() (string, bool) {
@@ -226,7 +242,7 @@ func checkWritable(dir string) error {
 }
 
 func checkSettingsPermissions(checks *[]doctorCheck) {
-	info, err := os.Stat(settingsFile)
+	info, err := os.Stat(settingsFilePath())
 	if err != nil {
 		if os.IsNotExist(err) {
 			*checks = append(*checks, doctorCheck{Name: "settings.json", Status: doctorWarn, Detail: "settings.json has not been created yet", Require: false})
@@ -244,8 +260,9 @@ func checkSettingsPermissions(checks *[]doctorCheck) {
 }
 
 func checkDashboardCerts(checks *[]doctorCheck) {
-	_, certErr := os.Stat("server.crt")
-	_, keyErr := os.Stat("server.key")
+	certFile, keyFile := dashboardCertPaths()
+	_, certErr := os.Stat(certFile)
+	_, keyErr := os.Stat(keyFile)
 	if os.IsNotExist(certErr) && os.IsNotExist(keyErr) {
 		*checks = append(*checks, doctorCheck{Name: "dashboard TLS files", Status: doctorPass, Detail: "not present; only needed when starting dashboard with --https", Require: false})
 		return
