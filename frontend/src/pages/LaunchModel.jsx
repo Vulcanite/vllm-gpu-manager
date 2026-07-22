@@ -916,7 +916,7 @@ export const LaunchModel = ({ gpus, gpuError = '', downloadedModels, activeModel
       gpuIds: gpuIdsParam,
       warnings: buildTopologyWarnings(payload, gpuIdsParam),
       editTarget,
-      changes: editingServer ? diffLaunchPayload(editOriginalPayload, payload) : [],
+      changes: editingServer ? diffLaunchPayload(editOriginalPayload, buildComparablePayloadFromConfig(deployConfig)) : [],
     });
     setDeployModalOpen(false);
   };
