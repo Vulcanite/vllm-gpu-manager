@@ -752,6 +752,13 @@ func parseActiveModelPort(model api.ActiveModel) (int, bool) {
 	return port, true
 }
 
+func routingModelName(model, servedModelName string) string {
+	if servedModelName = strings.TrimSpace(servedModelName); servedModelName != "" {
+		return servedModelName
+	}
+	return strings.TrimSpace(model)
+}
+
 func buildRoutingTableFromActiveModels(models []api.ActiveModel) map[string]int {
 	type route struct {
 		model string
@@ -764,7 +771,7 @@ func buildRoutingTableFromActiveModels(models []api.ActiveModel) map[string]int 
 		if !ok {
 			continue
 		}
-		modelName := strings.TrimSpace(model.Model)
+		modelName := routingModelName(model.Model, model.ServedModelName)
 		key := api.NormalizeModelKeyForMatch(modelName)
 		if key == "" {
 			continue
@@ -810,7 +817,7 @@ func replaceRoutingTable(table map[string]int) error {
 // after a restart and prunes stale entries for stopped or removed containers.
 func reconcileRoutingTable(exposure string) {
 	settings := getSettings()
-	models, err := api.GetActiveModels(settings.VLLMAPIKey)
+	models, err := api.GetActiveModels(settings.VLLMAPIKey, settings.HFCache)
 	if err != nil {
 		log.Printf("[SETTINGS] failed to reconcile routing table: %v", err)
 		return

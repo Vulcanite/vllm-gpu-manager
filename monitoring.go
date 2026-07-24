@@ -30,7 +30,8 @@ func writeMonitoringTargets(opts monitoringOptions) error {
 	if path == "" {
 		path = defaultMonitoringTargetsPath()
 	}
-	models, err := api.GetActiveModels(getSettings().VLLMAPIKey)
+	settings := getSettings()
+	models, err := api.GetActiveModels(settings.VLLMAPIKey, settings.HFCache)
 	if err != nil {
 		return err
 	}

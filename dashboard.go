@@ -88,7 +88,7 @@ func validateRoutingTableForActiveModels(table map[string]int, models []api.Acti
 		if !ok {
 			continue
 		}
-		modelName := strings.TrimSpace(model.Model)
+		modelName := routingModelName(model.Model, model.ServedModelName)
 		if modelName == "" {
 			continue
 		}
@@ -324,7 +324,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 					return
 				}
 				settings := getSettings()
-				models, err := api.GetActiveModels(settings.VLLMAPIKey)
+				models, err := api.GetActiveModels(settings.VLLMAPIKey, settings.HFCache)
 				if err != nil {
 					writeAPIError(w, err)
 					return
@@ -411,7 +411,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 
 	mux.HandleFunc("/api/models/active", apiHandler(func(w http.ResponseWriter, r *http.Request) {
 		settings := getSettings()
-		models, err := api.GetActiveModels(settings.VLLMAPIKey)
+		models, err := api.GetActiveModels(settings.VLLMAPIKey, settings.HFCache)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -540,7 +540,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 				Summary:       "Created per-server API key for " + containerName,
 			})
 		}
-		upsertRoute(req.Model, req.Port)
+		upsertRoute(routingModelName(req.Model, req.ServedModelName), req.Port)
 		syncMonitoringTargets(opts.Monitoring)
 		writeJSON(w, map[string]string{"status": "success"})
 	}))
@@ -713,7 +713,7 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			return
 		}
 		if proxyEnabled {
-			upsertRoute(model.LaunchSpec.Model, model.LaunchSpec.Port)
+			upsertRoute(routingModelName(model.LaunchSpec.Model, model.LaunchSpec.ServedModelName), model.LaunchSpec.Port)
 		}
 		appendAuditEvent(auditEvent{
 			Action:      "model_restart",

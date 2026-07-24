@@ -214,6 +214,22 @@ func TestValidateRoutingTableUsesFilteredProxyModels(t *testing.T) {
 	}
 }
 
+func TestBuildRoutingTableUsesServedModelNames(t *testing.T) {
+	models := []api.ActiveModel{
+		{Model: "org/model", ServedModelName: "model-fast", Port: "8080", State: "running"},
+		{Model: "org/model", ServedModelName: "model-long-context", Port: "8082", State: "running"},
+		{Model: "org/other", Port: "8084", State: "running"},
+	}
+
+	table := buildRoutingTableFromActiveModels(models)
+	if table["model-fast"] != 8080 || table["model-long-context"] != 8082 || table["org/other"] != 8084 {
+		t.Fatalf("buildRoutingTableFromActiveModels()=%v", table)
+	}
+	if _, err := validateRoutingTableForActiveModels(table, models); err != nil {
+		t.Fatalf("validateRoutingTableForActiveModels() returned error: %v", err)
+	}
+}
+
 func TestDashboardAuthDisabledAllowsRequests(t *testing.T) {
 	auth := dashboardAuth{}
 

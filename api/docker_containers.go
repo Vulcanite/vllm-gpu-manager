@@ -533,10 +533,18 @@ func GetManagedModelByContainerID(containerID string) (ActiveModel, bool, error)
 	return ActiveModel{}, false, nil
 }
 
-func GetActiveModels(vllmAPIKey string) ([]ActiveModel, error) {
+func GetActiveModels(vllmAPIKey, hfCache string) ([]ActiveModel, error) {
 	models, err := activeModelsNoHealth()
 	if err != nil {
 		return nil, err
+	}
+	for i := range models {
+		estimate, estimateErr := GetModelKVCacheEstimate(hfCache, models[i].Model)
+		if estimate.IsMultimodal {
+			models[i].Arch = "Vision + Text"
+		} else if estimateErr == nil || estimate.ModelType != "" {
+			models[i].Arch = "Text-Only"
+		}
 	}
 	healthCheckActiveModels(models, vllmAPIKey)
 	return models, nil

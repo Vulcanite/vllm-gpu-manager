@@ -531,7 +531,8 @@ func cliGPUList(opts cliOptions) error {
 }
 
 func cliModelActive(opts cliOptions) error {
-	models, err := api.GetActiveModels(getSettings().VLLMAPIKey)
+	settings := getSettings()
+	models, err := api.GetActiveModels(settings.VLLMAPIKey, settings.HFCache)
 	if err != nil {
 		return err
 	}
