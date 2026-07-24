@@ -423,6 +423,13 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		// Enrich the response with per-server key status without exposing the
 		// secret itself. A missing entry means the global key is in use.
 		for i := range models {
+			if proxyEnabled {
+				scheme := "http"
+				if opts.HTTPSEnabled {
+					scheme = "https"
+				}
+				models[i].APIUrl = fmt.Sprintf("%s://%s/v1", scheme, r.Host)
+			}
 			_, hasKey := settings.ServerAPIKeys[models[i].ContainerName]
 			models[i].HasServerAPIKey = hasKey
 			if hasKey {
@@ -684,6 +691,16 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			return
 		}
 
+		model, ok, err := api.GetManagedModelByContainerID(req.ContainerID)
+		if err != nil {
+			writeAPIError(w, err)
+			return
+		}
+		if !ok || len(filterDashboardModels([]api.ActiveModel{model}, proxyEnabled)) == 0 {
+			writeJSONError(w, http.StatusNotFound, "container is not available in the current dashboard mode")
+			return
+		}
+
 		if err := api.RestartModel(req.ContainerID); err != nil {
 			appendAuditEvent(auditEvent{
 				Action:      "model_restart",
@@ -694,6 +711,9 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			})
 			writeAPIError(w, err)
 			return
+		}
+		if proxyEnabled {
+			upsertRoute(model.LaunchSpec.Model, model.LaunchSpec.Port)
 		}
 		appendAuditEvent(auditEvent{
 			Action:      "model_restart",
