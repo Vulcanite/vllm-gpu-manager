@@ -174,11 +174,11 @@ body {
 
 .diagram-container {
   margin: 2.5rem 0;
-  padding: 1rem;
-  border: 1px solid var(--site-rule-strong);
-  border-radius: 12px;
-  background: var(--site-surface);
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
+  padding: 1.25rem;
+  border: 1px solid #1e293b;
+  border-radius: 14px;
+  background: #0b0f17;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(6, 182, 212, 0.1);
   text-align: center;
 }
 
@@ -190,10 +190,12 @@ body {
 }
 
 .diagram-caption {
-  margin-top: 0.75rem;
-  font-size: 0.8rem;
-  color: var(--site-muted);
+  margin-top: 1rem;
+  font-size: 0.82rem;
+  color: #94a3b8;
   font-family: var(--site-mono);
+  border-top: 1px solid #1e293b;
+  padding-top: 0.75rem;
 }
 
 .screenshot-card {
