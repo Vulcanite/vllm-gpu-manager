@@ -72,7 +72,14 @@ body {
   font-size: 1.05rem;
   font-weight: 700;
   letter-spacing: -0.02em;
-  background: linear-gradient(135deg, #f1f5f9 30%, var(--ifm-color-primary) 100%);
+  background: linear-gradient(135deg, #0f172a 35%, var(--ifm-color-primary-dark) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+[data-theme='dark'] .navbar__title {
+  background: linear-gradient(135deg, #f1f5f9 35%, var(--ifm-color-primary) 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
