@@ -1,150 +1,179 @@
-import type {ReactNode} from 'react';
+import React, {useState, type ReactNode} from 'react';
 import clsx from 'clsx';
 import Link from '@docusaurus/Link';
 import Layout from '@theme/Layout';
 import Heading from '@theme/Heading';
+import useBaseUrl from '@docusaurus/useBaseUrl';
 import styles from './index.module.css';
 
-const asciiLogo = String.raw` _   _ _     _     __  __    ____ ____  _   _ 
-| | | | |   | |   |  \/  |  / ___|  _ \| | | |
-| | | | |   | |   | |\/| | | |  _| |_) | | | |
-| |_| | |___| |___| |  | | | |_| |  __/| |_| |
- \___/|_____|_____|_|  |_|  \____|_|    \___/ `;
-
-const features = [
-  [
-    '01',
-    'Preflight Guardrails',
-    'Calculate exact weight and KV cache memory requirements before starting containers to prevent runtime OOM failures.',
-  ],
-  [
-    '02',
-    'OpenAI Proxy Gateway',
-    'Route dynamic /v1/ requests to underlying active model containers with Bearer token authentication and per-user tracking.',
-  ],
-  [
-    '03',
-    'Multi-GPU Placement',
-    'Fine-tune tensor and pipeline parallelism, explicit GPU device pinning, and topology link discovery from one interface.',
-  ],
-  [
-    '04',
-    'Single Binary & Packages',
-    'Zero runtime dependencies. Embedded React console, full CLI, systemd integration, and native Debian & RPM packages.',
-  ],
-  [
-    '05',
-    'Hugging Face Cache Ops',
-    'Track background download progress, inspect local cache sizes, and safely delete models via sandboxed helper containers.',
-  ],
-  [
-    '06',
-    'Prometheus & DCGM Sync',
-    'Automatically mirror active model endpoints into Prometheus file-SD targets with preconfigured Grafana dashboards.',
-  ],
+const pillars = [
+  {
+    icon: '⚡',
+    title: 'VRAM Preflight Guardrails',
+    desc: 'Calculates exact parameter weights and token KV cache requirements before container launch to eliminate CUDA OOM panics.',
+  },
+  {
+    icon: '🔀',
+    title: 'OpenAI Reverse Proxy',
+    desc: 'Centralized /v1/ gateway that validates Bearer user tokens, inspects target models, rewrites headers, and streams SSE responses.',
+  },
+  {
+    icon: '🧩',
+    title: 'Multi-GPU Placement',
+    desc: 'Fine-grained tensor parallelism, pipeline parallelism, and explicit device pinning with NVLink topology discovery.',
+  },
+  {
+    icon: '📦',
+    title: 'Hub Cache & Packaging',
+    desc: 'Track model download containers, inspect disk footprints, and install via native Linux Debian & RPM packages.',
+  },
 ];
 
 function Homepage(): ReactNode {
+  const [activeTab, setActiveTab] = useState<'web' | 'cli' | 'vram' | 'proxy'>('web');
+
+  const webImg = useBaseUrl('/img/screenshots/web/01-dashboard-overview.png');
+  const cliImg = useBaseUrl('/img/screenshots/cli/01-cli-gpu-list.png');
+  const vramImg = useBaseUrl('/img/diagrams/vram-preflight-engine.png');
+  const proxyImg = useBaseUrl('/img/diagrams/proxy-routing-flow.png');
+  const archImg = useBaseUrl('/img/diagrams/system-architecture.png');
+
   return (
     <Layout
-      title="vLLM GPU Manager — Operations Console & OpenAI Proxy"
-      description="Lightweight single-binary CLI and web console for managing vLLM OpenAI-compatible servers on NVIDIA GPUs."
+      title="vLLM GPU Manager — Operations Console & OpenAI Proxy for NVIDIA GPUs"
+      description="Standalone CLI and real-time web management console for vLLM OpenAI-compatible model serving on NVIDIA GPUs."
     >
       <main>
         <section className={styles.hero}>
-          <div className={styles.coordinate}>LINUX / NVIDIA / DOCKER / VLLM</div>
-          <div className={styles.heroGrid}>
-            <div className={styles.heroCopy}>
-              <span className={styles.eyebrow}>GPU Operations Made Predictable</span>
-              <Heading as="h1">
-                Stop guessing VRAM.<br />Start serving models.
-              </Heading>
-              <p>
-                vLLM GPU Manager runs OpenAI-compatible LLM servers as isolated Docker containers on NVIDIA GPU hosts—with
-                rigorous launch-time VRAM preflight, multi-user proxy routing, and real-time telemetry.
-              </p>
-              <div className={styles.actions}>
-                <Link className={clsx('button', styles.primaryAction)} to="/docs/getting-started/quickstart">
-                  Quickstart in 5 mins <span aria-hidden="true">→</span>
-                </Link>
-                <Link className={clsx('button', styles.secondaryAction)} to="/docs/reference/cli">
-                  CLI Reference
-                </Link>
-              </div>
+          <div className={styles.heroContent}>
+            <div className={styles.badge}>
+              <span className={styles.badgeDot} />
+              Dual Interface · Web Console &amp; SSH CLI
             </div>
-            <div className={styles.terminal} aria-label="vLLM GPU Manager terminal preview">
-              <div className={styles.terminalBar}>
-                <span>vllm-manager — h100-node-01</span>
-                <span className={styles.status}>● ONLINE</span>
+            <Heading as="h1" className={styles.heroTitle}>
+              Production vLLM Operations &amp; OpenAI Proxy <span className={styles.gradientText}>for NVIDIA GPUs</span>
+            </Heading>
+            <p className={styles.heroSubtitle}>
+              Run local LLM servers inside isolated Docker containers with automated VRAM preflight math,
+              multi-GPU tensor parallelism, and a dynamic OpenAI reverse proxy.
+            </p>
+            <div className={styles.ctaGroup}>
+              <Link className={clsx('button', styles.btnPrimary)} to="/docs/getting-started/quickstart">
+                Get Started (5 Min) →
+              </Link>
+              <Link className={clsx('button', styles.btnSecondary)} to="/docs/web-guide/overview">
+                Explore Web Console Guide
+              </Link>
+              <Link className={clsx('button', styles.btnSecondary)} to="/docs/cli-guide/overview">
+                Explore CLI Guide
+              </Link>
+            </div>
+
+            {/* Interactive Showcase Preview */}
+            <div className={styles.showcaseWrapper}>
+              <div className={styles.showcaseNav}>
+                <div className={styles.tabButtons}>
+                  <button
+                    className={clsx(styles.tabBtn, activeTab === 'web' && styles.tabBtnActive)}
+                    onClick={() => setActiveTab('web')}
+                  >
+                    🖥️ Web Console
+                  </button>
+                  <button
+                    className={clsx(styles.tabBtn, activeTab === 'cli' && styles.tabBtnActive)}
+                    onClick={() => setActiveTab('cli')}
+                  >
+                    ⚡ SSH CLI
+                  </button>
+                  <button
+                    className={clsx(styles.tabBtn, activeTab === 'vram' && styles.tabBtnActive)}
+                    onClick={() => setActiveTab('vram')}
+                  >
+                    📊 VRAM Engine
+                  </button>
+                  <button
+                    className={clsx(styles.tabBtn, activeTab === 'proxy' && styles.tabBtnActive)}
+                    onClick={() => setActiveTab('proxy')}
+                  >
+                    🔀 Proxy Flow
+                  </button>
+                </div>
+                <span style={{ fontSize: '0.78rem', color: 'var(--site-muted)', fontFamily: 'var(--site-mono)' }}>
+                  NVIDIA H100 / A100 / L40S / RTX 4090
+                </span>
               </div>
-              <pre className={styles.ascii} aria-hidden="true">
-                {asciiLogo}
-              </pre>
-              <div className={styles.commandLine}>
-                <span>$</span> vllm-manager model start Qwen/Qwen2.5-Coder-32B-Instruct --port 8080 --gpus 2
-              </div>
-              <div className={styles.routeLine}>
-                <span>GPU 0,1 (80GB)</span>
-                <i />
-                <span>VRAM Preflight: 34.2 GiB / 72.0 GiB (47.5%)</span>
-                <i />
-                <strong>PASS</strong>
+              <div style={{ padding: '0.75rem', background: '#05080C' }}>
+                {activeTab === 'web' && (
+                  <img src={webImg} alt="vLLM GPU Manager Web Console" className={styles.showcaseImage} />
+                )}
+                {activeTab === 'cli' && (
+                  <img src={cliImg} alt="vLLM GPU Manager CLI Interface" className={styles.showcaseImage} />
+                )}
+                {activeTab === 'vram' && (
+                  <img src={vramImg} alt="VRAM Preflight Calculation Engine" className={styles.showcaseImage} />
+                )}
+                {activeTab === 'proxy' && (
+                  <img src={proxyImg} alt="OpenAI Reverse Proxy Architecture" className={styles.showcaseImage} />
+                )}
               </div>
             </div>
           </div>
-          <div className={styles.heroIndex}>[ NVIDIA H100 / A100 / L40S / RTX 4090 / 6000 Ada ]</div>
         </section>
 
-        <section className={styles.featureSection} aria-labelledby="features-heading">
-          <div className={styles.sectionHeading}>
-            <span>PRODUCTION CAPABILITIES</span>
-            <Heading as="h2" id="features-heading">
-              Engineered for Real-World GPU Serving
+        {/* 4 Core Pillars */}
+        <section className={styles.section}>
+          <div className={styles.sectionHeader}>
+            <span className={styles.sectionEyebrow}>Core Capabilities</span>
+            <Heading as="h2" className={styles.sectionTitle}>
+              Engineered for Enterprise GPU Servers
             </Heading>
           </div>
-          <div className={styles.featureGrid}>
-            {features.map(([index, title, body]) => (
-              <article className={styles.feature} key={index}>
-                <span className={styles.featureIndex}>{index}</span>
-                <Heading as="h3">{title}</Heading>
-                <p>{body}</p>
-              </article>
+          <div className={styles.grid4}>
+            {pillars.map((p, idx) => (
+              <div key={idx} className={styles.card}>
+                <div className={styles.cardIcon}>{p.icon}</div>
+                <Heading as="h3">{p.title}</Heading>
+                <p>{p.desc}</p>
+              </div>
             ))}
           </div>
         </section>
 
-        <section className={styles.commandSection} aria-labelledby="commands-heading">
-          <div className={styles.commandSectionGrid}>
+        {/* Architecture Section */}
+        <section className={styles.archSection}>
+          <div className={styles.archGrid}>
             <div>
-              <span className={styles.eyebrow}>SSH & Automation First</span>
-              <Heading as="h2" id="commands-heading">
-                Full CLI Control.<br />Zero GUI Dependency.
+              <span className={styles.sectionEyebrow}>End-to-End Design</span>
+              <Heading as="h2" style={{ fontSize: '2.4rem', fontWeight: 800, letterSpacing: '-0.03em', marginBottom: '1.25rem' }}>
+                Single-Binary Simplicity.<br />Zero Extra Runtimes.
               </Heading>
-              <p style={{ color: 'var(--site-muted)', marginTop: '1rem', lineHeight: '1.6' }}>
-                Every operation available in the web console can be executed directly over SSH without running the dashboard daemon.
+              <p style={{ color: 'var(--site-muted)', lineHeight: '1.7', fontSize: '1.05rem', marginBottom: '1.75rem' }}>
+                Built in pure Go with an embedded React web application. Directly talks to the Docker Engine socket and queries
+                NVIDIA telemetry to orchestrate standard <code>vllm/vllm-openai</code> containers without complex Kubernetes dependencies.
               </p>
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <Link className={clsx('button', styles.btnPrimary)} to="/docs/architecture">
+                  View Architecture Deep Dive →
+                </Link>
+                <Link className={clsx('button', styles.btnSecondary)} to="/docs/prerequisites">
+                  Prerequisites
+                </Link>
+              </div>
             </div>
-            <div className={styles.commandStack}>
-              <code>
-                <b>STATUS</b> vllm-manager gpu list
-              </code>
-              <code>
-                <b>DEPLOY</b> vllm-manager model start deepseek-ai/DeepSeek-V4 --port 8080 --gpus 4
-              </code>
-              <code>
-                <b>ROUTING</b> curl -H "Authorization: Bearer sk-..." http://localhost:9090/v1/chat/completions
-              </code>
-              <code>
-                <b>DOCTOR</b> vllm-manager doctor
-              </code>
+            <div>
+              <img src={archImg} alt="vLLM GPU Manager Architecture Diagram" className={styles.archImage} />
             </div>
           </div>
         </section>
 
-        <section className={styles.finalCta}>
-          <span>READY TO DEPLOY ON YOUR GPU SERVERS?</span>
-          <Link to="/docs/getting-started/installation">
-            Install vLLM GPU Manager <span aria-hidden="true">↗</span>
+        {/* Final CTA */}
+        <section className={styles.finalSection}>
+          <Heading as="h2">Ready to Deploy on Your GPU Infrastructure?</Heading>
+          <p style={{ color: 'var(--site-muted)', fontSize: '1.15rem', marginBottom: '2rem' }}>
+            Install native Debian/RPM packages or run the standalone binary in seconds.
+          </p>
+          <Link className={clsx('button', styles.btnPrimary)} to="/docs/getting-started/installation">
+            Install vLLM GPU Manager →
           </Link>
         </section>
       </main>

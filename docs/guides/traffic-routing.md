@@ -1,108 +1,59 @@
 ---
-title: Traffic Routing & Proxy Gateway
-sidebar_position: 5
+title: OpenAI Reverse Proxy & Routing
+sidebar_position: 3
 ---
 
-# Traffic Routing & Proxy Gateway
+# OpenAI Reverse Proxy & Routing
 
-The built-in reverse proxy gateway allows external clients and applications to connect to a single OpenAI-compatible endpoint without tracking underlying container ports.
+**vLLM GPU Manager** features a built-in reverse proxy gateway on `:9090` that translates standard OpenAI API requests, handles authentication, and dispatches traffic to active vLLM backend containers.
+
+<div className="diagram-container">
+  <img src="/vllm-gpu-manager/img/diagrams/proxy-routing-flow.png" alt="OpenAI Reverse Proxy & Upstream Token Rewriting" />
+  <div className="diagram-caption">Figure 4: Proxy pipeline, user key validation, and upstream request rewriting.</div>
+</div>
 
 ---
 
-## How the Gateway Works
+## The Gateway Pipeline
 
-When the dashboard daemon is running (default port `9090`), the `/v1/` endpoint acts as a smart reverse proxy:
+When a client sends an inference request:
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Client as OpenAI API Client
-    participant GW as vLLM Proxy Gateway (:9090)
-    participant C1 as Llama-3 (Port 8080)
-    participant C2 as Qwen-Coder (Port 8081)
+1. **Authentication Check**: Validates the `Authorization: Bearer <proxy_key>` token against the `proxy_users` registry.
+2. **Model Extraction**: Inspects the JSON payload or query parameters to extract the requested model name.
+3. **Route Resolution**: Looks up the internal container port from the dynamic routing table.
+4. **Header Rewriting**: Replaces the client's proxy key with the internal `VLLM_API_KEY` required by the target container.
+5. **Streaming Response**: Pipes chunked SSE token frames back to the client with sub-millisecond overhead.
 
-    Client->>GW: POST /v1/chat/completions {"model": "Qwen/Qwen2.5-Coder-32B"}
-    Note over GW: Authenticate Bearer sk-proxy-user
-    Note over GW: Inspect {"model": "..."} -> Port 8081
-    Note over GW: Rewrite Auth Header -> Upstream Token
-    GW->>C2: POST /v1/chat/completions (Stream)
-    C2-->>GW: SSE Stream Chunks
-    GW-->>Client: Forwarded Stream Chunks
+---
+
+## Client Integration Examples
+
+### Python OpenAI SDK
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://gpu-server.lan:9090/v1",
+    api_key="vllm_proxy_a91b2c3d4e5f...",
+)
+
+response = client.chat.completions.create(
+    model="qwen-coder",
+    messages=[{"role": "user", "content": "Write a high-performance Go HTTP server."}],
+    stream=True,
+)
+
+for chunk in response:
+    print(chunk.choices[0].delta.content or "", end="")
 ```
 
----
-
-## Managing Proxy Users & API Keys
-
-Generate named API keys for developers, applications, or downstream services:
-
-### Creating a User Key
-- **Web Console**: Go to **Proxy Gateway** $\rightarrow$ **Create Proxy User**.
-- **CLI**:
-  ```bash
-  vllm-manager proxy-users create analytics-service
-  ```
-
-Output:
-```text
-Created proxy user: analytics-service
-API Key: vllm_proxy_5f8a92b3c1d4...
-```
-
-### Revoking a User Key
+### Curl
 ```bash
-vllm-manager proxy-users revoke analytics-service
-```
-
----
-
-## The Routing Table
-
-The routing table maps model names and custom aliases to local ports:
-
-```json
-{
-  "meta-llama/Llama-3.3-70B-Instruct": 8080,
-  "llama3": 8080,
-  "Qwen/Qwen2.5-Coder-32B-Instruct": 8081,
-  "coder": 8081
-}
-```
-
-When an active container is launched or stopped, the routing table updates automatically. You can also view or edit custom alias routes on the **Traffic Routing** page or via CLI:
-
-```bash
-vllm-manager routing list
-vllm-manager routing set "gpt-4-turbo" 8080
-```
-
----
-
-## Querying `/v1/models`
-
-Sending a `GET` request to `/v1/models` returns all currently routed models in standard OpenAI format:
-
-```bash
-curl http://localhost:9090/v1/models \
-  -H "Authorization: Bearer <your-proxy-api-key>"
-```
-
-```json
-{
-  "object": "list",
-  "data": [
-    {
-      "id": "meta-llama/Llama-3.3-70B-Instruct",
-      "object": "model",
-      "created": 1722384000,
-      "owned_by": "vllm-manager"
-    },
-    {
-      "id": "Qwen/Qwen2.5-Coder-32B-Instruct",
-      "object": "model",
-      "created": 1722384000,
-      "owned_by": "vllm-manager"
-    }
-  ]
-}
+curl http://localhost:9090/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer vllm_proxy_a91b2c3d4e5f..." \
+  -d '{
+    "model": "qwen-coder",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
 ```

@@ -1,81 +1,31 @@
 ---
-title: Architecture
-sidebar_position: 4
+title: System Architecture
+sidebar_position: 1
 ---
 
 # System Architecture
 
-A deep technical dive into the design and internal subsystems of **vLLM GPU Manager**.
+**vLLM GPU Manager** is engineered as a single, statically-linked Go binary with an embedded React frontend and zero external database dependencies.
+
+<div className="diagram-container">
+  <img src="/vllm-gpu-manager/img/diagrams/system-architecture.png" alt="vLLM GPU Manager End-to-End System Architecture" />
+  <div className="diagram-caption">Figure 5: End-to-end component layers, synchronization mutexes, and Docker engine controller.</div>
+</div>
 
 ---
 
-## High-Level Component Design
+## Architectural Layers
 
-```mermaid
-flowchart TB
-    subgraph Client Layer
-        CLI["CLI Commands"]
-        WebUI["Embedded React SPA"]
-        APIClient["OpenAI /v1/ Clients"]
-    end
+### 1. Ingestion & HTTP Gateway
+- **ServeMux Router**: Multiplexes Web UI assets, administrative REST APIs (`/api/*`), SSE log streams, and OpenAI proxy routes (`/v1/*`).
+- **Session Authentication & Sanitization**: Verifies admin sessions, validates proxy bearer tokens, and redacts sensitive credentials from logs.
 
-    subgraph HTTP & Daemon Layer
-        Mux["ServeMux Router"]
-        AuthMiddleware["Session Auth & CORS"]
-        ProxyEngine["Proxy Router & Load Balancer"]
-        SSEStreamer["SSE Log Streamer"]
-    end
+### 2. Daemon Core
+- **In-Memory Settings Cache**: Protected by `sync.RWMutex`, synchronizing state atomically to `/etc/vllm-manager/settings.json`.
+- **VRAM Preflight Engine**: Proactively parses model architectures, computes layer weights and KV cache sizing, and prevents CUDA Out-of-Memory faults.
+- **Docker SDK Lifecycle Controller**: Dispatches container creation, health monitoring, and lifecycle commands directly to the Docker API socket.
 
-    subgraph State & Core Logic
-        SettingsCache["In-Memory Settings Cache (RWMutex)"]
-        VRAMEngine["VRAM Preflight & KV Math"]
-        DockerEngine["Docker API Client & Lock Manager"]
-    end
-
-    subgraph Host Infrastructure
-        NvidiaSMI["nvidia-smi Process"]
-        DockerDaemon["Docker Daemon Socket"]
-        DiskFS["Hugging Face Hub Directory"]
-    end
-
-    CLI --> DockerEngine
-    CLI --> VRAMEngine
-    WebUI --> Mux
-    APIClient --> ProxyEngine
-    Mux --> AuthMiddleware
-    AuthMiddleware --> SettingsCache
-    ProxyEngine --> DockerDaemon
-    DockerEngine --> DockerDaemon
-    VRAMEngine --> NvidiaSMI
-    VRAMEngine --> DiskFS
-```
-
----
-
-## 1. Concurrency & State Management
-
-### Mutex Locking & Copy-on-Write
-- The settings cache in [`settings.go`](file:///home/amish/projects/vllm-gpu-manager/settings.go) is protected by a reader-writer mutex (`settingsCacheMu sync.RWMutex`).
-- Readers on the hot proxy path (`getSettings()`) take an `RLock` and receive deep copies via `cloneSettings()`, preventing allocations from mutating global state.
-- Model operations (download, start, delete) acquire per-model string mutexes (`getModelOperationLock(hfCache, model)`), ensuring that concurrent requests for the same model cannot cause race conditions while independent models execute in parallel.
-
----
-
-## 2. Docker Execution Model
-
-The backend communicates with Docker directly over the Unix domain socket (`/var/run/docker.sock`) using the official Moby SDK (`github.com/moby/moby/client`):
-
-1. **Explicit Device Specification**: GPU assignments are rendered as `device=0,1` rather than global `--gpus all`.
-2. **Standard Volume Mounts**: Hugging Face cache is mounted read-write as `/hf_cache` with environment variable `HF_HOME=/hf_cache`.
-3. **Bridge Networking & IPC**: Serving containers use bridge networking (`--network bridge`) with explicit port publishing (`-p <host_ip>:<port>:<port>`) and `--ipc=host` for high-throughput PyTorch shared memory allocations.
-
----
-
-## 3. Real-Time Log Streaming via SSE
-
-Container log streaming (`/api/models/logs/stream?container_id=...`) utilizes Server-Sent Events (SSE):
-
-- A long-running goroutine connects to Docker's multiplexed stream (`cli.ContainerLogs`).
-- Standard output and standard error are demultiplexed via `stdcopy.StdCopy`.
-- Chunks are flushed immediately using `http.Flusher`.
-- When the browser disconnects, the request context (`r.Context().Done()`) cancels the stream goroutine immediately, releasing Docker reader sockets.
+### 3. Host Infrastructure & NVIDIA Hardware
+- **Docker Engine (`/var/run/docker.sock`)**: Runs isolated `vllm/vllm-openai` containers.
+- **NVIDIA Driver & Container Toolkit**: Maps physical GPU devices (`--gpus device=0,1`) and executes high-bandwidth tensor parallel communication over NVLink/PCIe.
+- **Hugging Face Model Cache**: Shared local host volume (`/var/lib/vllm-manager/.cache/huggingface`) mounted read-only into serving containers.
