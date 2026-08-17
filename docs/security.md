@@ -53,7 +53,7 @@ graph LR
 
 ## 3. Secret Redaction Engine
 
-All console logs and persistent `audit.log` records pass through a centralized redaction engine ([`redactSensitive`](file:///home/amish/projects/vllm-gpu-manager/http_helpers.go#L45)) that scrubs:
+All console logs and persistent `audit.log` records pass through a centralized redaction engine ([`redactSensitive`](https://github.com/Vulcanite/vllm-gpu-manager/blob/master/http_helpers.go#L45)) that scrubs:
 
 - Hugging Face access tokens (`HF_TOKEN=...`, `hf_token=...`)
 - vLLM API keys (`VLLM_API_KEY=...`, `--api-key ...`)

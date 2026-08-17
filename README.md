@@ -4,6 +4,8 @@ A lightweight, single-binary CLI and web console for running [vLLM](https://gith
 
 This project is intentionally small. It is not a cluster scheduler, model platform, or desktop AI studio. It is an internal operations tool for a GPU server where you want a clear UI over Docker, `nvidia-smi`, Hugging Face cache management, and vLLM launch parameters.
 
+Full documentation, including CLI/web guides, architecture, and the security model, is available at [vulcanite.github.io/vllm-gpu-manager](https://vulcanite.github.io/vllm-gpu-manager/).
+
 ## Features
 
 - **NVIDIA GPU monitoring:** Reads GPU memory and utilization from `nvidia-smi`.
