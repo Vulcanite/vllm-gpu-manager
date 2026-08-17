@@ -2,16 +2,30 @@
 set -eu
 
 if ! getent group vllm-manager >/dev/null 2>&1; then
-  addgroup --system vllm-manager >/dev/null
+  if command -v addgroup >/dev/null 2>&1; then
+    addgroup --system vllm-manager >/dev/null 2>&1 || true
+  elif command -v groupadd >/dev/null 2>&1; then
+    groupadd --system vllm-manager >/dev/null 2>&1 || true
+  fi
 fi
 if ! getent passwd vllm-manager >/dev/null 2>&1; then
-  adduser --system --ingroup vllm-manager --home /var/lib/vllm-manager \
-    --no-create-home --shell /usr/sbin/nologin vllm-manager >/dev/null
+  if command -v adduser >/dev/null 2>&1; then
+    adduser --system --ingroup vllm-manager --home /var/lib/vllm-manager \
+      --no-create-home --shell /usr/sbin/nologin vllm-manager >/dev/null 2>&1 || \
+    adduser -S -G vllm-manager -h /var/lib/vllm-manager -s /usr/sbin/nologin vllm-manager >/dev/null 2>&1 || \
+    useradd -r -g vllm-manager -d /var/lib/vllm-manager -M -s /usr/sbin/nologin vllm-manager >/dev/null 2>&1 || true
+  elif command -v useradd >/dev/null 2>&1; then
+    useradd -r -g vllm-manager -d /var/lib/vllm-manager -M -s /usr/sbin/nologin vllm-manager >/dev/null 2>&1 || true
+  fi
 fi
 
 for group in docker video render; do
   if getent group "$group" >/dev/null 2>&1; then
-    adduser vllm-manager "$group" >/dev/null 2>&1 || true
+    if command -v adduser >/dev/null 2>&1; then
+      adduser vllm-manager "$group" >/dev/null 2>&1 || usermod -aG "$group" vllm-manager >/dev/null 2>&1 || true
+    elif command -v usermod >/dev/null 2>&1; then
+      usermod -aG "$group" vllm-manager >/dev/null 2>&1 || true
+    fi
   fi
 done
 if ! getent group docker >/dev/null 2>&1; then

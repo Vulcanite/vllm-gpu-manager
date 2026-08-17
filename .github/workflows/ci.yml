@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   test:
-    name: Lint, build, and test
+    name: Lint, build, test, and docs
     runs-on: ubuntu-latest
 
     steps:
@@ -25,9 +25,11 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "22"
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            package-lock.json
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -48,7 +50,16 @@ jobs:
         run: npm run build
 
       - name: Test backend
-        run: go test ./...
+        run: go test -v -race ./...
+
+      - name: Install documentation dependencies
+        run: npm ci
+
+      - name: Type-check documentation
+        run: npm run typecheck
+
+      - name: Build Docusaurus documentation
+        run: npm run docs:build
 
       - name: Check dependency licenses
         run: ./scripts/check-licenses.sh

@@ -1,0 +1,70 @@
+---
+title: Security Model
+sidebar_position: 5
+---
+
+# Security Model
+
+Security principles, isolation boundaries, authentication mechanisms, and operational best practices.
+
+---
+
+## 1. Threat Model & Isolation Boundaries
+
+vLLM GPU Manager is designed for **internal infrastructure operations** on trusted networks.
+
+```mermaid
+graph LR
+    subgraph Trusted Network
+        Admin[Administrator]
+        App[Internal App]
+    end
+
+    subgraph Host Server
+        Proxy[OpenAI Proxy :9090]
+        vLLMDaemon[vLLM Manager Daemon]
+        DockerGroup[Docker Group (Root-equivalent)]
+        Containers[vLLM Containers]
+    end
+
+    Admin -->|Dashboard Auth Session| vLLMDaemon
+    App -->|Bearer Proxy Token| Proxy
+    Proxy --> Containers
+    vLLMDaemon --> DockerGroup
+```
+
+> [!WARNING]
+> The `vllm-manager` service account belongs to the `docker` group. Docker socket access is effectively root-equivalent on Linux systems. Never expose unauthenticated dashboard ports to public untrusted networks.
+
+---
+
+## 2. Authentication & Credential Handling
+
+### Dashboard Web Authentication
+- When `VLLM_MANAGER_PASSWORD` is configured, the web UI and all `/api/*` endpoints require an authenticated session.
+- Session verification uses constant-time string comparison (`subtle.ConstantTimeCompare`) against a random 256-bit cryptographically secure session token.
+- Passwords are never stored in plaintext on disk; in systemd installations, `service.env` is protected with `0640` permissions.
+
+### Proxy Client Tokens
+- The `/v1/` OpenAI proxy gateway verifies `Authorization: Bearer <proxy_api_key>`.
+- Invalid or revoked tokens return `401 Unauthorized` immediately without forwarding requests to model containers.
+
+---
+
+## 3. Secret Redaction Engine
+
+All console logs and persistent `audit.log` records pass through a centralized redaction engine ([`redactSensitive`](file:///home/amish/projects/vllm-gpu-manager/http_helpers.go#L45)) that scrubs:
+
+- Hugging Face access tokens (`HF_TOKEN=...`, `hf_token=...`)
+- vLLM API keys (`VLLM_API_KEY=...`, `--api-key ...`)
+- Dashboard passwords (`VLLM_MANAGER_PASSWORD=...`)
+- HTTP `Authorization: Bearer ...` headers
+
+---
+
+## 4. Path Traversal & Escape Prevention
+
+Hugging Face cache deletion requests verify:
+1. The target model directory cannot contain null bytes (`\x00`).
+2. The resolved target path must reside strictly inside the root Hugging Face hub directory (`filepath.Dir(modelPath) == hubPath`).
+3. Model deletions are executed inside an ephemeral unprivileged `alpine` container with the hub directory as its only volume mount.

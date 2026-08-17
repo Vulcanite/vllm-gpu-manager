@@ -37,8 +37,16 @@ for arch in $ARCHES; do
     -ldflags="-s -w -X main.version=${VERSION} -X main.defaultConfigDir=/etc/vllm-manager -X main.defaultStateDir=/var/lib/vllm-manager" \
     -o "dist/vllm-manager-linux-${arch}" .
   chmod 0755 "dist/vllm-manager-linux-${arch}"
+
+  echo "Packaging Debian package for ${arch}..."
   ARCH="$arch" VERSION="$VERSION" "$NFPM_BIN" package \
     --config packaging/nfpm.yaml \
     --packager deb \
     --target "dist/vllm-manager_${VERSION}_${arch}.deb"
+
+  echo "Packaging RPM package for ${arch}..."
+  ARCH="$arch" VERSION="$VERSION" "$NFPM_BIN" package \
+    --config packaging/nfpm.yaml \
+    --packager rpm \
+    --target "dist/vllm-manager-${VERSION}-1.${arch}.rpm"
 done

@@ -1,11 +1,15 @@
 #!/bin/sh
 set -eu
 
-if [ "${1:-}" = "remove" ]; then
+if [ "${1:-}" = "remove" ] || [ "${1:-}" = "0" ]; then
   if command -v deb-systemd-invoke >/dev/null 2>&1; then
     deb-systemd-invoke stop vllm-manager.service >/dev/null 2>&1 || true
+  elif command -v systemctl >/dev/null 2>&1; then
+    systemctl stop vllm-manager.service >/dev/null 2>&1 || true
   fi
   if command -v deb-systemd-helper >/dev/null 2>&1; then
     deb-systemd-helper disable vllm-manager.service >/dev/null 2>&1 || true
+  elif command -v systemctl >/dev/null 2>&1; then
+    systemctl disable vllm-manager.service >/dev/null 2>&1 || true
   fi
 fi

@@ -473,7 +473,6 @@ body {
   border-spacing: 0;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  overflow: hidden;
   background: var(--bg-main);
 }
 
@@ -824,7 +823,7 @@ body {
 }
 
 .process-table {
-  min-width: 640px;
+  min-width: 760px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   overflow: hidden;
@@ -832,7 +831,7 @@ body {
 
 .process-row {
   display: grid;
-  grid-template-columns: 90px 120px minmax(220px, 1fr) 120px;
+  grid-template-columns: 90px 120px 140px minmax(220px, 1fr) 120px;
   align-items: center;
   gap: 1rem;
   padding: 0.75rem 0.95rem;

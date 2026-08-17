@@ -1,0 +1,88 @@
+name: Documentation and Pages
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - docs/**
+      - static/**
+      - src/css/**
+      - src/pages/**
+      - docusaurus.config.ts
+      - sidebars.ts
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - README.md
+      - .github/workflows/docs-pages.yml
+  pull_request:
+    branches: [main, master]
+    paths:
+      - docs/**
+      - static/**
+      - src/css/**
+      - src/pages/**
+      - docusaurus.config.ts
+      - sidebars.ts
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - README.md
+      - .github/workflows/docs-pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Docusaurus
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Type-check documentation
+        run: npm run typecheck
+
+      - name: Build Docusaurus site
+        env:
+          DOCS_EDIT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: npm run docs:build
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

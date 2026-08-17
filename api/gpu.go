@@ -3,14 +3,18 @@ package api
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"os/user"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
 type GPUProcess struct {
 	PID         int    `json:"pid"`
+	User        string `json:"user"`
 	Name        string `json:"name"`
 	UsedMemory  uint64 `json:"used_memory"`
 	UsedMemoryH string `json:"used_memory_human"`
@@ -84,9 +88,28 @@ func queryNvidiaSMIProcesses(ctx context.Context) map[string][]GPUProcess {
 		return procsByUUID
 	}
 	for uuid, list := range parseNvidiaSMIProcessCSV(out) {
+		for i := range list {
+			list[i].User = processUsername(list[i].PID)
+		}
 		procsByUUID[uuid] = list
 	}
 	return procsByUUID
+}
+
+func processUsername(pid int) string {
+	info, err := os.Stat(fmt.Sprintf("/proc/%d", pid))
+	if err != nil {
+		return "unknown"
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "unknown"
+	}
+	uid := strconv.FormatUint(uint64(stat.Uid), 10)
+	if account, err := user.LookupId(uid); err == nil {
+		return account.Username
+	}
+	return uid
 }
 
 func GetGPUTopologyLinks() ([]GPUTopologyLink, string) {

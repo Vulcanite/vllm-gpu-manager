@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -24,9 +25,11 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "22"
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            package-lock.json
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -49,6 +52,14 @@ jobs:
       - name: Test backend
         run: go test ./...
 
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Type-check and build documentation
+        run: |
+          npm run typecheck
+          npm run docs:build
+
       - name: Check dependency licenses
         run: ./scripts/check-licenses.sh
 
@@ -56,7 +67,7 @@ jobs:
         run: |
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
           sudo apt-get update
-          sudo apt-get install -y lintian
+          sudo apt-get install -y lintian rpm
 
       - name: Build portable Linux binaries
         env:
@@ -72,20 +83,25 @@ jobs:
             chmod +x "dist/${binary_name}"
           done
 
-      - name: Build Debian packages
+      - name: Build Debian and RPM packages
         env:
           VERSION: ${{ github.ref_name }}
         run: |
           NFPM_BIN="$(go env GOPATH)/bin/nfpm" ./scripts/build-packages.sh
           rm -f dist/vllm-manager-linux-amd64 dist/vllm-manager-linux-arm64 dist/changelog.gz
 
-      - name: Validate Debian packages
+      - name: Validate Linux packages
         run: |
-          for package in dist/*.deb; do
-            dpkg-deb --info "$package"
-            dpkg-deb --contents "$package" >/dev/null
+          for deb_pkg in dist/*.deb; do
+            echo "Validating $deb_pkg"
+            dpkg-deb --info "$deb_pkg"
+            dpkg-deb --contents "$deb_pkg" >/dev/null
           done
           lintian --fail-on error dist/*.deb
+          for rpm_pkg in dist/*.rpm; do
+            echo "Validating $rpm_pkg"
+            rpm -qip "$rpm_pkg"
+          done
 
       - name: Create checksums and license artifacts
         run: |
@@ -102,3 +118,11 @@ jobs:
           else
             gh release create "${TAG_NAME}" dist/* --title "${TAG_NAME}" --generate-notes
           fi
+
+  changelog:
+    name: Generate release changelog
+    needs: build-release
+    uses: ./.github/workflows/copilot-changelog.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+    secrets: inherit

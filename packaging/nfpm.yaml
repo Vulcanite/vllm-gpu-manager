@@ -13,9 +13,6 @@ description: |-
 vendor: Vulcanite
 homepage: https://github.com/Vulcanite/vllm-gpu-manager
 license: Apache-2.0
-depends:
-  - adduser
-  - init-system-helpers (>= 1.18~)
 
 contents:
   - src: ./dist/vllm-manager-linux-${ARCH}
@@ -76,3 +73,16 @@ scripts:
   postinstall: ./packaging/scripts/postinstall.sh
   preremove: ./packaging/scripts/preremove.sh
   postremove: ./packaging/scripts/postremove.sh
+
+deb:
+  depends:
+    - adduser
+    - init-system-helpers (>= 1.18~)
+
+rpm:
+  summary: Single-host NVIDIA GPU and vLLM container manager
+  group: System Environment/Daemons
+  compression: gzip
+  depends:
+    - systemd
+    - shadow-utils

@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#090d12" />
+      <stop offset="100%" stop-color="#0e141d" />
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bgGrad)" />
+  <rect x="60" y="60" width="1080" height="510" rx="16" fill="none" stroke="#1e293b" stroke-width="2" />
+  
+  <!-- Logo Mark -->
+  <g transform="translate(120, 140)">
+    <rect width="96" height="96" rx="16" fill="#131d27" stroke="url(#accentGrad)" stroke-width="4" />
+    <circle cx="48" cy="48" r="16" fill="#10b981" />
+    <line x1="48" y1="16" x2="48" y2="80" stroke="#10b981" stroke-width="4" stroke-linecap="round" />
+    <line x1="16" y1="48" x2="80" y2="48" stroke="#10b981" stroke-width="4" stroke-linecap="round" />
+  </g>
+
+  <!-- Titles -->
+  <text x="120" y="300" font-family="system-ui, -apple-system, sans-serif" font-size="56" font-weight="800" fill="#f1f5f9" letter-spacing="-0.03em">
+    vLLM GPU Manager
+  </text>
+  <text x="120" y="370" font-family="system-ui, -apple-system, sans-serif" font-size="28" font-weight="500" fill="#94a3b8">
+    Lightweight CLI, Web Console &amp; OpenAI Reverse Proxy for vLLM
+  </text>
+
+  <!-- Tag Pills -->
+  <g transform="translate(120, 440)">
+    <rect width="210" height="44" rx="8" fill="#1e293b" />
+    <text x="105" y="28" font-family="monospace" font-size="16" font-weight="700" fill="#10b981" text-anchor="middle">VRAM PREFLIGHT</text>
+    
+    <rect x="230" width="180" height="44" rx="8" fill="#1e293b" />
+    <text x="320" y="28" font-family="monospace" font-size="16" font-weight="700" fill="#10b981" text-anchor="middle">OPENAI PROXY</text>
+    
+    <rect x="430" width="170" height="44" rx="8" fill="#1e293b" />
+    <text x="515" y="28" font-family="monospace" font-size="16" font-weight="700" fill="#10b981" text-anchor="middle">MULTI-GPU TP</text>
+    
+    <rect x="620" width="160" height="44" rx="8" fill="#1e293b" />
+    <text x="700" y="28" font-family="monospace" font-size="16" font-weight="700" fill="#10b981" text-anchor="middle">DEB &amp; RPM</text>
+  </g>
+</svg>

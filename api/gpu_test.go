@@ -1,6 +1,9 @@
 package api
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestParseNvidiaSMICSV(t *testing.T) {
 	gpus := parseNvidiaSMICSV([]byte("0, GPU-abc-123, NVIDIA H100 NVL, 95830, 70465, 25365, 98\n1, GPU-def-456, NVIDIA H100 NVL, 95830, 67023, 28807, 0\n"))
@@ -64,6 +67,12 @@ func TestParseNvidiaSMIProcessCSVEmptyAndMalformed(t *testing.T) {
 	parsed := parseNvidiaSMIProcessCSV([]byte("GPU-x, not-a-pid, name, 100\nGPU-y, 42, name\n"))
 	if len(parsed) != 0 {
 		t.Fatalf("malformed CSV yielded %d entries, want 0 (no valid PIDs)", len(parsed))
+	}
+}
+
+func TestProcessUsername(t *testing.T) {
+	if got := processUsername(os.Getpid()); got == "" || got == "unknown" {
+		t.Fatalf("processUsername(self)=%q", got)
 	}
 }
 

@@ -71,6 +71,7 @@ export const Dashboard = ({
       return processes.map((proc) => ({
         gpuId: gpu.id,
         pid: proc.pid,
+        user: proc.user || 'unknown',
         name: proc.name || 'unknown',
         memory: proc.used_memory_human || (proc.used_memory ? formatBytes(proc.used_memory) : '0 B'),
       }));
@@ -188,6 +189,7 @@ export const Dashboard = ({
               <div className="process-row process-table-head">
                 <span>GPU ID</span>
                 <span>PID</span>
+                <span>User</span>
                 <span>Process Name</span>
                 <span>Mem Used</span>
               </div>
@@ -195,6 +197,7 @@ export const Dashboard = ({
                 <div key={`${proc.gpuId}-${proc.pid}-${proc.name}`} className="process-row">
                   <span>GPU {proc.gpuId}</span>
                   <span>{proc.pid}</span>
+                  <span>{proc.user}</span>
                   <span className="process-name-cell">{proc.name}</span>
                   <span>{proc.memory}</span>
                 </div>
