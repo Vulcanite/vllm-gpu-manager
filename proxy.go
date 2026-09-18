@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -24,7 +25,10 @@ import (
 	"vllm-manager/api"
 )
 
-const upstreamAPIKeyCacheTTL = 5 * time.Second
+const (
+	upstreamAPIKeyCacheTTL   = 5 * time.Second
+	defaultProxyMaxBodyBytes = 32 << 20
+)
 
 type upstreamAPIKeyCacheEntry struct {
 	key       string
@@ -61,6 +65,13 @@ func legacyUpstreamAPIKeyForPort(port int) (string, error) {
 	return key, nil
 }
 
+func proxyMaxBodyBytes(settings Settings) int64 {
+	if settings.ProxyMaxBodyBytes > 0 {
+		return settings.ProxyMaxBodyBytes
+	}
+	return defaultProxyMaxBodyBytes
+}
+
 func inferenceProxyHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		settings := getSettings()
@@ -84,8 +95,14 @@ func inferenceProxyHandler() http.HandlerFunc {
 
 		port := 0
 		if r.Method == http.MethodPost {
+			r.Body = http.MaxBytesReader(w, r.Body, proxyMaxBodyBytes(settings))
 			bodyBytes, err := io.ReadAll(r.Body)
 			if err != nil {
+				var maxBytesErr *http.MaxBytesError
+				if errors.As(err, &maxBytesErr) {
+					http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+					return
+				}
 				http.Error(w, "Failed to read body", http.StatusBadRequest)
 				return
 			}

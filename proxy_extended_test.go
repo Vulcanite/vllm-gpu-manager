@@ -136,3 +136,25 @@ func TestHandleV1ModelsOutputStructure(t *testing.T) {
 		t.Fatalf("response data length = %d, want 2", len(resp.Data))
 	}
 }
+
+func TestInferenceProxyRejectsOversizedBody(t *testing.T) {
+	resetSettingsCache(t, Settings{
+		HFCache:           t.TempDir(),
+		ProxyUsers:        []ProxyUser{{Username: "alice", APIKey: "alice-key", RequestCount: 3}},
+		RoutingTable:      map[string]int{"test-model": 8080},
+		ProxyMaxBodyBytes: 64,
+	}, true)
+
+	body := `{"model":"test-model","prompt":"` + strings.Repeat("x", 128) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer alice-key")
+	rr := httptest.NewRecorder()
+	inferenceProxyHandler()(rr, req)
+
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d, want %d: %s", rr.Code, http.StatusRequestEntityTooLarge, rr.Body.String())
+	}
+	if got := getSettings().ProxyUsers[0].RequestCount; got != 3 {
+		t.Fatalf("request count=%d, want unchanged 3 after rejected body", got)
+	}
+}

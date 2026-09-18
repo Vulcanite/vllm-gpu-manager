@@ -52,6 +52,7 @@ Settings are persisted in `settings.json` (located at `/var/lib/vllm-manager/set
 | `vllm_image` | String | `vllm/vllm-openai:v0.23.0` | Default Docker image used for downloads and serving. |
 | `server_bind_ip` | String | `0.0.0.0` | Default direct bind IP for containers outside proxy mode. |
 | `routing_table` | Map | `{}` | Model name/alias to container port mapping. |
+| `proxy_max_body_bytes` | Integer | `33554432` (32 MiB) | Maximum POST body size the `/v1/` proxy will buffer to sniff the `model` field. Requests over the limit return `413`. |
 
 ---
 

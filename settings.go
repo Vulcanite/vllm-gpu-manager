@@ -40,6 +40,7 @@ type Settings struct {
 	RoutingTable            map[string]int    `json:"routing_table"`
 	ServerAPIKeys           map[string]string `json:"server_api_keys,omitempty"`
 	Heartbeat               *Heartbeat        `json:"heartbeat,omitempty"`
+	ProxyMaxBodyBytes       int64             `json:"proxy_max_body_bytes,omitempty"`
 }
 
 type ProxyUser struct {
