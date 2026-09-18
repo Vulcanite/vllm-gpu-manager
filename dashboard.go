@@ -921,11 +921,9 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 					flusher.Flush()
 					return
 				}
-				event := "log"
+				event := "stderr"
 				if chunk.Stdout {
 					event = "stdout"
-				} else {
-					event = "stderr"
 				}
 				// Send the exact chunk content (which may contain internal \n).
 				// Use multiple "data:" lines for multi-line chunks (standard SSE).

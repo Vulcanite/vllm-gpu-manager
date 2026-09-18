@@ -1417,11 +1417,7 @@ func startManagedServerContainer(args startManagedServerArgs) error {
 			logArgs...,
 		)
 		p, _ := network.ParsePort(portStr + "/tcp")
-		var portBinding network.PortMap
-		exposedPorts := network.PortSet{}
-		networkMode := container.NetworkMode("bridge")
-
-		portBinding = network.PortMap{
+		portBinding := network.PortMap{
 			p: []network.PortBinding{
 				{
 					HostIP:   args.hostBindAddr,
@@ -1429,9 +1425,10 @@ func startManagedServerContainer(args startManagedServerArgs) error {
 				},
 			},
 		}
-		exposedPorts = network.PortSet{
+		exposedPorts := network.PortSet{
 			p: struct{}{},
 		}
+		networkMode := container.NetworkMode("bridge")
 
 		created, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
 			Name: args.containerName,
