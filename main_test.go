@@ -242,7 +242,7 @@ func TestBuildRoutingTableUsesServedModelNames(t *testing.T) {
 }
 
 func TestDashboardAuthDisabledAllowsRequests(t *testing.T) {
-	auth := dashboardAuth{}
+	auth := &dashboardAuth{}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/gpus", nil)
 	rr := httptest.NewRecorder()
@@ -257,7 +257,7 @@ func TestDashboardAuthDisabledAllowsRequests(t *testing.T) {
 }
 
 func TestDashboardAuthRequiresSessionCookie(t *testing.T) {
-	auth := dashboardAuth{password: "secret", sessionToken: "session-token"}
+	auth := &dashboardAuth{password: "secret", sessions: map[string]time.Time{}}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/gpus", nil)
 	rr := httptest.NewRecorder()
@@ -272,7 +272,7 @@ func TestDashboardAuthRequiresSessionCookie(t *testing.T) {
 }
 
 func TestDashboardAuthLoginSetsUsableCookie(t *testing.T) {
-	auth := dashboardAuth{password: "secret", sessionToken: "session-token"}
+	auth := &dashboardAuth{password: "secret", sessions: map[string]time.Time{}, loginAt: map[string][]time.Time{}}
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"password":"secret"}`))
 	loginReq.Header.Set("Content-Type", "application/json")
@@ -297,6 +297,64 @@ func TestDashboardAuthLoginSetsUsableCookie(t *testing.T) {
 
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("authenticated status=%d, want %d", rr.Code, http.StatusNoContent)
+	}
+}
+
+func TestDashboardAuthLogoutRevokesSession(t *testing.T) {
+	auth := &dashboardAuth{password: "secret", sessions: map[string]time.Time{}, loginAt: map[string][]time.Time{}}
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"password":"secret"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRR := httptest.NewRecorder()
+	auth.loginHandler(loginRR, loginReq)
+	if loginRR.Code != http.StatusOK {
+		t.Fatalf("login status=%d, want %d", loginRR.Code, http.StatusOK)
+	}
+	cookies := loginRR.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookies=%d, want 1", len(cookies))
+	}
+
+	logoutReq := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	logoutReq.AddCookie(cookies[0])
+	logoutRR := httptest.NewRecorder()
+	auth.logoutHandler(logoutRR, logoutReq)
+	if logoutRR.Code != http.StatusOK {
+		t.Fatalf("logout status=%d, want %d", logoutRR.Code, http.StatusOK)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/gpus", nil)
+	req.AddCookie(cookies[0])
+	rr := httptest.NewRecorder()
+	auth.require(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want %d after logout", rr.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestDashboardAuthLoginRateLimit(t *testing.T) {
+	auth := &dashboardAuth{password: "secret", sessions: map[string]time.Time{}, loginAt: map[string][]time.Time{}}
+
+	for i := 0; i < loginRateLimitMax; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"password":"wrong"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "192.0.2.10:1234"
+		rr := httptest.NewRecorder()
+		auth.loginHandler(rr, req)
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d status=%d, want %d", i+1, rr.Code, http.StatusUnauthorized)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"password":"secret"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.0.2.10:1234"
+	rr := httptest.NewRecorder()
+	auth.loginHandler(rr, req)
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("rate-limited status=%d, want %d", rr.Code, http.StatusTooManyRequests)
 	}
 }
 

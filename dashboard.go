@@ -57,7 +57,7 @@ type startModelRequest struct {
 	ExtraVLLMArgs             []string `json:"extra_vllm_args"`
 }
 
-func newDashboardMuxWithOptions(opts dashboardOptions) (*http.ServeMux, dashboardAuth) {
+func newDashboardMuxWithOptions(opts dashboardOptions) (*http.ServeMux, *dashboardAuth) {
 	mux := http.NewServeMux()
 	auth := newDashboardAuth()
 	apiHandler := func(next http.HandlerFunc) http.HandlerFunc {

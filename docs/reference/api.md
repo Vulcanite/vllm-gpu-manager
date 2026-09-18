@@ -33,7 +33,7 @@ Create an authenticated browser session cookie.
 ```
 
 ### `POST /api/auth/logout`
-Clear the session cookie and log out.
+Delete the server-side session and clear the session cookie.
 
 ---
 

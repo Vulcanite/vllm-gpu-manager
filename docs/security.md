@@ -42,8 +42,9 @@ graph LR
 
 ### Dashboard Web Authentication
 - When `VLLM_MANAGER_PASSWORD` is configured, the web UI and all `/api/*` endpoints require an authenticated session.
-- Session verification uses constant-time string comparison (`subtle.ConstantTimeCompare`) against a random 256-bit cryptographically secure session token.
-- Passwords are never stored in plaintext on disk; in systemd installations, `service.env` is protected with `0640` permissions.
+- Each login mints a unique 256-bit session token stored server-side with a 24-hour expiry. Logout deletes that token, so a stolen cookie cannot be reused after sign-out.
+- Login is rate-limited to five failed attempts per client IP per minute (`429 Too Many Requests`).
+- Session verification looks up the cookie against the in-memory session table. Passwords are never stored in plaintext on disk; in systemd installations, `service.env` is protected with `0640` permissions.
 
 ### Proxy Client Tokens
 - The `/v1/` OpenAI proxy gateway verifies `Authorization: Bearer <proxy_api_key>`.
