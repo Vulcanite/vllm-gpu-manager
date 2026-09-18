@@ -1029,7 +1029,9 @@ func runDashboard(opts dashboardOptions) {
 	syncMonitoringTargets(opts.Monitoring)
 
 	heartbeatStop := startHeartbeatRefresher()
+	countFlushStop := startProxyRequestCountFlusher()
 	defer func() {
+		countFlushStop()
 		heartbeatStop()
 		clearHeartbeat()
 	}()

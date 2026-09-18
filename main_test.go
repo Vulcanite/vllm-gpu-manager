@@ -22,11 +22,22 @@ func resetSettingsCache(t *testing.T, settings Settings, loaded bool) {
 	settingsCache = settings
 	settingsCacheLoaded = loaded
 	settingsCacheMu.Unlock()
+	previousUsers := cloneProxyUsers(previous.ProxyUsers)
+	if loaded {
+		resetProxyRequestCounts(settings.ProxyUsers)
+	} else {
+		resetProxyRequestCounts(nil)
+	}
 	t.Cleanup(func() {
 		settingsCacheMu.Lock()
 		settingsCache = previous
 		settingsCacheLoaded = previousLoaded
 		settingsCacheMu.Unlock()
+		if previousLoaded {
+			resetProxyRequestCounts(previousUsers)
+			return
+		}
+		resetProxyRequestCounts(nil)
 	})
 }
 
@@ -330,6 +341,9 @@ func TestSaveSettingsWritesPrivateFileAndUpdatesCache(t *testing.T) {
 	if got := info.Mode().Perm(); got != 0600 {
 		t.Fatalf("settings mode=%#o, want 0600", got)
 	}
+	if _, err := os.Stat(settingsFilePath() + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("temporary settings file left behind: %v", err)
+	}
 	settings := getSettings()
 	if settings.HFCache != cacheDir || settings.HFToken != "hf-secret" || settings.VLLMAPIKey != "api-secret" {
 		t.Fatalf("settings=%+v, want saved values", settings)
@@ -490,7 +504,7 @@ func TestWriteHeartbeatPreservesDiskRoutesWhenCacheIsStale(t *testing.T) {
 	}
 }
 
-func TestIncrementProxyUserRequestCountPreservesDiskRoutesWhenCacheIsStale(t *testing.T) {
+func TestIncrementProxyUserRequestCountDoesNotWriteSettings(t *testing.T) {
 	t.Chdir(t.TempDir())
 	cacheDir := t.TempDir()
 	raw, err := json.Marshal(Settings{
@@ -512,6 +526,10 @@ func TestIncrementProxyUserRequestCountPreservesDiskRoutesWhenCacheIsStale(t *te
 
 	incrementProxyUserRequestCount("alice")
 
+	if got := getSettings().ProxyUsers[0].RequestCount; got != 2 {
+		t.Fatalf("in-memory request count=%d, want 2", got)
+	}
+
 	var saved Settings
 	data, err := os.ReadFile(settingsFilePath())
 	if err != nil {
@@ -526,8 +544,52 @@ func TestIncrementProxyUserRequestCountPreservesDiskRoutesWhenCacheIsStale(t *te
 	if _, ok := saved.RoutingTable["stale-cache-model"]; ok {
 		t.Fatalf("stale cache route was written back: %+v", saved.RoutingTable)
 	}
-	if len(saved.ProxyUsers) != 1 || saved.ProxyUsers[0].RequestCount != 5 {
-		t.Fatalf("proxy users=%+v, want alice request count incremented from disk value to 5", saved.ProxyUsers)
+	if len(saved.ProxyUsers) != 1 || saved.ProxyUsers[0].RequestCount != 4 {
+		t.Fatalf("disk proxy users=%+v, want unchanged request count 4", saved.ProxyUsers)
+	}
+}
+
+func TestFlushProxyRequestCountsPreservesDiskRoutes(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cacheDir := t.TempDir()
+	raw, err := json.Marshal(Settings{
+		HFCache:      cacheDir,
+		RoutingTable: map[string]int{"disk-model": 8000},
+		ProxyUsers:   []ProxyUser{{Username: "alice", APIKey: "alice-key", RequestCount: 4}},
+	})
+	if err != nil {
+		t.Fatalf("marshal settings: %v", err)
+	}
+	if err := os.WriteFile(settingsFilePath(), raw, 0600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	resetSettingsCache(t, Settings{
+		HFCache:      cacheDir,
+		RoutingTable: map[string]int{"stale-cache-model": 7000},
+		ProxyUsers:   []ProxyUser{{Username: "alice", APIKey: "alice-key", RequestCount: 1}},
+	}, true)
+
+	incrementProxyUserRequestCount("alice")
+	if err := flushProxyRequestCounts(); err != nil {
+		t.Fatalf("flushProxyRequestCounts() error=%v", err)
+	}
+
+	var saved Settings
+	data, err := os.ReadFile(settingsFilePath())
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatalf("unmarshal settings: %v", err)
+	}
+	if got := saved.RoutingTable["disk-model"]; got != 8000 {
+		t.Fatalf("disk-model route=%d, want preserved 8000 in %+v", got, saved.RoutingTable)
+	}
+	if _, ok := saved.RoutingTable["stale-cache-model"]; ok {
+		t.Fatalf("stale cache route was written back: %+v", saved.RoutingTable)
+	}
+	if len(saved.ProxyUsers) != 1 || saved.ProxyUsers[0].RequestCount != 2 {
+		t.Fatalf("proxy users=%+v, want alice request count flushed as 2", saved.ProxyUsers)
 	}
 }
 

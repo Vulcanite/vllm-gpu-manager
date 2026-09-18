@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode"
@@ -191,6 +192,7 @@ func loadSettingsFromDisk() Settings {
 func loadAndCacheSettingsLocked() {
 	settingsCache = loadSettingsFromDisk()
 	settingsCacheLoaded = true
+	seedMissingProxyRequestCounts(settingsCache.ProxyUsers)
 }
 
 func refreshSettingsCacheFromDiskIfPresentLocked() {
@@ -218,7 +220,9 @@ func getSettings() Settings {
 		settingsCacheMu.Unlock()
 		settingsCacheMu.RLock()
 	}
-	return cloneSettings(settingsCache)
+	cloned := cloneSettings(settingsCache)
+	applyProxyRequestCounts(cloned.ProxyUsers)
+	return cloned
 }
 
 func saveSettings(s Settings) error {
@@ -227,10 +231,11 @@ func saveSettings(s Settings) error {
 	return saveSettingsLocked(s)
 }
 
-// saveSettingsLocked writes settings to disk and updates the cache. The caller
-// must hold settingsCacheMu.
+// saveSettingsLocked writes settings to disk atomically and updates the cache.
+// The caller must hold settingsCacheMu.
 func saveSettingsLocked(s Settings) error {
 	s = normalizeSettings(s)
+	applyProxyRequestCounts(s.ProxyUsers)
 	data, err := json.Marshal(s)
 	if err != nil {
 		return err
@@ -239,7 +244,12 @@ func saveSettingsLocked(s Settings) error {
 	if err := ensureRuntimeDir(path, 0o750); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	settingsCache = s
@@ -534,6 +544,7 @@ func createProxyUser(username string) (ProxyUser, error) {
 	}
 	user := ProxyUser{Username: username, APIKey: apiKey}
 	settingsCache.ProxyUsers = append(settingsCache.ProxyUsers, user)
+	proxyRequestCounter(username).Store(0)
 	if err := saveSettingsLocked(settingsCache); err != nil {
 		return ProxyUser{}, newAppError(http.StatusInternalServerError, "failed to save proxy user: %v", err)
 	}
@@ -575,6 +586,7 @@ func revokeProxyUser(username string) error {
 		return newAppError(http.StatusNotFound, "proxy user %q not found", username)
 	}
 	settingsCache.ProxyUsers = next
+	proxyRequestCounts.Delete(strings.ToLower(username))
 	if err := saveSettingsLocked(settingsCache); err != nil {
 		return newAppError(http.StatusInternalServerError, "failed to revoke proxy user: %v", err)
 	}
@@ -605,16 +617,82 @@ func incrementProxyUserRequestCount(username string) {
 	if username == "" {
 		return
 	}
+	proxyRequestCounter(username).Add(1)
+}
+
+var proxyRequestCounts sync.Map // lowercase username -> *atomic.Int64
+
+const proxyRequestCountFlushInterval = 5 * time.Second
+
+func proxyRequestCounter(username string) *atomic.Int64 {
+	key := strings.ToLower(strings.TrimSpace(username))
+	actual, _ := proxyRequestCounts.LoadOrStore(key, new(atomic.Int64))
+	return actual.(*atomic.Int64)
+}
+
+func applyProxyRequestCounts(users []ProxyUser) {
+	for i := range users {
+		if counter, ok := proxyRequestCounts.Load(strings.ToLower(users[i].Username)); ok {
+			users[i].RequestCount = counter.(*atomic.Int64).Load()
+		}
+	}
+}
+
+func seedMissingProxyRequestCounts(users []ProxyUser) {
+	for _, user := range users {
+		username := strings.ToLower(strings.TrimSpace(user.Username))
+		if username == "" {
+			continue
+		}
+		counter := new(atomic.Int64)
+		counter.Store(user.RequestCount)
+		proxyRequestCounts.LoadOrStore(username, counter)
+	}
+}
+
+func resetProxyRequestCounts(users []ProxyUser) {
+	proxyRequestCounts.Range(func(key, _ any) bool {
+		proxyRequestCounts.Delete(key)
+		return true
+	})
+	for _, user := range users {
+		username := strings.ToLower(strings.TrimSpace(user.Username))
+		if username == "" {
+			continue
+		}
+		counter := new(atomic.Int64)
+		counter.Store(user.RequestCount)
+		proxyRequestCounts.Store(username, counter)
+	}
+}
+
+func flushProxyRequestCounts() error {
 	settingsCacheMu.Lock()
 	defer settingsCacheMu.Unlock()
 	refreshSettingsCacheFromDiskIfPresentLocked()
-	for i := range settingsCache.ProxyUsers {
-		if strings.EqualFold(settingsCache.ProxyUsers[i].Username, username) {
-			settingsCache.ProxyUsers[i].RequestCount++
-			_ = saveSettingsLocked(settingsCache)
-			return
+	return saveSettingsLocked(settingsCache)
+}
+
+func startProxyRequestCountFlusher() func() {
+	stop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(proxyRequestCountFlushInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := flushProxyRequestCounts(); err != nil {
+					log.Printf("[SETTINGS] failed to flush proxy request counts: %v", err)
+				}
+			case <-stop:
+				if err := flushProxyRequestCounts(); err != nil {
+					log.Printf("[SETTINGS] failed to flush proxy request counts on stop: %v", err)
+				}
+				return
+			}
 		}
-	}
+	}()
+	return func() { close(stop) }
 }
 
 // sortedServerAPIKeyNames returns the keys in deterministic order for
@@ -848,18 +926,7 @@ func writeHeartbeat(pid int, seen time.Time) error {
 	}
 	settingsCache.Heartbeat.PID = pid
 	settingsCache.Heartbeat.LastSeen = seen
-	data, err := json.Marshal(settingsCache)
-	if err != nil {
-		return err
-	}
-	path := settingsFilePath()
-	if err := ensureRuntimeDir(path, 0o750); err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		return err
-	}
-	return nil
+	return saveSettingsLocked(settingsCache)
 }
 
 // clearHeartbeat removes the heartbeat field from the persisted settings. Used
