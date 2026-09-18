@@ -79,6 +79,43 @@ type LaunchSpec struct {
 	ExtraVLLMArgs             []string `json:"extra_vllm_args"`
 }
 
+// LaunchConfig is the full input to StartModel: persisted launch spec fields
+// plus host-side settings (cache, tokens, bind mode) that are not stored on
+// the container.
+type LaunchConfig struct {
+	Model                     string
+	ServedModelName           string
+	Port                      int
+	GPUs                      int
+	GPUIDs                    string
+	MemUtil                   string
+	MaxLen                    string
+	MaxNumSeqs                string
+	CPUOffloadGB              string
+	DType                     string
+	ParallelismMode           string
+	KVCacheDType              string
+	ToolParser                string
+	TokenizerMode             string
+	ReasoningParser           string
+	TrustRemoteCode           bool
+	EnablePrefixCaching       bool
+	BlockSize                 string
+	MoeBackend                string
+	ExpertParallel            bool
+	DisableFlashInferAutotune bool
+	SpeculativeConfig         string
+	HFCache                   string
+	HFToken                   string
+	VLLMAPIKey                string
+	EnableCUDACompatibility   bool
+	HFHubOffline              bool
+	HostBindIP                string
+	ContainerExposure         string
+	ServerAPIKey              string
+	ExtraVLLMArgs             []string
+}
+
 type DownloadedModel struct {
 	Name                 string `json:"name"`
 	Size                 string `json:"size"`

@@ -499,7 +499,39 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			vllmAPIKey = ""
 		}
 		auditParams := auditLaunchParams(req, containerExposure, hostBindIP)
-		if err := api.StartModel(req.Model, req.ServedModelName, req.Port, req.GPUs, req.GPUIDs, req.MemUtil, req.MaxLen, req.MaxNumSeqs, req.CPUOffloadGB, req.DType, req.ParallelismMode, req.KVCacheDType, req.ToolParser, req.TokenizerMode, req.ReasoningParser, req.TrustRemoteCode, *req.EnablePrefixCaching, req.BlockSize, req.MoeBackend, req.ExpertParallel, req.DisableFlashInferAutotune, req.SpeculativeConfig, settings.HFCache, settings.HFToken, vllmAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, containerExposure, serverAPIKey, req.ExtraVLLMArgs); err != nil {
+		if err := api.StartModel(api.LaunchConfig{
+			Model:                     req.Model,
+			ServedModelName:           req.ServedModelName,
+			Port:                      req.Port,
+			GPUs:                      req.GPUs,
+			GPUIDs:                    req.GPUIDs,
+			MemUtil:                   req.MemUtil,
+			MaxLen:                    req.MaxLen,
+			MaxNumSeqs:                req.MaxNumSeqs,
+			CPUOffloadGB:              req.CPUOffloadGB,
+			DType:                     req.DType,
+			ParallelismMode:           req.ParallelismMode,
+			KVCacheDType:              req.KVCacheDType,
+			ToolParser:                req.ToolParser,
+			TokenizerMode:             req.TokenizerMode,
+			ReasoningParser:           req.ReasoningParser,
+			TrustRemoteCode:           req.TrustRemoteCode,
+			EnablePrefixCaching:       *req.EnablePrefixCaching,
+			BlockSize:                 req.BlockSize,
+			MoeBackend:                req.MoeBackend,
+			ExpertParallel:            req.ExpertParallel,
+			DisableFlashInferAutotune: req.DisableFlashInferAutotune,
+			SpeculativeConfig:         req.SpeculativeConfig,
+			HFCache:                   settings.HFCache,
+			HFToken:                   settings.HFToken,
+			VLLMAPIKey:                vllmAPIKey,
+			EnableCUDACompatibility:   settings.EnableCUDACompatibility,
+			HFHubOffline:              settings.HFHubOffline,
+			HostBindIP:                hostBindIP,
+			ContainerExposure:         containerExposure,
+			ServerAPIKey:              serverAPIKey,
+			ExtraVLLMArgs:             req.ExtraVLLMArgs,
+		}); err != nil {
 			appendAuditEvent(auditEvent{
 				Action:  "model_deploy",
 				Result:  "failed",

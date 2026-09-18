@@ -1051,12 +1051,12 @@ func NormalizeModelKeyForMatch(model string) string {
 	return model
 }
 
-func StartModel(model string, servedModelName string, port int, gpus int, gpuIds string, memUtil string, maxLen string, maxNumSeqs string, cpuOffloadGB string, dtype string, parallelismMode string, kvCacheDType string, toolParser string, tokenizerMode string, reasoningParser string, trustRemoteCode bool, enablePrefixCaching bool, blockSize string, moeBackend string, enableExpertParallel bool, disableFlashInferAutotune bool, speculativeConfig string, hfCache string, hfToken string, vllmAPIKey string, enableCUDACompatibility bool, hfHubOffline bool, hostBindIP string, containerExposure string, serverAPIKey string, extraVLLMArgs []string) error {
-	hfCache = NormalizeHFHome(hfCache)
+func StartModel(cfg LaunchConfig) error {
+	hfCache := NormalizeHFHome(cfg.HFCache)
 	if hfCache == "" {
 		return validationError("hugging face cache directory is required")
 	}
-	vllmAPIKey = strings.TrimSpace(vllmAPIKey)
+	vllmAPIKey := strings.TrimSpace(cfg.VLLMAPIKey)
 	if strings.IndexFunc(vllmAPIKey, unicode.IsSpace) >= 0 {
 		return validationError("vLLM API key cannot contain whitespace")
 	}
@@ -1064,7 +1064,7 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 	// expected to set either the global vllmAPIKey or a per-server key,
 	// but never both. We forward whichever is set as `--api-key` so vLLM
 	// applies the more specific secret.
-	serverAPIKey = strings.TrimSpace(serverAPIKey)
+	serverAPIKey := strings.TrimSpace(cfg.ServerAPIKey)
 	if strings.IndexFunc(serverAPIKey, unicode.IsSpace) >= 0 {
 		return validationError("per-server API key cannot contain whitespace")
 	}
@@ -1075,8 +1075,34 @@ func StartModel(model string, servedModelName string, port int, gpus int, gpuIds
 	if serverAPIKey != "" {
 		effectiveAPIKey = serverAPIKey
 	}
-	model = strings.TrimSpace(model)
-	servedModelName = strings.TrimSpace(servedModelName)
+	model := strings.TrimSpace(cfg.Model)
+	servedModelName := strings.TrimSpace(cfg.ServedModelName)
+	port := cfg.Port
+	gpus := cfg.GPUs
+	gpuIds := cfg.GPUIDs
+	memUtil := cfg.MemUtil
+	maxLen := cfg.MaxLen
+	maxNumSeqs := cfg.MaxNumSeqs
+	cpuOffloadGB := cfg.CPUOffloadGB
+	dtype := cfg.DType
+	parallelismMode := cfg.ParallelismMode
+	kvCacheDType := cfg.KVCacheDType
+	toolParser := cfg.ToolParser
+	tokenizerMode := cfg.TokenizerMode
+	reasoningParser := cfg.ReasoningParser
+	trustRemoteCode := cfg.TrustRemoteCode
+	enablePrefixCaching := cfg.EnablePrefixCaching
+	blockSize := cfg.BlockSize
+	moeBackend := cfg.MoeBackend
+	enableExpertParallel := cfg.ExpertParallel
+	disableFlashInferAutotune := cfg.DisableFlashInferAutotune
+	speculativeConfig := cfg.SpeculativeConfig
+	hfToken := cfg.HFToken
+	enableCUDACompatibility := cfg.EnableCUDACompatibility
+	hfHubOffline := cfg.HFHubOffline
+	hostBindIP := cfg.HostBindIP
+	containerExposure := cfg.ContainerExposure
+	extraVLLMArgs := cfg.ExtraVLLMArgs
 	if model == "" {
 		return validationError("model is required")
 	}

@@ -474,12 +474,15 @@ func TestStartModelRejectsIneligibleParallelismSettingsBeforeDocker(t *testing.T
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := StartModel(
-				"test/model", "", 8080, test.gpus, "all", "0.9", "32768", "256", "0",
-				"auto", test.parallelism, "auto", "", "auto", "", false, true, "", test.moeBackend,
-				test.expertParallel, false, "", t.TempDir(), "", "", false, false, "127.0.0.1",
-				ContainerExposureDirect, "", nil,
-			)
+			cfg := launchConfigForTest("test/model")
+			cfg.GPUs = test.gpus
+			cfg.MaxNumSeqs = "256"
+			cfg.ParallelismMode = test.parallelism
+			cfg.MoeBackend = test.moeBackend
+			cfg.ExpertParallel = test.expertParallel
+			cfg.HFCache = t.TempDir()
+			cfg.HostBindIP = "127.0.0.1"
+			err := StartModel(cfg)
 			if err == nil || !IsValidationError(err) || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("StartModel() error=%v, want validation error containing %q", err, test.want)
 			}
@@ -819,8 +822,32 @@ func TestCPUOffloadUlimits(t *testing.T) {
 	}
 }
 
+func launchConfigForTest(model string) LaunchConfig {
+	return LaunchConfig{
+		Model:               model,
+		Port:                8080,
+		GPUs:                1,
+		GPUIDs:              "all",
+		MemUtil:             "0.9",
+		MaxLen:              "32768",
+		CPUOffloadGB:        "0",
+		DType:               "auto",
+		ParallelismMode:     ParallelismTensor,
+		KVCacheDType:        "auto",
+		TokenizerMode:       "auto",
+		EnablePrefixCaching: true,
+		MoeBackend:          "auto",
+		HFCache:             "/tmp/cache",
+		HostBindIP:          "0.0.0.0",
+		ContainerExposure:   ContainerExposureDirect,
+	}
+}
+
 func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "0", "auto", ParallelismTensor, "auto", "", "auto", "", false, true, "", "auto", false, false, "", "/tmp/cache", "", "global-key", false, false, "0.0.0.0", ContainerExposureDirect, "per-server-key", nil)
+	cfg := launchConfigForTest("any-model")
+	cfg.VLLMAPIKey = "global-key"
+	cfg.ServerAPIKey = "per-server-key"
+	err := StartModel(cfg)
 	if err == nil {
 		t.Fatal("StartModel accepted both global and per-server key; want validation error")
 	}
@@ -833,7 +860,9 @@ func TestStartModelRejectsGlobalAndPerServerAPIKey(t *testing.T) {
 }
 
 func TestStartModelRejectsWhitespaceInPerServerAPIKey(t *testing.T) {
-	err := StartModel("any-model", "", 8080, 1, "all", "0.9", "32768", "", "0", "auto", ParallelismTensor, "auto", "", "auto", "", false, true, "", "auto", false, false, "", "/tmp/cache", "", "", false, false, "0.0.0.0", ContainerExposureDirect, "key with space", nil)
+	cfg := launchConfigForTest("any-model")
+	cfg.ServerAPIKey = "key with space"
+	err := StartModel(cfg)
 	if err == nil {
 		t.Fatal("StartModel accepted whitespace in per-server key; want validation error")
 	}

@@ -35,10 +35,10 @@ var kvCacheDTypeOptions = []string{"auto", "fp8", "fp8_e5m2", "fp8_e4m3"}
 
 var dtypeOptions = []string{"auto", "bfloat16", "float16"}
 
-// LaunchConfig exposes the tuning constants the dashboard needs to reproduce the
-// backend's VRAM preflight preview. Serving these from one place keeps the
-// frontend estimate in sync with CheckModelFitsInVRAM.
-type LaunchConfig struct {
+// LaunchDefaultsConfig exposes the tuning constants the dashboard needs to
+// reproduce the backend's VRAM preflight preview. Serving these from one
+// place keeps the frontend estimate in sync with CheckModelFitsInVRAM.
+type LaunchDefaultsConfig struct {
 	ModelVRAMSafetyMargin       float64           `json:"model_vram_safety_margin"`
 	DefaultGPUMemoryUtilization float64           `json:"default_gpu_memory_utilization"`
 	DefaultMaxModelLen          int               `json:"default_max_model_len"`
@@ -58,8 +58,8 @@ type LaunchConfig struct {
 }
 
 // LaunchDefaults returns the launch tuning constants shared with the frontend.
-func LaunchDefaults() LaunchConfig {
-	return LaunchConfig{
+func LaunchDefaults() LaunchDefaultsConfig {
+	return LaunchDefaultsConfig{
 		ModelVRAMSafetyMargin:       modelVRAMSafetyMargin,
 		DefaultGPUMemoryUtilization: defaultGPUMemoryUtilization,
 		DefaultMaxModelLen:          defaultMaxModelLen,

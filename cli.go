@@ -220,7 +220,36 @@ func newModelStartCommand(opts *cliOptions) *cobra.Command {
 			if strings.TrimSpace(bindIP) != "" {
 				hostBindIP = strings.TrimSpace(bindIP)
 			}
-			if err := api.StartModel(args[0], "", port, gpus, gpuIDs, memUtil, maxLen, maxNumSeqs, cpuOffloadGB, dtype, parallelismMode, kvCacheDType, toolParser, tokenizerMode, reasoningParser, trustRemoteCode, true, blockSize, moeBackend, enableExpertParallel, disableFlashInferAutotune, speculativeConfig, settings.HFCache, settings.HFToken, settings.VLLMAPIKey, settings.EnableCUDACompatibility, settings.HFHubOffline, hostBindIP, api.ContainerExposureDirect, "", nil); err != nil {
+			if err := api.StartModel(api.LaunchConfig{
+				Model:                     args[0],
+				Port:                      port,
+				GPUs:                      gpus,
+				GPUIDs:                    gpuIDs,
+				MemUtil:                   memUtil,
+				MaxLen:                    maxLen,
+				MaxNumSeqs:                maxNumSeqs,
+				CPUOffloadGB:              cpuOffloadGB,
+				DType:                     dtype,
+				ParallelismMode:           parallelismMode,
+				KVCacheDType:              kvCacheDType,
+				ToolParser:                toolParser,
+				TokenizerMode:             tokenizerMode,
+				ReasoningParser:           reasoningParser,
+				TrustRemoteCode:           trustRemoteCode,
+				EnablePrefixCaching:       true,
+				BlockSize:                 blockSize,
+				MoeBackend:                moeBackend,
+				ExpertParallel:            enableExpertParallel,
+				DisableFlashInferAutotune: disableFlashInferAutotune,
+				SpeculativeConfig:         speculativeConfig,
+				HFCache:                   settings.HFCache,
+				HFToken:                   settings.HFToken,
+				VLLMAPIKey:                settings.VLLMAPIKey,
+				EnableCUDACompatibility:   settings.EnableCUDACompatibility,
+				HFHubOffline:              settings.HFHubOffline,
+				HostBindIP:                hostBindIP,
+				ContainerExposure:         api.ContainerExposureDirect,
+			}); err != nil {
 				return err
 			}
 			upsertRoute(args[0], port)
