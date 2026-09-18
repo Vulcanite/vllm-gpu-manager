@@ -171,7 +171,10 @@ var (
 
 var invalidDockerNameChars = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)
 
-var modelOperationLocks sync.Map
+var (
+	modelOperationLocks sync.Map
+	launchMu            sync.Mutex
+)
 
 func NormalizeHFHome(hfCache string) string {
 	cleaned := filepath.Clean(strings.TrimSpace(hfCache))

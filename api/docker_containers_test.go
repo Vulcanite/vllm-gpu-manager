@@ -3,10 +3,13 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 )
@@ -871,5 +874,109 @@ func TestStartModelRejectsWhitespaceInPerServerAPIKey(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "per-server API key") {
 		t.Fatalf("error=%q, want 'per-server API key' message", err.Error())
+	}
+}
+
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for free port: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close free-port listener: %v", err)
+	}
+	return port
+}
+
+func TestStartModelSerializesConcurrentLaunchesOnSameGPU(t *testing.T) {
+	hfCache := t.TempDir()
+	modelA := "test/alpha"
+	modelB := "test/beta"
+	writeVRAMTestModel(t, hfCache, modelA, tinyVRAMConfig(1024), 1024)
+	writeVRAMTestModel(t, hfCache, modelB, tinyVRAMConfig(1024), 1024)
+
+	stubGPUInfo(t, func() ([]GPUInfo, error) {
+		return []GPUInfo{{
+			ID:                0,
+			MemoryTotal:       16 * 1024 * 1024 * 1024,
+			MemoryFree:        16 * 1024 * 1024 * 1024,
+			ComputeCapability: "9.0",
+		}}, nil
+	})
+
+	originalSnapshot := snapshotManagedContainersFn
+	originalStart := startManagedServerFn
+	t.Cleanup(func() {
+		snapshotManagedContainersFn = originalSnapshot
+		startManagedServerFn = originalStart
+	})
+
+	var launchedMu sync.Mutex
+	var launched []managedVLLMContainer
+	snapshotManagedContainersFn = func() ([]managedVLLMContainer, error) {
+		launchedMu.Lock()
+		defer launchedMu.Unlock()
+		out := make([]managedVLLMContainer, len(launched))
+		copy(out, launched)
+		return out, nil
+	}
+	startManagedServerFn = func(args startManagedServerArgs) error {
+		// Widen the race window so a missing global lock would let both
+		// goroutines snapshot an empty GPU before either commits.
+		time.Sleep(50 * time.Millisecond)
+		launchedMu.Lock()
+		launched = append(launched, managedVLLMContainer{
+			name:   args.containerName,
+			state:  "running",
+			labels: args.labels,
+			metadata: container.InspectResponse{
+				Config: &container.Config{Labels: args.labels},
+			},
+		})
+		launchedMu.Unlock()
+		return nil
+	}
+
+	portA := freeTCPPort(t)
+	portB := freeTCPPort(t)
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	launch := func(model string, port int) {
+		defer wg.Done()
+		cfg := launchConfigForTest(model)
+		cfg.Port = port
+		cfg.GPUIDs = "0"
+		cfg.MemUtil = "0.9"
+		cfg.MaxLen = "128"
+		cfg.HFCache = hfCache
+		cfg.HostBindIP = "127.0.0.1"
+		<-start
+		errs <- StartModel(cfg)
+	}
+	wg.Add(2)
+	go launch(modelA, portA)
+	go launch(modelB, portB)
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	var success, failure int
+	var failErr error
+	for err := range errs {
+		if err == nil {
+			success++
+			continue
+		}
+		failure++
+		failErr = err
+	}
+	if success != 1 || failure != 1 {
+		t.Fatalf("concurrent launches: success=%d failure=%d last error=%v, want exactly one success", success, failure, failErr)
+	}
+	if !IsValidationError(failErr) || !strings.Contains(failErr.Error(), "combined GPU memory utilization") {
+		t.Fatalf("losing launch error=%v, want GPU overlap validation error", failErr)
 	}
 }

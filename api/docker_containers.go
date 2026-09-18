@@ -24,6 +24,27 @@ const (
 	modelHealthCheckTimeout = 5 * time.Second
 )
 
+type startManagedServerArgs struct {
+	containerName           string
+	labels                  map[string]string
+	launchSpec              LaunchSpec
+	hfCache                 string
+	hfToken                 string
+	enableCUDACompatibility bool
+	hfHubOffline            bool
+	effectiveAPIKey         string
+	port                    int
+	hostBindAddr            netip.Addr
+	gpuFlag                 string
+	cpuOffloadGBValue       int
+	closeReservedPort       func()
+}
+
+var (
+	snapshotManagedContainersFn = snapshotManagedVLLMContainers
+	startManagedServerFn        = startManagedServerContainer
+)
+
 func validateGPUSelection(gpus int, gpuIds string) (string, []GPUInfo, error) {
 	gpuList, err := RequireDetectedGPUs()
 	if err != nil {
@@ -1135,13 +1156,12 @@ func StartModel(cfg LaunchConfig) error {
 		return err
 	}
 
-	lock := getModelOperationLock(hfCache, model)
-	lock.Lock()
-	defer lock.Unlock()
+	launchMu.Lock()
+	defer launchMu.Unlock()
 
 	// Single docker snapshot reused for the download-in-progress, GPU overlap,
 	// and name-conflict checks below instead of three separate enumerations.
-	snapshot, err := snapshotManagedVLLMContainers()
+	snapshot, err := snapshotManagedContainersFn()
 	if err != nil {
 		return fmt.Errorf("failed to inspect existing containers before starting model: %v", err)
 	}
@@ -1335,39 +1355,58 @@ func StartModel(cfg LaunchConfig) error {
 	if err != nil {
 		return err
 	}
+
+	return startManagedServerFn(startManagedServerArgs{
+		containerName:           containerName,
+		labels:                  labels,
+		launchSpec:              launchSpec,
+		hfCache:                 hfCache,
+		hfToken:                 hfToken,
+		enableCUDACompatibility: enableCUDACompatibility,
+		hfHubOffline:            hfHubOffline,
+		effectiveAPIKey:         effectiveAPIKey,
+		port:                    port,
+		hostBindAddr:            hostBindAddr,
+		gpuFlag:                 gpuFlag,
+		cpuOffloadGBValue:       cpuOffloadGBValue,
+		closeReservedPort:       closeReservedPort,
+	})
+}
+
+func startManagedServerContainer(args startManagedServerArgs) error {
 	env := []string{"HF_HOME=/hf_cache"}
 
-	if hfToken != "" {
-		env = append(env, fmt.Sprintf("HF_TOKEN=%s", hfToken))
+	if args.hfToken != "" {
+		env = append(env, fmt.Sprintf("HF_TOKEN=%s", args.hfToken))
 	}
-	if enableCUDACompatibility {
+	if args.enableCUDACompatibility {
 		env = append(env, "VLLM_ENABLE_CUDA_COMPATIBILITY=1")
 	}
-	if hfHubOffline {
+	if args.hfHubOffline {
 		env = append(env, "HF_HUB_OFFLINE=1")
 	}
 
 	// Warn if the configured image is not present locally.
 	checkVLLMImageExists()
 
-	cmd := buildVLLMServeArgs(launchSpec, effectiveAPIKey)
+	cmd := buildVLLMServeArgs(args.launchSpec, args.effectiveAPIKey)
 
 	return withDockerClient(execTimeoutStart, func(ctx context.Context, cli *dockerclient.Client) error {
 		if err := ensureDockerImage(ctx, cli, VLLMImage); err != nil {
 			return fmt.Errorf("failed to ensure vLLM image: %v", err)
 		}
 
-		portStr := strconv.Itoa(port)
-		ulimits := cpuOffloadUlimits(cpuOffloadGBValue)
+		portStr := strconv.Itoa(args.port)
+		ulimits := cpuOffloadUlimits(args.cpuOffloadGBValue)
 		logArgs := []string{
-			containerName,
+			args.containerName,
 			"image=" + VLLMImage,
 			"ipc=host",
 			"runtime=nvidia",
-			"gpus=" + gpuFlag,
-			"ports=" + hostBindAddr.String() + ":" + portStr + ":" + portStr,
+			"gpus=" + args.gpuFlag,
+			"ports=" + args.hostBindAddr.String() + ":" + portStr + ":" + portStr,
 			"network=bridge",
-			"bind=" + fmt.Sprintf("%s:/hf_cache", hfCache),
+			"bind=" + fmt.Sprintf("%s:/hf_cache", args.hfCache),
 			"cmd=" + strings.Join(cmd, " "),
 		}
 		if len(ulimits) > 0 {
@@ -1385,7 +1424,7 @@ func StartModel(cfg LaunchConfig) error {
 		portBinding = network.PortMap{
 			p: []network.PortBinding{
 				{
-					HostIP:   hostBindAddr,
+					HostIP:   args.hostBindAddr,
 					HostPort: portStr,
 				},
 			},
@@ -1395,12 +1434,12 @@ func StartModel(cfg LaunchConfig) error {
 		}
 
 		created, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
-			Name: containerName,
+			Name: args.containerName,
 			Config: &container.Config{
 				Image:        VLLMImage,
 				Cmd:          cmd,
 				Env:          env,
-				Labels:       labels,
+				Labels:       args.labels,
 				ExposedPorts: exposedPorts,
 			},
 			HostConfig: &container.HostConfig{
@@ -1408,9 +1447,9 @@ func StartModel(cfg LaunchConfig) error {
 				Runtime:      "nvidia",
 				NetworkMode:  networkMode,
 				PortBindings: portBinding,
-				Binds:        []string{fmt.Sprintf("%s:/hf_cache", hfCache)},
+				Binds:        []string{fmt.Sprintf("%s:/hf_cache", args.hfCache)},
 				Resources: container.Resources{
-					DeviceRequests: []container.DeviceRequest{dockerDeviceRequest(gpuFlag)},
+					DeviceRequests: []container.DeviceRequest{dockerDeviceRequest(args.gpuFlag)},
 					Ulimits:        ulimits,
 				},
 			},
@@ -1418,7 +1457,7 @@ func StartModel(cfg LaunchConfig) error {
 		if err != nil {
 			return err
 		}
-		closeReservedPort()
+		args.closeReservedPort()
 
 		logDockerAPI("container start", created.ID)
 		if _, err := cli.ContainerStart(ctx, created.ID, dockerclient.ContainerStartOptions{}); err != nil {
