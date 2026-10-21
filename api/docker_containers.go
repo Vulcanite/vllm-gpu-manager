@@ -61,7 +61,7 @@ func validateGPUSelection(gpus int, gpuIds string) (string, []GPUInfo, error) {
 		})
 		selected := gpuList[:gpus]
 
-		// Fix GPT-P2a: never pass --gpus all to Docker — it gives the container
+		// Never pass --gpus all to Docker — it gives the container
 		// visibility into every GPU on the host, not just the TP-assigned ones.
 		// Convert to an explicit device list so the container is scoped correctly
 		// and our VRAM/overlap preflight matches what the container actually sees.
@@ -1290,7 +1290,7 @@ func StartModel(cfg LaunchConfig) error {
 		return err
 	}
 
-	// Fix #2 / GPT-P1a: reject if combined mem_util on any requested GPU would exceed 1.0
+	// Reject if combined mem_util on any requested GPU would exceed 1.0
 	totalGPUCount := len(selectedGPUs)
 	var requestedGPUIDs []int
 	if gpuIds != "" && gpuIds != "all" {
@@ -1300,7 +1300,7 @@ func StartModel(cfg LaunchConfig) error {
 			}
 		}
 	}
-	// selectedGPUs is now always an explicit list (GPT-P2a fix), so derive IDs from it
+	// selectedGPUs is always an explicit list, so derive IDs from it
 	// when gpuIds was "all" — requestedGPUIDs will be empty in that case.
 	if len(requestedGPUIDs) == 0 && len(selectedGPUs) > 0 {
 		for _, g := range selectedGPUs {

@@ -674,7 +674,7 @@ func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, 
 	}
 
 	for _, gpu := range selectedGPUs {
-		// Fix #1: budget is total×util, not MemoryFree.
+		// The budget is total×util, not MemoryFree.
 		// MemoryFree is volatile and doesn't represent what vLLM will actually get.
 		utilizationBudget := uint64(float64(gpu.MemoryTotal) * utilization)
 
@@ -727,7 +727,7 @@ func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, 
 			)
 		}
 
-		// Fix #4: ensure minimum viable KV cache remains after weights
+		// Ensure a minimum viable KV cache remains after weights.
 		remainingForKV := utilizationBudget - modelBytesPerGPU
 		if remainingForKV < minKVCacheBytesPerGPU {
 			return validationError(
