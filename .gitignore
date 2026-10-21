@@ -33,6 +33,9 @@ graphify-out/
 .codex/
 .opencode/
 .cursor/
+.claude/
+AGENTS.md
+CLAUDE.md
 
 # Monitoring runtime files and secrets
 monitoring/.env
