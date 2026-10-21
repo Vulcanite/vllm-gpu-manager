@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,6 +44,7 @@ type startManagedServerArgs struct {
 var (
 	snapshotManagedContainersFn = snapshotManagedVLLMContainers
 	startManagedServerFn        = startManagedServerContainer
+	restartContainerFn          = restartManagedContainer
 )
 
 func validateGPUSelection(gpus int, gpuIds string) (string, []GPUInfo, error) {
@@ -131,26 +133,6 @@ func isManagedServerContainer(labels map[string]string) bool {
 	}
 	kind := labels[containerKindLabel]
 	return kind == "" || kind == containerKindServer
-}
-
-func ensureManagedContainer(containerID string) error {
-	containerID = strings.TrimSpace(containerID)
-	if containerID == "" {
-		return validationError("container id is required")
-	}
-
-	return withDockerClient(execTimeoutShort, func(ctx context.Context, cli *dockerclient.Client) error {
-		metadata, err := inspectContainer(ctx, cli, containerID)
-		if err != nil {
-			return fmt.Errorf("failed to inspect container %s: %v", containerID, err)
-		}
-
-		if isManagedContainer(containerLabels(metadata)) {
-			return nil
-		}
-
-		return validationError("container %s is not managed by vllm-manager", containerID)
-	})
 }
 
 type managedVLLMContainer struct {
@@ -544,14 +526,23 @@ func GetManagedModelByContainerID(containerID string) (ActiveModel, bool, error)
 	if err != nil {
 		return ActiveModel{}, false, err
 	}
-	for _, vc := range containers {
-		if vc.id != containerID && !strings.HasPrefix(vc.id, containerID) && vc.name != containerID {
-			continue
-		}
-		model, ok := buildActiveModel(vc)
-		return model, ok, nil
+	vc, found := findManagedContainer(containers, containerID)
+	if !found {
+		return ActiveModel{}, false, nil
 	}
-	return ActiveModel{}, false, nil
+	model, ok := buildActiveModel(vc)
+	return model, ok, nil
+}
+
+// findManagedContainer locates a container in a snapshot by full ID, ID
+// prefix, or name.
+func findManagedContainer(containers []managedVLLMContainer, containerID string) (managedVLLMContainer, bool) {
+	for _, vc := range containers {
+		if vc.id == containerID || strings.HasPrefix(vc.id, containerID) || vc.name == containerID {
+			return vc, true
+		}
+	}
+	return managedVLLMContainer{}, false
 }
 
 func GetActiveModels(vllmAPIKey, hfCache string) ([]ActiveModel, error) {
@@ -1535,10 +1526,131 @@ func RemoveModel(containerID string) error {
 	})
 }
 
+// RestartModel restarts a managed container. Restarting a server container
+// re-acquires its GPUs, so it takes the global launch mutex and runs the same
+// GPU overlap preflight as StartModel against the other running containers
+// (the container's own allocation never counts against itself). A stopped
+// container additionally gets the VRAM fit check using its recorded launch
+// parameters; a running one skips it because its own allocation is still
+// reflected in the GPUs' free memory.
 func RestartModel(containerID string) error {
-	if err := ensureManagedContainer(containerID); err != nil {
+	containerID = strings.TrimSpace(strings.TrimPrefix(containerID, "/"))
+	if containerID == "" {
+		return validationError("container id is required")
+	}
+
+	launchMu.Lock()
+	defer launchMu.Unlock()
+
+	snapshot, err := snapshotManagedContainersFn()
+	if err != nil {
+		return fmt.Errorf("failed to inspect existing containers before restarting %s: %v", containerID, err)
+	}
+	target, ok := findManagedContainer(snapshot, containerID)
+	if !ok {
+		return validationError("container %s is not managed by vllm-manager", containerID)
+	}
+	if err := checkRestartGPUAvailability(snapshot, target); err != nil {
 		return err
 	}
+	return restartContainerFn(target.id)
+}
+
+// checkRestartGPUAvailability applies StartModel's GPU preflight to an
+// existing server container using the parameters it was launched with.
+// Download containers hold no GPUs and pass trivially.
+func checkRestartGPUAvailability(snapshot []managedVLLMContainer, target managedVLLMContainer) error {
+	model, ok := buildActiveModel(target)
+	if !ok {
+		return nil
+	}
+
+	others := make([]managedVLLMContainer, 0, len(snapshot))
+	for _, vc := range snapshot {
+		if vc.id != target.id {
+			others = append(others, vc)
+		}
+	}
+
+	totalGPUs := 0
+	if model.GPUIDs == "all" || model.GPUIDs == "" {
+		if tp, err := strconv.Atoi(model.GPUs); err != nil || tp <= 0 {
+			gpuList, err := RequireDetectedGPUs()
+			if err != nil {
+				return err
+			}
+			totalGPUs = len(gpuList)
+		}
+	}
+	gpuIDs := activeModelGPUIDs(model, totalGPUs)
+
+	memUtil := model.MemUtil
+	if _, err := parseGPUMemoryUtilization(memUtil); err != nil {
+		// Legacy containers without a recorded value run with vLLM's default.
+		memUtil = ""
+	}
+	utilization, err := parseGPUMemoryUtilization(memUtil)
+	if err != nil {
+		return err
+	}
+
+	if err := checkGPUOverlap(activeModelsFromContainers(others), gpuIDs, len(gpuIDs), utilization); err != nil {
+		return err
+	}
+
+	if strings.EqualFold(target.state, "running") {
+		return nil
+	}
+	return checkRestartVRAMFit(target, model, gpuIDs, memUtil)
+}
+
+// checkRestartVRAMFit runs CheckModelFitsInVRAM for a stopped container when
+// its Hugging Face cache mount and model files are still present. When they
+// are not, the check cannot be computed and the restart proceeds as before.
+func checkRestartVRAMFit(target managedVLLMContainer, model ActiveModel, gpuIDs []int, memUtil string) error {
+	hfCache := hfCacheFromContainer(target)
+	if hfCache == "" || len(gpuIDs) == 0 {
+		return nil
+	}
+	if _, err := os.Stat(modelCacheDir(hfCache, model.Model)); err != nil {
+		return nil
+	}
+
+	ids := make([]string, len(gpuIDs))
+	for i, id := range gpuIDs {
+		ids[i] = strconv.Itoa(id)
+	}
+	_, selectedGPUs, err := validateGPUSelection(len(gpuIDs), strings.Join(ids, ","))
+	if err != nil {
+		return err
+	}
+
+	maxLen := model.MaxLen
+	if maxLen == "default" {
+		maxLen = ""
+	}
+	cpuOffloadGB, err := normalizeCPUOffloadGB(model.CPUOffloadGB)
+	if err != nil {
+		cpuOffloadGB = 0
+	}
+	return CheckModelFitsInVRAM(model.Model, hfCache, selectedGPUs, len(selectedGPUs), model.ParallelismMode, memUtil, maxLen, model.KVCacheDType, cpuOffloadGB)
+}
+
+// hfCacheFromContainer returns the host Hugging Face cache path bound to
+// /hf_cache by startManagedServerContainer, or "" when absent.
+func hfCacheFromContainer(vc managedVLLMContainer) string {
+	if vc.metadata.HostConfig == nil {
+		return ""
+	}
+	for _, bind := range vc.metadata.HostConfig.Binds {
+		if host, ok := strings.CutSuffix(bind, ":/hf_cache"); ok {
+			return host
+		}
+	}
+	return ""
+}
+
+func restartManagedContainer(containerID string) error {
 	return withDockerClient(execTimeoutLong, func(ctx context.Context, cli *dockerclient.Client) error {
 		timeout := int(execTimeoutLong.Seconds())
 		logDockerAPI("container restart", containerID)

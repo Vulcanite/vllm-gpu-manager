@@ -537,24 +537,7 @@ func checkGPUOverlap(active []ActiveModel, requestedIDs []int, totalGPUs int, re
 			existingUtil = 1.0
 		}
 
-		var existingIDs []int
-		if m.GPUIDs == "all" || m.GPUIDs == "" {
-			tpSize, _ := strconv.Atoi(m.GPUs)
-			if tpSize <= 0 {
-				tpSize = totalGPUs
-			}
-			for i := 0; i < tpSize; i++ {
-				existingIDs = append(existingIDs, i)
-			}
-		} else {
-			for _, p := range strings.Split(m.GPUIDs, ",") {
-				if id, err := strconv.Atoi(strings.TrimSpace(p)); err == nil {
-					existingIDs = append(existingIDs, id)
-				}
-			}
-		}
-
-		for _, id := range existingIDs {
+		for _, id := range activeModelGPUIDs(m, totalGPUs) {
 			committedUtil[id] += existingUtil
 		}
 	}
@@ -582,6 +565,29 @@ func checkGPUOverlap(active []ActiveModel, requestedIDs []int, totalGPUs int, re
 		)
 	}
 	return nil
+}
+
+// activeModelGPUIDs returns the GPU IDs a server container is pinned to. A
+// container without explicit device IDs ("all") is assumed to occupy GPUs
+// 0..tp-1, falling back to totalGPUs when the parallel size is unknown.
+func activeModelGPUIDs(m ActiveModel, totalGPUs int) []int {
+	var ids []int
+	if m.GPUIDs == "all" || m.GPUIDs == "" {
+		tpSize, _ := strconv.Atoi(m.GPUs)
+		if tpSize <= 0 {
+			tpSize = totalGPUs
+		}
+		for i := 0; i < tpSize; i++ {
+			ids = append(ids, i)
+		}
+		return ids
+	}
+	for _, p := range strings.Split(m.GPUIDs, ",") {
+		if id, err := strconv.Atoi(strings.TrimSpace(p)); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func CheckModelFitsInVRAM(model string, hfCache string, selectedGPUs []GPUInfo, gpus int, parallelismMode string, memUtil string, maxLen string, kvCacheDType string, cpuOffloadGB int) error {

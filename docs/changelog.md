@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 - Concurrent launches of different models targeting the same GPU can no longer both pass the VRAM preflight; a process-wide launch mutex covers the Docker snapshot, port reservation, overlap check, and container start.
+- Restarting a stopped model (dashboard or `model restart`) now takes the launch mutex and runs the GPU overlap and VRAM fit checks against running containers, so it can no longer oversubscribe a GPU that another model claimed while it was stopped.
 - Proxy request counts are tracked in memory and flushed periodically instead of rewriting `settings.json` on every inference POST. Settings writes use a temp file plus `rename` so a crash cannot truncate tokens and keys.
 - The `/v1/` proxy bounds request-body buffering with `http.MaxBytesReader` (default 32 MiB, configurable via `proxy_max_body_bytes`).
 - Dashboard login issues a unique server-side session per login. Logout revokes that session. Failed logins are rate-limited per client IP.
