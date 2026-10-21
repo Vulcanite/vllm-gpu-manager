@@ -19,10 +19,10 @@ sidebar_position: 3
 When a client sends an inference request:
 
 1. **Authentication Check**: Validates the `Authorization: Bearer <proxy_key>` token against the `proxy_users` registry.
-2. **Model Extraction**: Inspects the JSON payload or query parameters to extract the requested model name.
+2. **Model Extraction**: Reads the `model` field from the JSON body of `POST` requests (bodies are capped by `proxy_max_body_bytes`, default 32 MiB). `GET /v1/models` is answered from the routing table; other requests without a routable model return `404`.
 3. **Route Resolution**: Looks up the internal container port from the dynamic routing table.
-4. **Header Rewriting**: Replaces the client's proxy key with the internal `VLLM_API_KEY` required by the target container.
-5. **Streaming Response**: Pipes chunked SSE token frames back to the client with sub-millisecond overhead.
+4. **Header Rewriting**: Replaces the client's proxy key with the API key the target container was launched with, or strips the header if it has none.
+5. **Streaming Response**: Forwards the response through Go's `httputil.ReverseProxy` with immediate flushing, so SSE token frames stream to the client as they arrive.
 
 ---
 

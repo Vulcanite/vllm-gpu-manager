@@ -44,7 +44,8 @@ graph LR
 - When `VLLM_MANAGER_PASSWORD` is configured, the web UI and all `/api/*` endpoints require an authenticated session.
 - Each login mints a unique 256-bit session token stored server-side with a 24-hour expiry. Logout deletes that token, so a stolen cookie cannot be reused after sign-out.
 - Login is rate-limited to five failed attempts per client IP per minute (`429 Too Many Requests`).
-- Session verification looks up the cookie against the in-memory session table. Passwords are never stored in plaintext on disk; in systemd installations, `service.env` is protected with `0640` permissions.
+- Session verification looks up the cookie against the in-memory session table. Sessions do not survive a dashboard restart.
+- The dashboard password is not hashed. In systemd installations it is stored in `/etc/vllm-manager/service.env` (mode `0640`); the `manager.sh` helper stores it in `.vllm-manager.state` (mode `0600`). Treat both files as secrets.
 
 ### Proxy Client Tokens
 - The `/v1/` OpenAI proxy gateway verifies `Authorization: Bearer <proxy_api_key>`.
@@ -52,14 +53,15 @@ graph LR
 
 ---
 
-## 3. Secret Redaction Engine
+## 3. Secret Redaction
 
-All console logs and persistent `audit.log` records pass through a centralized redaction engine ([`redactSensitive`](https://github.com/Vulcanite/vllm-gpu-manager/blob/master/http_helpers.go#L45)) that scrubs:
+Redaction is applied at specific points rather than to every log line:
 
-- Hugging Face access tokens (`HF_TOKEN=...`, `hf_token=...`)
-- vLLM API keys (`VLLM_API_KEY=...`, `--api-key ...`)
-- Dashboard passwords (`VLLM_MANAGER_PASSWORD=...`)
-- HTTP `Authorization: Bearer ...` headers
+- **API error logs** pass through [`redactSensitive`](https://github.com/Vulcanite/vllm-gpu-manager/blob/master/http_helpers.go#L45), which scrubs `HF_TOKEN=`, `hf_token=`, `VLLM_API_KEY=`, `VLLM_MANAGER_PASSWORD=`, `--api-key` values, and `-H "Authorization: ..."` arguments.
+- **Docker API operation logs** redact `HF_TOKEN=` environment values and `--api-key` arguments before logging container commands.
+- **Audit log parameters** drop keys that look like secrets (`*api_key*`, `token`, `*_token`, and similar) before the event is written to `audit.log` (mode `0600`).
+
+Free-form error text stored in audit events is not passed through `redactSensitive`.
 
 ---
 

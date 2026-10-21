@@ -150,20 +150,6 @@ async function run() {
 <span class="green">✔</span> Server started successfully. Streaming health check: <span class="green">HEALTHY (ready)</span>`;
   await renderTerminal(page, 'vllm-manager model start', 'vllm-manager model start Qwen/Qwen2.5-Coder-32B-Instruct --port 8080 --gpus 2 --kv-cache-dtype fp8', modelStartOutput, path.join(outputDir, '03-cli-model-start.png'));
 
-  // 4. Proxy Users
-  console.log('Rendering 04-cli-proxy-users.png...');
-  const proxyUsersOutput = `<span class="muted">+------------------+-----------------------------+---------------+</span>
-| <span class="cyan">USERNAME</span>         | <span class="cyan">API KEY (PREFIX)</span>            | <span class="cyan">REQUEST COUNT</span> |
-<span class="muted">+------------------+-----------------------------+---------------+</span>
-| cursor-ide       | vllm_proxy_a91b2c3d4e5f...  | <span class="green">1,420</span>         |
-| developer-alice  | vllm_proxy_7c8d9e0f1a2b...  | <span class="green">384</span>           |
-| analytics-batch  | vllm_proxy_3e4f5a6b7c8d...  | <span class="green">89</span>            |
-<span class="muted">+------------------+-----------------------------+---------------+</span>
-
-<span class="purple">OpenAI Proxy Endpoint:</span> http://localhost:9090/v1/chat/completions
-<span class="purple">Authentication:</span>        Authorization: Bearer &lt;proxy_api_key&gt;`;
-  await renderTerminal(page, 'vllm-manager proxy-users list', 'vllm-manager proxy-users list', proxyUsersOutput, path.join(outputDir, '04-cli-proxy-users.png'));
-
   await browser.close();
   console.log('CLI terminal screenshots generated successfully!');
 }

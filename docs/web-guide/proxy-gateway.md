@@ -34,7 +34,7 @@ The **Proxy Gateway** view provides administrative controls for the central Open
 
 ## Dynamic Routing Table
 
-The routing table maps model names and aliases to internal container ports:
+The routing table maps model names to internal container ports:
 
-- When an active model container starts, its model ID and `--served-model-name` alias are registered automatically.
-- Custom routing entries can be added to alias third-party model names (e.g. mapping `gpt-4o` to a local `Qwen2.5-Coder-32B` container).
+- When a model container starts in proxy mode, one route is registered automatically: its `--served-model-name` if set, otherwise its Hugging Face model ID.
+- Edited routes are validated against running containers. Each entry must use the routing name of the managed model listening on that port, so arbitrary aliases (for example `gpt-4o`) are rejected. Set `--served-model-name` at launch to expose a different name.

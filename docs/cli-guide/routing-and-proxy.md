@@ -5,55 +5,45 @@ sidebar_position: 4
 
 # Routing & Proxy User Management
 
-Manage API access keys and configure reverse proxy routes from the command line.
+The CLI does not manage proxy users or the routing table. There are no `proxy-users` or `routing` subcommands. Both are managed by the running dashboard, from the web console or its JSON API.
 
 ---
 
-## Listing Proxy Users (`proxy-users list`)
+## Proxy Users
+
+Create, reveal, and revoke proxy API keys on the **Proxy Gateway** page of the web console. See [Proxy Gateway](../web-guide/proxy-gateway.md).
+
+The same operations are available over the dashboard API (send the dashboard session cookie when `VLLM_MANAGER_PASSWORD` is set):
 
 ```bash
-vllm-manager proxy-users list
-```
+# List users and request counts
+curl http://localhost:9090/api/proxy-users
 
-<div className="screenshot-card">
-  <div className="screenshot-header">
-    <span>PROXY USERS &amp; REQUEST COUNTERS</span>
-    <span>vllm-manager proxy-users list</span>
-  </div>
-  <img src="/vllm-gpu-manager/img/screenshots/cli/04-cli-proxy-users.png" alt="vllm-manager proxy-users list output" />
-</div>
+# Create a user; the response contains the new API key
+curl -X POST http://localhost:9090/api/proxy-users \
+  -H "Content-Type: application/json" \
+  -d '{"username": "cursor-ide"}'
 
----
-
-## Creating & Revoking Proxy Users
-
-### Create a Proxy Key
-```bash
-vllm-manager proxy-users create cursor-ide
-```
-
-Output:
-```text
-Created proxy user cursor-ide
-API Key: vllm_proxy_a91b2c3d4e5f6g7h8i9j0k1l2m3n4o5p
-Keep this key secure; it will not be displayed again.
-```
-
-### Revoke a Proxy Key
-```bash
-vllm-manager proxy-users revoke cursor-ide
+# Revoke a user
+curl -X POST http://localhost:9090/api/proxy-users/revoke \
+  -H "Content-Type: application/json" \
+  -d '{"username": "cursor-ide"}'
 ```
 
 ---
 
-## Custom Route Aliases (`routing`)
+## Routing Table
 
-### Listing Routes
+Routes are added automatically when a model starts in proxy mode. To review or edit them, use the **Traffic Routing** page, or:
+
 ```bash
-vllm-manager routing list
+# Read the table
+curl http://localhost:9090/api/routing
+
+# Replace the table; each key must be the running model's served name (or model ID if none) on that port
+curl -X POST http://localhost:9090/api/routing \
+  -H "Content-Type: application/json" \
+  -d '{"Qwen/Qwen2.5-Coder-7B-Instruct": 8080}'
 ```
 
-### Setting a Model Route Alias
-```bash
-vllm-manager routing set gpt-4o 8080
-```
+`POST /api/routing` replaces the whole table, so include every route you want to keep.

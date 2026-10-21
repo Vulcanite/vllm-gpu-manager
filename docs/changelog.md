@@ -13,8 +13,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [1.1.0] - Unreleased
 
-Tag with `git tag v1.1.0 && git push origin v1.1.0` after this branch is merged. Release packaging (`.deb` / `.rpm`) is produced by the existing tag workflow.
-
 ### Fixed
 - Concurrent launches of different models targeting the same GPU can no longer both pass the VRAM preflight; a process-wide launch mutex covers the Docker snapshot, port reservation, overlap check, and container start.
 - Proxy request counts are tracked in memory and flushed periodically instead of rewriting `settings.json` on every inference POST. Settings writes use a temp file plus `rename` so a crash cannot truncate tokens and keys.

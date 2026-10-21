@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # CLI Overview & Headless Operations
 
-**vLLM GPU Manager** features a standalone Command Line Interface (CLI) built on Cobra. Every feature available in the web console can be executed directly from the terminal over SSH without running the web daemon.
+**vLLM GPU Manager** features a standalone Command Line Interface (CLI) built on Cobra. GPU inspection, model lifecycle, downloads, cache cleanup, settings, diagnostics, and service configuration all run directly from the terminal over SSH without the web daemon. Proxy users, the routing table, and container log streaming are managed from the dashboard.
 
 ---
 
@@ -16,8 +16,7 @@ graph TD
     Root[vllm-manager] --> GPU[gpu]
     Root --> Model[model]
     Root --> Cache[cache]
-    Root --> Proxy[proxy-users]
-    Root --> Routing[routing]
+    Root --> Settings[settings]
     Root --> Service[service]
     Root --> Doctor[doctor]
     Root --> Version[version]
@@ -29,9 +28,11 @@ graph TD
     Model --> ModelActive[model active]
     Model --> ModelCached[model cached]
     Model --> ModelDownload[model download]
-    Proxy --> ProxyList[proxy-users list]
-    Proxy --> ProxyCreate[proxy-users create]
-    Proxy --> ProxyRevoke[proxy-users revoke]
+    Model --> ModelRemove[model remove]
+    Cache --> CacheDelete[cache delete]
+    Settings --> SettingsGet[settings get]
+    Settings --> SettingsSet[settings set]
+    Service --> ServiceConfigure[service configure]
 ```
 
 ---

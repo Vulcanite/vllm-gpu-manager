@@ -25,7 +25,7 @@ Memory_per_GPU = (Model_Weights / Num_GPUs * 1.08) - CPU_Offload + KV_Cache_Tota
 ```
 
 ### 1. Model Weights Sizing
-The engine parses the local Hugging Face model directory (`snapshots/<commit>/`) and tallies all `.safetensors` or `.bin` file sizes:
+The engine measures the size of the model's local Hugging Face cache directory (`<hf_home>/hub/models--<org>--<name>/`). This counts every cached file, not only `.safetensors` or `.bin` weights, so it slightly overestimates when tokenizer or extra files are present. A model that is not in the cache cannot be launched.
 
 - **Multi-GPU Division**: Slices weights evenly across Tensor Parallel (TP) or Pipeline Parallel (PP) ranks.
 - **Safety Overhead (1.08x)**: Allocates an additional 8% buffer for non-parameter CUDA context overhead, PyTorch activation buffers, and temporary tensor buffers.
@@ -54,5 +54,5 @@ KV_Bytes_per_Token = 2 * Num_Layers * (Num_KV_Heads / Tensor_Parallel_Size) * He
 
 Before initiating container creation, the manager enforces two critical safety invariants:
 
-1. **Free Memory Floor**: The target GPU must possess at least &ge; 1.0 GiB of headroom beyond the computed weight and KV requirement.
+1. **Fit Checks**: On every selected GPU, the weights must fit in currently free memory, weights plus KV cache must fit in both currently free memory and the `total × gpu_memory_utilization` budget, and at least 1 GiB of that budget must remain for KV cache after the weights.
 2. **Multi-Container Overlap Guard**: The sum of `gpu_memory_utilization` across all active containers mapped to the same physical GPU device cannot exceed `1.0`.

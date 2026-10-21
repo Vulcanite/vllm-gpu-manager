@@ -21,14 +21,14 @@ vllm-manager model start <model-id> [flags]
 
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `--port` | Integer | `8080` | Port for the serving container. |
-| `--gpus` | Integer | `1` | Number of GPUs to allocate (tensor parallel size by default). |
-| `--gpu-ids` | String | `all` | Specific GPU IDs to pin (e.g. `0,1`). |
+| `--port` | Integer | Required | Port for the serving container. |
+| `--gpus` | Integer | Required | Number of GPUs to allocate (tensor parallel size by default). |
+| `--gpu-ids` | String | First *N* GPUs | Specific GPU IDs to pin (e.g. `0,1`). |
 | `--mem-util` | Float | `0.9` | Fraction of GPU memory allocated to vLLM (`0.1` to `1.0`). |
 | `--max-len` | Integer | Auto | Maximum context length in tokens (capped by model limits). |
-| `--max-num-seqs` | Integer | `256` | Maximum number of concurrent sequences in a batch. |
-| `--dtype` | String | `auto` | Model weight data type (`auto`, `bfloat16`, `float16`). |
-| `--served-model-name`| String | None | Custom alias returned by `/v1/models` and used for proxy routing. |
+| `--max-num-seqs` | Integer | vLLM default | Maximum number of concurrent sequences in a batch. |
+| `--dtype` | String | `auto` | Model weight data type (`auto`, `bfloat16`, `float16`, `float32`). |
+| Served model name | String | None | Web console and API only (no CLI flag). Custom alias returned by `/v1/models` and used for proxy routing. |
 
 ---
 

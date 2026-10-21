@@ -99,10 +99,7 @@ Open your browser at `http://<your-server-ip>:9090` to view real-time GPU teleme
 
 The dashboard includes a built-in reverse proxy gateway on `/v1/`.
 
-1. Generate a Proxy API key via the web console (**Proxy Gateway** page) or CLI:
-   ```bash
-   vllm-manager proxy-users create developer-alice
-   ```
+1. Generate a proxy API key on the web console's **Proxy Gateway** page (or `POST /api/proxy-users` with `{"username": "developer-alice"}`).
 2. Send an OpenAI-compatible chat completion request:
 
 ```bash

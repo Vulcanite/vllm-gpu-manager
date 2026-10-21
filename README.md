@@ -99,7 +99,7 @@ The optional Alpine helper image is not a prerequisite. The manager pulls it aut
 
 ## Installation
 
-GitHub Releases provide portable Linux binaries and Debian packages for AMD64 and ARM64. A Debian install places the binary and runtime files at:
+GitHub Releases provide portable Linux binaries plus Debian and RPM packages for AMD64 and ARM64. A package install places the binary and runtime files at:
 
 ```text
 /usr/bin/vllm-manager
@@ -133,7 +133,7 @@ The source installer builds and tests the project, installs the systemd unit, cr
 
 ## Release
 
-Pushing a version tag that starts with `v` creates a GitHub Release and uploads portable Linux AMD64/ARM64 binaries, AMD64/ARM64 Debian packages, license files, and `SHA256SUMS`.
+Pushing a version tag that starts with `v` creates a GitHub Release and uploads portable Linux AMD64/ARM64 binaries, AMD64/ARM64 Debian and RPM packages, license files, and `SHA256SUMS`.
 
 ```bash
 git tag v0.1.0
@@ -147,6 +147,8 @@ vllm-manager-<tag>-linux-amd64
 vllm-manager-<tag>-linux-arm64
 vllm-manager_<version>_amd64.deb
 vllm-manager_<version>_arm64.deb
+vllm-manager-<version>-1.amd64.rpm
+vllm-manager-<version>-1.arm64.rpm
 SHA256SUMS
 ```
 
@@ -298,7 +300,7 @@ Portable/source runs store settings in `settings.json` under the current working
 
 `server_api_keys` stores optional per-container API key overrides for containers launched outside proxy mode. The keys are indexed by managed container name and are not used as proxy client keys.
 
-`enable_cuda_compatibility` sets `VLLM_ENABLE_CUDA_COMPATIBILITY=1` on newly created serving containers. `hf_hub_offline` sets `HF_HUB_OFFLINE=1` on newly created serving containers and should only be enabled after required models are cached locally. `vllm_image` is optional and specifies the Docker image name and tag used to run serving containers and model downloads (defaults to `vllm/vllm-openai:v0.23.0`). When set online, it verifies the tag exists on Docker Hub. Existing containers keep their original environment/image; recreate a container to apply changed settings.
+`enable_cuda_compatibility` sets `VLLM_ENABLE_CUDA_COMPATIBILITY=1` on newly created serving containers. `hf_hub_offline` sets `HF_HUB_OFFLINE=1` on newly created serving containers and should only be enabled after required models are cached locally. `vllm_image` is optional and specifies the Docker image name and tag used to run serving containers and model downloads (defaults to `vllm/vllm-openai:v0.23.0`). For `vllm/vllm-openai` images, saving the setting checks that the tag exists on Docker Hub when Docker Hub is reachable; other images are only checked for a valid reference format. Existing containers keep their original environment/image; recreate a container to apply changed settings.
 
 `server_bind_ip` is the default host IP for direct serving containers outside proxy mode. It must be a valid IPv4 or IPv6 address assigned to the server, or a wildcard/loopback address. In proxy mode, serving containers are always bound to `127.0.0.1`.
 

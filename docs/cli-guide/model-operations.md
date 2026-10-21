@@ -29,13 +29,15 @@ vllm-manager model start Qwen/Qwen2.5-Coder-32B-Instruct \
 </div>
 
 ### Key Flags
-- `--port <int>`: Container published port on `127.0.0.1`.
+- `--port <int>`: Host port to publish. CLI launches are direct (non-proxy) containers bound to `server_bind_ip` (default `0.0.0.0`) unless `--bind-ip` is given.
 - `--gpus <int>`: Number of GPUs to allocate.
 - `--gpu-ids <string>`: Explicit GPU devices to pin (e.g. `0,1`).
-- `--kv-cache-dtype <string>`: KV cache quantization (`auto`, `fp8`).
-- `--max-model-len <int>`: Max context token ceiling.
-- `--gpu-memory-utilization <float>`: Memory fraction budget (default `0.90`).
-- `--served-model-name <string>`: Friendly model alias for OpenAI API clients.
+- `--kv-cache-dtype <string>`: KV cache quantization (`auto`, `fp8`, `fp8_e4m3`, `fp8_e5m2`).
+- `--max-len <int>`: Max context length passed as `--max-model-len`.
+- `--mem-util <float>`: Memory fraction passed as `--gpu-memory-utilization` (default `0.9`).
+- `--parallelism <tensor|pipeline>`: Multi-GPU mode (default `tensor`).
+
+`--served-model-name` is not a CLI flag; set it from the web console's Deploy Server dialog.
 
 ---
 
@@ -48,12 +50,13 @@ vllm-manager model active
 
 ### Stopping a Model
 ```bash
-vllm-manager model stop vllm-Qwen2.5-Coder-32B-Instruct-8080
+vllm-manager model stop --port 8080
 ```
 
 ### Restarting a Model
 ```bash
-vllm-manager model restart vllm-Qwen2.5-Coder-32B-Instruct-8080
+# Container ID from `vllm-manager model active`
+vllm-manager model restart --container-id <container-id>
 ```
 
 ### Downloading a Model in the Background

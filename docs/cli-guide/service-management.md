@@ -17,28 +17,35 @@ Configure `/etc/vllm-manager/service.env` interactively:
 sudo vllm-manager service configure
 ```
 
-This prompts for:
-- Dashboard port and bind address.
-- Hugging Face cache root directory.
-- Hugging Face access token (`HF_TOKEN`).
-- Global downstream vLLM API key (`VLLM_API_KEY`).
-- Dashboard UI authentication password (`DASHBOARD_PASSWORD`).
-- HTTPS TLS certificates (if enabled).
+Run without flags on a terminal, it prompts for:
+- Dashboard bind host and port.
+- HTTPS on/off (a self-signed certificate is generated on first TLS start).
+- Proxy gateway on/off.
+- Monitoring target sync on/off, and the targets file path.
+- Dashboard password (`VLLM_MANAGER_PASSWORD`; blank keeps the current value).
+
+The Hugging Face cache, Hugging Face token, and vLLM API key are not service settings. Set them with `sudo vllm-manager settings set` or from the web console.
 
 ---
 
 ## Non-Interactive Configuration via Flags
 
-Automate deployment in cloud-init or Ansible:
+Passing any flag skips the prompts, which suits cloud-init or Ansible:
 
 ```bash
-sudo vllm-manager service configure --non-interactive \
+sudo vllm-manager service configure \
+  --host 0.0.0.0 \
+  --port 9090 \
+  --https \
+  --proxy=true \
+  --password-file /root/vllm-manager-password
+
+sudo vllm-manager settings set \
   --hf-cache /var/lib/vllm-manager/.cache/huggingface \
-  --hf-token "hf_xxx..." \
-  --vllm-api-key "vllm_internal_secret..." \
-  --dashboard-port 9090 \
-  --dashboard-password "admin_password"
+  --hf-token "hf_..."
 ```
+
+Other flags: `--monitoring[=false]`, `--monitoring-targets-file <path>`, `--clear-password`, and `--no-restart`. An active service is restarted after a change unless `--no-restart` is given.
 
 ---
 
