@@ -29,6 +29,8 @@ Open your browser at `http://<your-server-ip>:9090` (or `https://...` if `--http
   <img src="/vllm-gpu-manager/img/screenshots/web/01-dashboard-overview.png" alt="vLLM GPU Manager Dashboard Overview" />
 </div>
 
+_Screenshot from a demo build with sample GPU data._
+
 ---
 
 ## Core Sections & Capabilities

@@ -21,6 +21,8 @@ The **Proxy Gateway** view provides administrative controls for the central Open
   <img src="/vllm-gpu-manager/img/screenshots/web/05-proxy-gateway-users.png" alt="Proxy Gateway and User Keys" />
 </div>
 
+_Screenshot from a demo build with sample GPU data._
+
 ---
 
 ## Creating & Revoking Proxy API Keys

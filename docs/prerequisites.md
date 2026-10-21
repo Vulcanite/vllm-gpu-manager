@@ -94,3 +94,5 @@ vllm-manager doctor
   </div>
   <img src="/vllm-gpu-manager/img/screenshots/cli/02-cli-doctor.png" alt="vllm-manager doctor output" />
 </div>
+
+_Illustrative mock-up rendered from sample data. Real `vllm-manager` output differs in layout and wording._

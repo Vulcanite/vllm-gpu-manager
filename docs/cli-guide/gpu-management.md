@@ -25,6 +25,8 @@ vllm-manager gpu list
   <img src="/vllm-gpu-manager/img/screenshots/cli/01-cli-gpu-list.png" alt="vllm-manager gpu list output" />
 </div>
 
+_Illustrative mock-up rendered from sample data. Real `vllm-manager` output differs in layout and wording._
+
 ---
 
 ## Host Health Diagnostics (`doctor`)
@@ -42,6 +44,8 @@ vllm-manager doctor
   </div>
   <img src="/vllm-gpu-manager/img/screenshots/cli/02-cli-doctor.png" alt="vllm-manager doctor output" />
 </div>
+
+_Illustrative mock-up rendered from sample data. Real `vllm-manager` output differs in layout and wording._
 
 The doctor diagnostic verifies:
 1. `nvidia-smi` presence and driver version.

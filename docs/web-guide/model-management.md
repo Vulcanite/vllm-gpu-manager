@@ -21,6 +21,8 @@ The **Active Models** view displays all currently running serving containers:
   <img src="/vllm-gpu-manager/img/screenshots/web/03-active-models-and-logs.png" alt="Active Model Servers" />
 </div>
 
+_Screenshot from a demo build with sample GPU data._
+
 ### Container Lifecycle Actions
 - **Restart Container**: Triggers Docker restart preserving the original command, port bindings, and volume mounts.
 - **Stop Container**: Sends graceful `SIGTERM` to the container and unpublishes the port.

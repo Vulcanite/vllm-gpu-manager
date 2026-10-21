@@ -21,6 +21,8 @@ The **Cache** tab displays all downloaded model directories in the Hugging Face 
   <img src="/vllm-gpu-manager/img/screenshots/web/04-huggingface-cache-browser.png" alt="Hugging Face Cache Browser" />
 </div>
 
+_Screenshot from a demo build with sample GPU data._
+
 ---
 
 ## Background Download Containers

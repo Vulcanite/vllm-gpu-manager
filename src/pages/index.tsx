@@ -115,6 +115,13 @@ function Homepage(): ReactNode {
                 {activeTab === 'proxy' && (
                   <img src={proxyImg} alt="OpenAI Reverse Proxy Architecture" className={styles.showcaseImage} />
                 )}
+                {(activeTab === 'web' || activeTab === 'cli') && (
+                  <p style={{ margin: '0.5rem 0 0', fontSize: '0.75rem', color: 'var(--site-muted)', fontFamily: 'var(--site-mono)' }}>
+                    {activeTab === 'web'
+                      ? 'Screenshot from a demo build with sample GPU data.'
+                      : 'Illustrative mock-up rendered from sample data. Real CLI output differs in layout and wording.'}
+                  </p>
+                )}
               </div>
             </div>
           </div>

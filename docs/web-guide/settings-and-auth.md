@@ -21,6 +21,8 @@ The **Settings** view displays current system configuration, host RAM, and cache
   <img src="/vllm-gpu-manager/img/screenshots/web/06-settings-configuration.png" alt="Settings Configuration" />
 </div>
 
+_Screenshot from a demo build with sample GPU data._
+
 ---
 
 ## Configurable Options

@@ -21,6 +21,8 @@ Click the **Deploy Model** button on the dashboard to open the interactive deplo
   <img src="/vllm-gpu-manager/img/screenshots/web/02-deploy-server-modal.png" alt="Deploy Model Modal" />
 </div>
 
+_Screenshot from a demo build with sample GPU data._
+
 ---
 
 ## Interactive VRAM Preflight Meter

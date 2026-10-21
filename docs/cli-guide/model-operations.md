@@ -28,6 +28,8 @@ vllm-manager model start Qwen/Qwen2.5-Coder-32B-Instruct \
   <img src="/vllm-gpu-manager/img/screenshots/cli/03-cli-model-start.png" alt="vllm-manager model start output" />
 </div>
 
+_Illustrative mock-up rendered from sample data. Real `vllm-manager` output differs in layout and wording._
+
 ### Key Flags
 - `--port <int>`: Host port to publish. CLI launches are direct (non-proxy) containers bound to `server_bind_ip` (default `0.0.0.0`) unless `--bind-ip` is given.
 - `--gpus <int>`: Number of GPUs to allocate.
