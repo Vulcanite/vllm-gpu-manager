@@ -6,6 +6,8 @@ This project is intentionally small. It is not a cluster scheduler, model platfo
 
 Full documentation, including CLI/web guides, architecture, and the security model, is available at [vulcanite.github.io/vllm-gpu-manager](https://vulcanite.github.io/vllm-gpu-manager/).
 
+Read [the story behind this project](https://amishtp.tech/blog/vllm-gpu-manager).
+
 ## Features
 
 - **NVIDIA GPU monitoring:** Reads GPU memory and utilization from `nvidia-smi`.
