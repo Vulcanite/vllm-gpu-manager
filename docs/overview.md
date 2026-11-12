@@ -7,6 +7,8 @@ sidebar_position: 1
 
 **vLLM GPU Manager** is an enterprise-grade operations console and OpenAI reverse proxy engineered specifically for managing **vLLM** instances across single-node NVIDIA GPU servers.
 
+Read [the story behind this project](https://amishtp.tech/blog/vllm-gpu-manager).
+
 <div className="diagram-container">
   <img src="/vllm-gpu-manager/img/diagrams/system-architecture.png" alt="vLLM GPU Manager System Architecture & Dataflow" />
   <div className="diagram-caption">Figure 1: Full-stack architecture, gateway proxy routing, and Docker engine controller.</div>
