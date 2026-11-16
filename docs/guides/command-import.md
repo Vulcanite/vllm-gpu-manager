@@ -36,7 +36,7 @@ docker run --gpus '"device=0,1"' \
 
 ## Security & Flag Filtering Rules
 
-To prevent container escape vulnerabilities or configuration drift, the parser applies strict rules:
+The parser sorts every flag it sees into one of four groups. These rules come from `api/command_import.go`.
 
 ```mermaid
 graph TD
@@ -45,22 +45,32 @@ graph TD
     C1 -->|Managed Parameters| Form[Populate Standard Form Fields]
     C1 -->|Allowed Extra vLLM Args| Extra[Pass to Extra Args List]
     C1 -->|Ignored Docker Setup Flags| Ignore[Discard -d, -v, --name, --rm]
-    C1 -->|Blocked / Dangerous Flags| Block[Reject --privileged, --mount, --device]
+    C1 -->|Blocked Docker Flags| Block[Drop with a warning: --privileged, --mount, --device, ...]
 ```
 
 ### 1. Managed Parameters
 Flags mapped directly to form controls:
-`--model`, `--served-model-name`, `--port`, `--tensor-parallel-size`, `--pipeline-parallel-size`, `--gpu-memory-utilization`, `--max-model-len`, `--max-num-seqs`, `--cpu-offload-gb`, `--dtype`, `--kv-cache-dtype`, `--tool-call-parser`, `--tokenizer-mode`, `--reasoning-parser`, `--moe-backend`, `--speculative-config`, `--trust-remote-code`, `--enable-expert-parallel`.
+`--model`, `--served-model-name`, `--port`, `--tensor-parallel-size`, `--pipeline-parallel-size`, `--gpu-memory-utilization`, `--max-model-len`, `--max-num-seqs`, `--cpu-offload-gb`, `--dtype`, `--kv-cache-dtype`, `--tool-call-parser`, `--tokenizer-mode`, `--reasoning-parser`, `--moe-backend`, `--speculative-config`, `--trust-remote-code`, `--enable-expert-parallel`, `--enable-prefix-caching`, `--no-enable-prefix-caching`.
+
+These are recognised but ignored, because the manager owns them: `--host`, `--api-key` (with a warning), `--enable-auto-tool-choice` and `--disable-frontend-multiprocessing`.
 
 ### 2. Allowed Extra vLLM Flags
-Safe runtime tuning flags preserved in `extra_vllm_args`:
-- `--chat-template`, `--chat-template-content-format`, `--response-role`
-- `--max-num-batched-tokens`, `--max-num-partial-prefills`, `--max-seq-len-to-capture`, `--max-logprobs`
-- `--enable-chunked-prefill`, `--enable-prompt-embeds`, `--enforce-eager`
-- `--disable-log-requests`, `--disable-log-stats`
-- `--guided-decoding-backend`, `--rope-scaling`, `--rope-theta`
-- `--block-size`, `--swap-space`, `--scheduler-delay-factor`
+Flags without a dedicated form field are kept in `extra_vllm_args` only if they are on this allowlist of 29. Anything else is reported as unsupported and is not imported.
 
-### 3. Blocked Dangerous Flags
-Flags that attempt to modify container capabilities or networking are stripped and surfaced as warnings:
-- `--privileged`, `--network`, `--entrypoint`, `--mount`, `--cap-add`, `--device`, `--security-opt`
+- With a value: `--max-num-batched-tokens`, `--max-num-partial-prefills`, `--max-long-partial-prefills`, `--long-prefill-token-threshold`, `--max-seq-len-to-capture`, `--max-logprobs`, `--chat-template`, `--chat-template-content-format`, `--response-role`, `--generation-config`, `--guided-decoding-backend`, `--rope-scaling`, `--rope-theta`, `--limit-mm-per-prompt`, `--mm-processor-kwargs`, `--scheduler-delay-factor`, `--swap-space`, `--compilation-config`, `--override-generation-config`, `--override-pooler-config`, `--hf-overrides`, `--block-size`
+- Without a value: `--disable-log-requests`, `--disable-log-stats`, `--enable-chunked-prefill`, `--enable-prompt-embeds`, `--enforce-eager`, `--language-model-only`, `--no-enable-flashinfer-autotune`
+
+The allowlist is enforced again when a model launches, so extra arguments sent straight to the API are checked the same way as imported ones. A flag that the manager already owns, or one that is not on the list, is rejected.
+
+### 3. Docker Flags
+Flags that would change what the container is allowed to do are not imported. Each one is listed as unsupported, with a warning that the manager owns the Docker security settings:
+
+`--privileged`, `--network`, `--entrypoint`, `--mount`, `--cap-add`, `--device`, `--pid`, `--user`, `--security-opt`, `--restart`
+
+Other Docker flags are handled as follows:
+
+- `--gpus` and `-p` / `--publish` are read, to fill in the GPU selection and the port.
+- `-v` / `--volume` is ignored with a warning, because the manager uses its configured Hugging Face cache.
+- `-e` / `--env` is not imported (a warning is shown), except `HF_HOME`, which is ignored without one.
+- Setup flags such as `-d`, `--rm`, `--name`, `--ipc` and `--shm-size` are ignored.
+- Any other flag is reported as unsupported.
