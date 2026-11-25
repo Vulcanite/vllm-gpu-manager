@@ -14,6 +14,8 @@ MONITORING=""
 MONITORING_SET=0
 MONITORING_TARGETS_FILE=""
 MONITORING_TARGETS_FILE_SET=0
+INSECURE_NO_AUTH=""
+INSECURE_NO_AUTH_SET=0
 
 ARGS_INPUT=("${@:2}")
 for ((i = 0; i < ${#ARGS_INPUT[@]}; i++)); do
@@ -44,6 +46,10 @@ for ((i = 0; i < ${#ARGS_INPUT[@]}; i++)); do
             HTTPS=1
             HTTPS_SET=1
             ;;
+        --insecure-no-auth)
+            INSECURE_NO_AUTH=1
+            INSECURE_NO_AUTH_SET=1
+            ;;
         --monitoring)
             MONITORING=1
             MONITORING_SET=1
@@ -69,6 +75,11 @@ for ((i = 0; i < ${#ARGS_INPUT[@]}; i++)); do
             fi
             MONITORING_TARGETS_FILE_SET=1
             ;;
+        --*)
+            # Unknown options must not fall through and become the password.
+            echo "Error: unknown option: $ARG"
+            exit 1
+            ;;
         *)
             if [ "$PORT_SET" -eq 0 ] && [[ "$ARG" =~ ^[0-9]+$ ]]; then
                 PORT=$ARG
@@ -93,6 +104,7 @@ load_state_for_restart() {
     local saved_https=""
     local saved_monitoring=""
     local saved_monitoring_targets_file=""
+    local saved_insecure_no_auth=""
     local saved_password=""
     while IFS='=' read -r key value; do
         case "$key" in
@@ -122,6 +134,11 @@ load_state_for_restart() {
             MONITORING_TARGETS_FILE)
                 saved_monitoring_targets_file="$value"
                 ;;
+            INSECURE_NO_AUTH)
+                if [ "$value" = "1" ]; then
+                    saved_insecure_no_auth=1
+                fi
+                ;;
             PASSWORD)
                 saved_password="$value"
                 ;;
@@ -146,6 +163,9 @@ load_state_for_restart() {
     if [ "$MONITORING_TARGETS_FILE_SET" -eq 0 ] && [ -n "$saved_monitoring_targets_file" ]; then
         MONITORING_TARGETS_FILE="$saved_monitoring_targets_file"
     fi
+    if [ "$INSECURE_NO_AUTH_SET" -eq 0 ]; then
+        INSECURE_NO_AUTH="$saved_insecure_no_auth"
+    fi
     if [ -z "$PASSWORD" ] && [ -n "$saved_password" ]; then
         PASSWORD="$saved_password"
     fi
@@ -157,6 +177,7 @@ save_state() {
     local monitoring_value="$3"
     local monitoring_targets_file_value="$4"
     local password_value="$5"
+    local insecure_no_auth_value="$6"
     {
         echo "PORT=$PORT"
         echo "HOST=$HOST"
@@ -165,6 +186,7 @@ save_state() {
         echo "MONITORING=$monitoring_value"
         echo "MONITORING_TARGETS_FILE=$monitoring_targets_file_value"
         echo "PASSWORD=$password_value"
+        echo "INSECURE_NO_AUTH=$insecure_no_auth_value"
     } > "$STATE_FILE"
     chmod 600 "$STATE_FILE"
 }
@@ -217,8 +239,14 @@ case "$1" in
             ARGS+=(--monitoring-targets-file "$ACTIVE_MONITORING_TARGETS_FILE")
             echo "Monitoring targets file: $ACTIVE_MONITORING_TARGETS_FILE"
         fi
+        INSECURE_NO_AUTH_ENABLED=""
+        if [ -n "$INSECURE_NO_AUTH" ] || [ "$VLLM_MANAGER_INSECURE_NO_AUTH" = "1" ] || [ "$VLLM_MANAGER_INSECURE_NO_AUTH" = "true" ]; then
+            ARGS+=(--insecure-no-auth)
+            INSECURE_NO_AUTH_ENABLED=1
+            echo "WARNING: --insecure-no-auth set; a non-loopback dashboard will run without a password."
+        fi
 
-        save_state "${NO_PROXY_ENABLED:-0}" "${HTTPS_ENABLED:-0}" "${MONITORING_ENABLED:-0}" "$ACTIVE_MONITORING_TARGETS_FILE" "$ACTIVE_PASSWORD"
+        save_state "${NO_PROXY_ENABLED:-0}" "${HTTPS_ENABLED:-0}" "${MONITORING_ENABLED:-0}" "$ACTIVE_MONITORING_TARGETS_FILE" "$ACTIVE_PASSWORD" "${INSECURE_NO_AUTH_ENABLED:-0}"
         DISPLAY_HOST="${HOST:-127.0.0.1}"
         SCHEME="http"
         if [ -n "$HTTPS_ENABLED" ]; then
@@ -226,6 +254,15 @@ case "$1" in
         fi
         echo "Starting vllm-manager on $DISPLAY_HOST:$PORT in the background..."
         nohup ./vllm-manager "${ARGS[@]}" > vllm-manager.log 2>&1 &
+        DASHBOARD_PID=$!
+        # The binary exits at once on a refused setup (for example a
+        # non-loopback host without a password); report that instead of "Done".
+        sleep 1
+        if ! kill -0 "$DASHBOARD_PID" 2>/dev/null; then
+            echo "Error: vllm-manager exited during startup:"
+            tail -n 5 vllm-manager.log
+            exit 1
+        fi
         echo "Done! Server is running at $SCHEME://$DISPLAY_HOST:$PORT"
         echo "Logs: tail -f vllm-manager.log"
         ;;
@@ -274,10 +311,13 @@ case "$1" in
         if [ -n "$MONITORING_TARGETS_FILE" ]; then
             RESTART_ARGS+=(--monitoring-targets-file "$MONITORING_TARGETS_FILE")
         fi
+        if [ -n "$INSECURE_NO_AUTH" ]; then
+            RESTART_ARGS+=(--insecure-no-auth)
+        fi
         "$0" "${RESTART_ARGS[@]}"
         ;;
     *)
-        echo "Usage: $0 {start|stop|status|restart} [port] [password] [--host <ip>] [--no-proxy] [--https] [--monitoring] [--monitoring-targets-file <path>]"
+        echo "Usage: $0 {start|stop|status|restart} [port] [password] [--host <ip>] [--no-proxy] [--https] [--monitoring] [--monitoring-targets-file <path>] [--insecure-no-auth]"
         echo "  [port] defaults to 9090."
         echo "  [password] is optional and secures the dashboard."
         echo "  --host sets the dashboard bind IP, defaulting to the binary default."
@@ -285,6 +325,7 @@ case "$1" in
         echo "  --https enables self-signed HTTPS on the dashboard port."
         echo "  --monitoring syncs running vLLM servers into the Prometheus file-SD targets file."
         echo "  --monitoring-targets-file sets the Prometheus file-SD path; portable binary default is monitoring/vllm-targets.yml."
+        echo "  --insecure-no-auth allows a non-loopback --host without a password (anyone who reaches it controls Docker)."
         exit 1
         ;;
 esac
