@@ -1,18 +1,18 @@
 ---
-title: Command Import & Recipe Parsing
-sidebar_position: 8
+title: Command import
+sidebar_position: 7
 ---
 
-# Command Import & Recipe Parsing
+# Command import
 
-vLLM GPU Manager includes an intelligent parser that converts arbitrary `docker run ...` or `vllm serve ...` commands into structured parameters.
+Paste a `docker run ...` or `vllm serve ...` command you already use, and the dashboard fills in the deploy form from it. Flags the manager does not support, or that would loosen container security, are not imported.
 
 ---
 
-## Using the Import Modal
+## Import a command
 
-1. Open the web console and click the **Import Command Recipe** button at the top of the **Deploy Server** card.
-2. Paste any shell command recipe:
+1. On **Models**, click **Import Command** on the **Deploy Server** card.
+2. Paste the command:
 
 ```bash
 docker run --gpus '"device=0,1"' \
@@ -30,11 +30,11 @@ docker run --gpus '"device=0,1"' \
   --chat-template /opt/template.jinja
 ```
 
-3. Click **Import into Form**. The parser populates the standard deploy inputs, separates manager-owned flags, and attaches allowed extra parameters to the launch request.
+3. Click **Import Command**. The form is filled in, and a review lists every flag that was ignored or rejected and why.
 
 ---
 
-## Security & Flag Filtering Rules
+## What gets imported
 
 The parser sorts every flag it sees into one of four groups. These rules come from `api/command_import.go`.
 

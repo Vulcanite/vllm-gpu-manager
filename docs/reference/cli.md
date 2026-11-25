@@ -1,11 +1,12 @@
 ---
 title: CLI Reference
+sidebar_label: CLI
 sidebar_position: 1
 ---
 
 # CLI Reference
 
-Comprehensive reference for all `vllm-manager` command-line commands and flags.
+Every `vllm-manager` command and flag. Run any command with `--help` for the exact list in your version.
 
 ---
 
@@ -13,15 +14,27 @@ Comprehensive reference for all `vllm-manager` command-line commands and flags.
 
 | Flag | Type | Description |
 | :--- | :--- | :--- |
-| `--json` | Boolean | Output results in JSON format for automation and scripts. |
-| `-h`, `--help` | Boolean | Display command help and usage syntax. |
-| `--dashboard` | Boolean | Run the web dashboard and REST API daemon. |
+| `--json` | Boolean | Output results as JSON (see [Scripting with JSON](#scripting-with-json)). |
+| `-h`, `--help` | Boolean | Show help for a command. |
+| `--dashboard` | Boolean | Run the web dashboard and API. |
 | `--port` | String | Port to run the dashboard on (default `9090`). |
 | `--host` | String | Host IP to bind dashboard on (default `127.0.0.1`). |
 | `--https` | Boolean | Enable HTTPS with local self-signed TLS certificates. |
 | `--no-proxy` | Boolean | Disable the OpenAI-compatible proxy gateway on `/v1/`. |
 | `--insecure-no-auth` | Boolean | Allow a non-loopback `--host` without `VLLM_MANAGER_PASSWORD`. Anyone who can reach the port controls Docker. |
 | `--monitoring`| Boolean | Sync active model servers into Prometheus file-SD target file. |
+
+---
+
+## Dashboard flags
+
+These start the web dashboard instead of running a command:
+
+```bash
+vllm-manager --dashboard [--host <ip>] [--port <port>] [--https] [--no-proxy] [--monitoring] [--insecure-no-auth]
+```
+
+Lifecycle commands (`model start/stop/restart/remove`, `cache delete`, `settings set`) refuse to run while the dashboard is running, so two processes do not change the same state. Pass `--force` to run them anyway.
 
 ---
 
@@ -52,8 +65,15 @@ List downloaded models in the Hugging Face cache:
 vllm-manager model cached [--json]
 ```
 
+### `model info`
+Fetch a model's size, downloads and likes from Hugging Face, and whether it is cached:
+
+```bash
+vllm-manager model info <model-id> [--json]
+```
+
 ### `model download`
-Start a background download container:
+Start a background download container (see [Download & cache models](../guides/downloads.md)):
 
 ```bash
 vllm-manager model download <model-id>
@@ -159,7 +179,7 @@ vllm-manager settings set \
 
 ## Proxy Users & Routing
 
-There are no `proxy-users` or `routing` CLI commands. Proxy API keys and the routing table are managed from the web console (**Proxy Gateway** and **Traffic Routing** pages) or through `/api/proxy-users` and `/api/routing`. See the [API reference](./api.md).
+There are no `proxy-users` or `routing` CLI commands. Manage them on the dashboard's **Proxy Gateway** page or through `/api/proxy-users` and `/api/routing`. See [Proxy & routing](../guides/proxy.md).
 
 ---
 
@@ -173,7 +193,7 @@ vllm-manager doctor [--json]
 ```
 
 ### `service configure`
-Atomically update `/etc/vllm-manager/service.env` settings:
+Update `/etc/vllm-manager/service.env` (see [Run as a service](../guides/service.md)):
 
 ```bash
 vllm-manager service configure \
@@ -184,6 +204,7 @@ vllm-manager service configure \
   [--monitoring[=true|false]] \
   [--password-file <path>] \
   [--clear-password] \
+  [--insecure-no-auth] \
   [--no-restart]
 ```
 
@@ -192,4 +213,44 @@ Print version and build information:
 
 ```bash
 vllm-manager version
+```
+
+---
+
+## Scripting with JSON
+
+Listing and inspection commands accept `--json`. Example output (sample data):
+
+```bash
+vllm-manager gpu list --json
+```
+
+```json
+[
+  {
+    "id": 0,
+    "name": "NVIDIA H100 80GB HBM3",
+    "memory_total": 85899345920,
+    "memory_used": 36700160000,
+    "memory_free": 49199185920,
+    "gpu_utilization": 68,
+    "compute_capability": "9.0",
+    "processes": [
+      {"pid": 24819, "user": "vllm-manager", "name": "python3 (vLLM::Engine)", "used_memory": 36700160000}
+    ]
+  }
+]
+```
+
+Check free memory on GPU 0 before a launch:
+
+```bash
+FREE_GIB=$(vllm-manager gpu list --json | jq '.[0].memory_free / 1073741824')
+echo "GPU 0 has ${FREE_GIB} GiB free"
+```
+
+Find the port a model is running on:
+
+```bash
+vllm-manager model active --json | jq -r '.[] | select(.model=="Qwen/Qwen2.5-Coder-32B-Instruct") | .port'
 ```

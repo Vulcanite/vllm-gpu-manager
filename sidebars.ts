@@ -2,67 +2,27 @@ import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
 
 const sidebars: SidebarsConfig = {
   docs: [
-    'overview',
-    'prerequisites',
+    'intro',
+    'install',
+    'quickstart',
     {
       type: 'category',
-      label: 'Getting Started',
+      label: 'Guides',
       collapsed: false,
       items: [
-        'getting-started/installation',
-        'getting-started/quickstart',
-        'getting-started/core-concepts',
-      ],
-    },
-    {
-      type: 'category',
-      label: 'Web Console Guide',
-      collapsed: false,
-      items: [
-        'web-guide/overview',
-        'web-guide/telemetry',
-        'web-guide/deploying-models',
-        'web-guide/model-management',
-        'web-guide/cache-and-downloads',
-        'web-guide/proxy-gateway',
-        'web-guide/settings-and-auth',
-      ],
-    },
-    {
-      type: 'category',
-      label: 'CLI Operations Guide',
-      collapsed: false,
-      items: [
-        'cli-guide/overview',
-        'cli-guide/gpu-management',
-        'cli-guide/model-operations',
-        'cli-guide/routing-and-proxy',
-        'cli-guide/automation-and-json',
-        'cli-guide/service-management',
-      ],
-    },
-    {
-      type: 'category',
-      label: 'Deep Dives & Ops',
-      items: [
-        'guides/vram-calculation',
-        'guides/gpu-placement',
-        'guides/traffic-routing',
+        'guides/downloads',
+        'guides/deploy',
+        'guides/gpu-and-vram',
+        'guides/proxy',
+        'guides/service',
         'guides/monitoring',
         'guides/command-import',
       ],
     },
     {
       type: 'category',
-      label: 'Architecture & Security',
-      items: [
-        'architecture',
-        'security',
-      ],
-    },
-    {
-      type: 'category',
       label: 'Reference',
+      collapsed: false,
       items: [
         'reference/cli',
         'reference/api',
@@ -70,6 +30,8 @@ const sidebars: SidebarsConfig = {
         'reference/hardware-compatibility',
       ],
     },
+    'security',
+    'architecture',
     'contributing',
     'changelog',
   ],

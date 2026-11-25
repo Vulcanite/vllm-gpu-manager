@@ -1,11 +1,11 @@
 ---
-title: Hardware & GPU Compatibility
+title: Hardware compatibility
 sidebar_position: 4
 ---
 
-# Hardware & GPU Compatibility
+# Hardware compatibility
 
-Architecture requirements, compute capability matrix, and quantization guidelines for NVIDIA GPUs.
+Which NVIDIA GPUs support which precisions. vLLM itself sets the real limits; this page covers what the manager checks.
 
 ---
 
@@ -26,11 +26,11 @@ Architecture requirements, compute capability matrix, and quantization guideline
 
 ### 1. FP8 (W8A8 / E4M3 / E5M2)
 - **Requirements**: NVIDIA Compute Capability $\ge 8.9$ (Ada Lovelace, Hopper, Blackwell).
-- **Behavior**: Attempting to launch native FP8 checkpoints on Ampere ($8.0$) or older GPUs is blocked during launch preflight to prevent CUDA kernel aborts.
+- **What the manager does**: an FP8 model on a GPU below 8.9 is refused before launch and before download, instead of failing inside vLLM.
 
 ### 2. AWQ & GPTQ (4-Bit Weight Quantization)
 - **Requirements**: Supported on Compute Capability $\ge 7.0$ (Volta and newer).
-- **Behavior**: Drastically reduces VRAM footprint with minimal perplexity degradation.
+- **Effect**: roughly a quarter of the 16-bit weight memory.
 
 ### 3. BF16 vs FP16
 - `bfloat16` is recommended for Ampere, Ada, and Hopper GPUs to match the training precision of modern open-weights models (Llama 3, Qwen 2.5, DeepSeek).
@@ -38,18 +38,6 @@ Architecture requirements, compute capability matrix, and quantization guideline
 
 ---
 
-## Docker & Container Toolkit Requirements
+## Driver and Docker
 
-1. **NVIDIA Driver**: Version $\ge 535.86.10$ for CUDA 12.x workloads.
-2. **NVIDIA Container Toolkit**: Must be installed and configured in `/etc/docker/daemon.json`:
-   ```json
-   {
-     "default-runtime": "nvidia",
-     "runtimes": {
-       "nvidia": {
-         "path": "nvidia-container-runtime",
-         "runtimeArgs": []
-       }
-     }
-   }
-   ```
+Docker must be able to start GPU containers (`docker run --gpus all ...`). See [Install](../install.md#set-up-docker-gpu-access) for the NVIDIA Container Toolkit setup, and run `vllm-manager doctor` to confirm.

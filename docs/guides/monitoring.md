@@ -1,83 +1,67 @@
 ---
-title: Prometheus & Grafana Monitoring
+title: Monitoring
 sidebar_position: 6
 ---
 
-# Prometheus & Grafana Monitoring
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
-vLLM GPU Manager includes built-in Prometheus File-SD target synchronization and automated Grafana / NVIDIA DCGM stack setup.
+# Monitoring
 
----
+## GPUs and processes
 
-## 1. Quick Monitoring Stack Setup
+<Tabs groupId="interface">
+<TabItem value="web" label="Dashboard" default>
 
-Run the automated setup helper to deploy Prometheus, Grafana, and NVIDIA DCGM exporter via Docker Compose:
+The **Dashboard** page shows a card per GPU (memory used, compute utilization, compute capability, and which model has it pinned) and a table of GPU processes with their PID, Linux user, name and memory. The user is read from `/proc/<pid>`, which helps find a process you did not start.
 
-```bash
-# In source or git checkouts:
-./scripts/setup-monitoring.sh
-
-# On packaged systems:
-sudo /usr/share/vllm-manager/scripts/setup-monitoring.sh
-```
-
-The script will prompt for:
-- Grafana admin username and password.
-- Bind IP address and port (default `0.0.0.0:3000`).
-- HTTPS / TLS configuration.
-
-The helper automatically provisions:
-- **NVIDIA DCGM Exporter**: GPU temperature, PCIe throughput, power usage, and tensor core utilization metrics.
-- **Prometheus**: Scrapes DCGM exporter on `127.0.0.1:9400` and vLLM servers from `vllm-targets.yml`.
-- **Grafana**: Preconfigured with NVIDIA DCGM Dashboard (ID 22515) and vLLM Metrics Dashboard (ID 25263).
-
----
-
-## 2. Enabling Metrics Target Synchronization
-
-Start the vLLM GPU Manager daemon with `--monitoring`:
+</TabItem>
+<TabItem value="cli" label="CLI">
 
 ```bash
-vllm-manager --dashboard --port 9090 --monitoring
+vllm-manager gpu list            # GPUs, memory and processes
+vllm-manager gpu list --json     # the same as JSON
 ```
 
-Or enable it persistently via systemd:
+</TabItem>
+</Tabs>
+
+## Prometheus and Grafana
+
+### Set up the stack
+
+The helper script starts Prometheus, Grafana and the NVIDIA DCGM exporter with Docker Compose:
 
 ```bash
-sudo vllm-manager service configure --monitoring=true
+./scripts/setup-monitoring.sh                                   # from a checkout
+sudo /usr/share/vllm-manager/scripts/setup-monitoring.sh        # packaged install
 ```
 
-### How Target Synchronization Works
+It asks for the Grafana admin login, the bind address and port (default `0.0.0.0:3000`) and TLS. Prometheus scrapes the DCGM exporter on `127.0.0.1:9400` and every vLLM server listed in `vllm-targets.yml`. Grafana comes with the NVIDIA DCGM dashboard (ID 22515) and a vLLM dashboard (ID 25263).
 
-Whenever a managed model container is started, restarted, or removed, the manager automatically updates the Prometheus file-SD configuration (`vllm-targets.yml`):
+### Keep the targets current
+
+Start the dashboard with `--monitoring` (or `service configure --monitoring`). Whenever a managed model starts, restarts or is removed, the manager rewrites the Prometheus file-SD targets file:
 
 ```yaml
-- targets:
-    - "127.0.0.1:8080"
+- targets: ["127.0.0.1:8080"]
   labels:
     job: "vllm"
     model: "meta-llama/Llama-3.3-70B-Instruct"
     container: "vllm-Llama-3.3-70B-Instruct-8080"
-- targets:
-    - "127.0.0.1:8081"
-  labels:
-    job: "vllm"
-    model: "Qwen/Qwen2.5-Coder-32B-Instruct"
-    container: "vllm-Qwen2.5-Coder-32B-Instruct-8081"
 ```
 
-Prometheus reloads this file automatically without needing service restarts.
+Prometheus picks up the change without a restart. Change the file location with `--monitoring-targets-file`.
 
----
+### Useful vLLM metrics
 
-## 3. Key Metrics Exposed by vLLM
+Metric names change between vLLM versions; check `http://127.0.0.1:<port>/metrics` on a running model for the exact list.
 
-| Metric | Type | Description |
+| Metric | Type | Meaning |
 | :--- | :--- | :--- |
-| `vllm:num_requests_running` | Gauge | Number of requests currently executing. |
-| `vllm:num_requests_waiting` | Gauge | Number of queued requests waiting for KV cache allocation. |
-| `vllm:gpu_cache_usage_factor` | Gauge | Fraction of GPU KV cache blocks currently in use ($0.0$ to $1.0$). |
-| `vllm:prompt_tokens_total` | Counter | Total prompt tokens processed. |
-| `vllm:generation_tokens_total` | Counter | Total generation tokens produced. |
-| `vllm:time_to_first_token_seconds` | Histogram | Time to first token (TTFT) latency distribution. |
-| `vllm:time_per_output_token_seconds` | Histogram | Inter-token generation latency distribution. |
+| `vllm:num_requests_running` | Gauge | Requests being processed. |
+| `vllm:num_requests_waiting` | Gauge | Requests queued for KV cache space. |
+| `vllm:prompt_tokens_total` | Counter | Prompt tokens processed. |
+| `vllm:generation_tokens_total` | Counter | Tokens generated. |
+| `vllm:time_to_first_token_seconds` | Histogram | Time to first token. |
+| `vllm:time_per_output_token_seconds` | Histogram | Time between generated tokens. |
