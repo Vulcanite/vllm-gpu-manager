@@ -694,7 +694,11 @@ func cliModelProgress(args []string, opts cliOptions) error {
 	}
 	printMarkdownTable(os.Stdout, []string{"Model", "State", "Downloaded"}, [][]string{{args[0], status.State, api.FormatBytes(status.DownloadedBytes)}})
 	if status.State == "failed" {
-		fmt.Fprintf(os.Stderr, "download failed (exit %d):\n%s\n", status.ExitCode, status.Error)
+		if status.ExitCode != 0 {
+			fmt.Fprintf(os.Stderr, "download failed (exit %d):\n%s\n", status.ExitCode, status.Error)
+		} else {
+			fmt.Fprintf(os.Stderr, "download failed:\n%s\n", status.Error)
+		}
 	}
 	return nil
 }

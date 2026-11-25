@@ -26,7 +26,7 @@ export const DownloadProgressPanel = ({ modelName, expectedSize, onDismiss }) =>
           // reported it, so stop polling and keep the final state.
           setState(data.state);
           if (data.state === 'failed') {
-            setFailure(`Download failed (exit ${data.exit_code})${data.error ? `:\n${data.error}` : ''}`);
+            setFailure(`Download failed${data.exit_code ? ` (exit ${data.exit_code})` : ''}${data.error ? `:\n${data.error}` : ''}`);
           }
           clearInterval(interval);
         }
