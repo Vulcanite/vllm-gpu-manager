@@ -8,9 +8,6 @@ on:
       release_tag:
         required: true
         type: string
-    secrets:
-      COPILOT_GITHUB_TOKEN:
-        required: false
   workflow_dispatch:
     inputs:
       release_tag:
@@ -18,9 +15,12 @@ on:
         required: true
         type: string
 
+# copilot-requests lets the built-in GITHUB_TOKEN make Copilot CLI requests;
+# in a personal repository they are billed to the owner's Copilot seat.
 permissions:
   contents: write
   pull-requests: write
+  copilot-requests: write
 
 jobs:
   changelog:
@@ -30,56 +30,40 @@ jobs:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
       BASE_BRANCH: ${{ github.event.repository.default_branch }}
       GH_TOKEN: ${{ github.token }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
     steps:
-      - name: Check Copilot token
-        id: copilot
-        run: |
-          if [[ -n "$COPILOT_GITHUB_TOKEN" ]]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::COPILOT_GITHUB_TOKEN is not configured; skipping changelog generation."
-            echo "available=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Validate release tag
-        if: steps.copilot.outputs.available == 'true'
         run: '[[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]'
 
       - name: Check out repository
         uses: actions/checkout@v4
-        if: steps.copilot.outputs.available == 'true'
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
-        if: steps.copilot.outputs.available == 'true'
         with:
           node-version: 22
 
       - name: Install GitHub Copilot CLI
-        if: steps.copilot.outputs.available == 'true'
         run: npm install --global @github/copilot
 
       - name: Generate changelog entry
-        if: steps.copilot.outputs.available == 'true'
         run: |
           copilot \
             -p "Update docs/changelog.md for release ${RELEASE_TAG}. Inspect tags and git history to identify changes since the previous release. Preserve all existing entries. Add exactly one new release section near the top, following the existing structure and documenting only user-visible changes supported by commits. Use concise Added, Changed, Fixed, and Security headings only when applicable. Do not modify any other file." \
             --allow-tool='shell(git:*)' \
             --allow-tool=write \
             --no-ask-user
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Validate Copilot output scope
-        if: steps.copilot.outputs.available == 'true'
         run: |
           changed_files="$(git status --short --untracked-files=all)"
           test "$changed_files" = " M docs/changelog.md"
           test -n "$(git diff -- docs/changelog.md)"
 
       - name: Open changelog pull request
-        if: steps.copilot.outputs.available == 'true'
         run: |
           branch="docs/changelog-${RELEASE_TAG//\//-}-${GITHUB_RUN_ID}"
           git config user.name "github-actions[bot]"

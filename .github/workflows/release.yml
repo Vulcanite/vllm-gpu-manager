@@ -9,6 +9,8 @@ permissions:
   actions: write
   contents: write
   pull-requests: write
+  # The called changelog workflow cannot get more than the caller grants.
+  copilot-requests: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -133,4 +135,3 @@ jobs:
     uses: ./.github/workflows/copilot-changelog.yml
     with:
       release_tag: ${{ github.ref_name }}
-    secrets: inherit
