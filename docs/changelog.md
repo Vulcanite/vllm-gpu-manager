@@ -11,6 +11,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.1.2] - 2026-11-25
+
+### Fixed
+- Hugging Face downloads pass each `--exclude` pattern separately to `hf download`, so patterns are not mistaken for filenames.
+- Download progress reports failure, including logs, when the downloader exits successfully without fetching model files.
+
+---
+
 ## [1.1.1] - 2026-11-25
 
 ### Changed
