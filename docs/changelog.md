@@ -11,17 +11,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-## [1.1.0] - Unreleased
+## [1.1.0] - 2026-11-25
+
+### Security
+- Without `VLLM_MANAGER_PASSWORD`, the dashboard API only answers requests addressed to `localhost`, an IP address, or a hostname in `VLLM_MANAGER_ALLOWED_HOSTS`. This blocks DNS rebinding, where a web page points its own hostname at `127.0.0.1` to drive a local dashboard.
+- The dashboard refuses to bind to a non-loopback address without a password unless `--insecure-no-auth` (or `VLLM_MANAGER_INSECURE_NO_AUTH=true`, or `service configure --insecure-no-auth`) is set.
+- Model IDs are validated as Hugging Face repo ids before any URL, cache path or container uses them. Input such as `a%zz` no longer crashes the CLI.
+
+### Changed
+- **Upgrade note:** a systemd service configured with a non-loopback host and no password no longer starts. Run `service configure --password-file <file>` or `service configure --insecure-no-auth`.
+- Download size comes from the repo's file list (`?blobs=true`) instead of `usedStorage`, which counted old file versions and overstated downloads several times over (for example 3.5 GB instead of 1 GB for Qwen2.5-0.5B-Instruct). The disk-space preflight and the progress bar use the corrected size.
+- When a repo ships `.safetensors`, downloads skip weight formats vLLM does not load (`*.bin`, `*.pt`, `*.pth`, ONNX, GGUF and similar).
+- `GET /api/models/download/progress` and `model progress` report a state (`running`, `succeeded`, `failed`, `stopped`), with the exit code and log tail for failures. Download containers are no longer auto-removed, so a failure stays visible until it is read.
+- Model info and download make one Hugging Face API call per request instead of up to four.
+- `StartModel` now takes a `LaunchConfig` struct instead of 31 positional arguments.
 
 ### Fixed
+- A failed download (bad name, gated model, network error) no longer leaves the progress bar stuck with no error.
+- An interrupted download is no longer reported as downloaded. A model counts as downloaded only when a snapshot has `config.json` or `params.json` and no `*.incomplete` blobs remain, and downloading again resumes it.
+- Expired dashboard sessions and stale failed-login entries are pruned on login.
 - Concurrent launches of different models targeting the same GPU can no longer both pass the VRAM preflight; a process-wide launch mutex covers the Docker snapshot, port reservation, overlap check, and container start.
 - Restarting a stopped model (dashboard or `model restart`) now takes the launch mutex and runs the GPU overlap and VRAM fit checks against running containers, so it can no longer oversubscribe a GPU that another model claimed while it was stopped.
 - Proxy request counts are tracked in memory and flushed periodically instead of rewriting `settings.json` on every inference POST. Settings writes use a temp file plus `rename` so a crash cannot truncate tokens and keys.
 - The `/v1/` proxy bounds request-body buffering with `http.MaxBytesReader` (default 32 MiB, configurable via `proxy_max_body_bytes`).
 - Dashboard login issues a unique server-side session per login. Logout revokes that session. Failed logins are rate-limited per client IP.
-
-### Changed
-- `StartModel` now takes a `LaunchConfig` struct instead of 31 positional arguments.
 
 ---
 

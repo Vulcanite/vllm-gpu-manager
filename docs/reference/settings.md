@@ -67,4 +67,6 @@ Settings are persisted in `settings.json` (located at `/var/lib/vllm-manager/set
 | `VLLM_MANAGER_HTTPS` | Daemon | Enables HTTPS with auto-generated TLS certificates (`true`/`false`). |
 | `VLLM_MANAGER_NO_PROXY` | Daemon | Disables `/v1/` reverse proxy gateway (`true`/`false`). |
 | `VLLM_MANAGER_MONITORING` | Daemon | Enables Prometheus target synchronization (`true`/`false`). |
-| `VLLM_MANAGER_PASSWORD` | Daemon | Password required to access dashboard and JSON APIs. |
+| `VLLM_MANAGER_PASSWORD` | Daemon | Password required to access dashboard and JSON APIs. Required when the host is not loopback. |
+| `VLLM_MANAGER_INSECURE_NO_AUTH` | Daemon | Allows a non-loopback host without a password (`true`/`false`). |
+| `VLLM_MANAGER_ALLOWED_HOSTS` | Daemon | Comma-separated hostnames a password-less dashboard answers to, besides `localhost` and IP addresses. |

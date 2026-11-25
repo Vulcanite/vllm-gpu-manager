@@ -57,17 +57,31 @@ vllm-manager model download deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
 Downloads run in a detached container with host networking, equivalent to:
 
 ```bash
-docker run -d --rm \
+docker run -d \
   --network host \
   -v <hf_cache>:/hf_cache \
   -e HF_HOME=/hf_cache \
   --entrypoint hf \
   vllm/vllm-openai:v0.23.0 \
-  download deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
+  download deepseek-ai/DeepSeek-R1-Distill-Qwen-14B \
+  --exclude "*.bin" "*.pt" "*.pth" "*.onnx" "*.gguf" ...
 ```
 
+The `--exclude` list is added only when the repo ships `.safetensors`; it skips weight formats vLLM does not load. The container is kept after it exits so its result can be read.
+
+Check on a download:
+
+```bash
+vllm-manager model progress deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
+```
+
+It reports `running`, `succeeded`, `failed` (with the exit code and the end of the log) or `stopped`, then removes the finished container. A model only counts as downloaded when a snapshot has `config.json` (or `params.json`) and no `*.incomplete` blobs remain, so running `model download` again after an interruption resumes it.
+
+### Model IDs
+Model IDs must be Hugging Face repo ids such as `org/model-name` (letters, digits, `_`, `-`, `.`). Anything else is rejected before any network or Docker call.
+
 ### Preflight Space Verification
-Before starting a download, the backend queries the Hugging Face API (`/api/models/<id>`) to retrieve the total model weight size in bytes. It inspects free disk space on the cache filesystem and blocks the download if free space is insufficient.
+Before starting a download, the backend lists the repo's files from the Hugging Face API (`/api/models/<id>?blobs=true`) and adds up the files that will actually be downloaded. It compares that, plus 10%, with free space on the cache filesystem and blocks the download if it will not fit.
 
 ---
 

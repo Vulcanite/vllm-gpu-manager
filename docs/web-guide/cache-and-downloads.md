@@ -29,7 +29,8 @@ _Screenshot from a demo build with sample GPU data._
 
 1. Enter any Hugging Face model identifier (e.g. `meta-llama/Llama-3.3-70B-Instruct`).
 2. Click **Download Model**.
-3. The manager launches an isolated background container that streams download progress and tracks byte counts.
+3. The manager launches a background download container. The progress bar compares bytes on disk with the size of the files being downloaded (repos with `.safetensors` skip other weight formats).
+4. When the download ends, the panel shows **Download completed**, or the exit code and the end of the container log if it failed. If the download stopped early, start it again: it resumes from what is already on disk.
 
 ---
 

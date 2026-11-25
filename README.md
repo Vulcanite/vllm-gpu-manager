@@ -17,7 +17,7 @@ Read [the story behind this project](https://amishtp.tech/blog/vllm-gpu-manager)
 - **VRAM launch checks:** Blocks launches when model weights plus estimated KV cache will not fit inside the requested GPU memory utilization budget.
 - **KV cache estimation:** Reads downloaded model config files to estimate KV cache bytes per token and required KV memory for `--max-model-len`.
 - **Hugging Face cache management:** Configure the host Hugging Face home directory, list cached models, download models, and delete cached model directories.
-- **Download progress:** Starts model downloads in background Docker containers and estimates progress from cached bytes on disk.
+- **Download progress:** Starts model downloads in background Docker containers, tracks bytes on disk against the files being downloaded, and reports failures with the container's exit code and log tail.
 - **Model recommendations:** Ranks an embedded open-source model catalog against detected GPUs, use case, VRAM fit, and estimated speed.
 - **HF token handling:** Stores an optional Hugging Face token in `settings.json` with file mode `0600`.
 - **vLLM API key handling:** Stores one optional global vLLM API key, optional per-server keys outside proxy mode, and proxy user API keys for `/v1/` clients.

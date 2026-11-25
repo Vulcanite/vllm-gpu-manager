@@ -16,11 +16,11 @@ Download the appropriate `.deb` package from the [GitHub Releases](https://githu
 ```bash
 # For AMD64 (x86_64)
 sudo apt update
-sudo apt install ./vllm-manager_1.0.0_amd64.deb
+sudo apt install ./vllm-manager_1.1.0_amd64.deb
 
 # For ARM64 (aarch64)
 sudo apt update
-sudo apt install ./vllm-manager_1.0.0_arm64.deb
+sudo apt install ./vllm-manager_1.1.0_arm64.deb
 ```
 
 The Debian package installs:
@@ -45,12 +45,12 @@ Download the `.rpm` package from the [GitHub Releases](https://github.com/Vulcan
 
 ```bash
 # For AMD64 (x86_64)
-sudo dnf install ./vllm-manager-1.0.0-1.amd64.rpm
+sudo dnf install ./vllm-manager-1.1.0-1.amd64.rpm
 # or with rpm:
-sudo rpm -ivh ./vllm-manager-1.0.0-1.amd64.rpm
+sudo rpm -ivh ./vllm-manager-1.1.0-1.amd64.rpm
 
 # For ARM64 (aarch64)
-sudo dnf install ./vllm-manager-1.0.0-1.arm64.rpm
+sudo dnf install ./vllm-manager-1.1.0-1.arm64.rpm
 ```
 
 Configure and start the service:
@@ -68,7 +68,7 @@ For portable or non-root environments, download the standalone Linux binary:
 
 ```bash
 # Download AMD64 binary
-curl -fsSL https://github.com/Vulcanite/vllm-gpu-manager/releases/download/v1.0.0/vllm-manager-v1.0.0-linux-amd64 -o vllm-manager
+curl -fsSL https://github.com/Vulcanite/vllm-gpu-manager/releases/download/v1.1.0/vllm-manager-v1.1.0-linux-amd64 -o vllm-manager
 chmod +x vllm-manager
 
 # Verify installation
@@ -100,7 +100,7 @@ cd ..
 
 # Run backend unit tests and build standalone binary
 go test ./...
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=1.0.0" -o vllm-manager .
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=1.1.0" -o vllm-manager .
 ```
 
 ### System Installation Helper
