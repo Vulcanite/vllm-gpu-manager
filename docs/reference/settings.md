@@ -1,17 +1,27 @@
 ---
-title: Settings & Config Reference
+title: Settings & environment
 sidebar_position: 3
 ---
 
-# Settings & Config Reference
+# Settings & environment
 
-Detailed schema and environment variables for configuring vLLM GPU Manager.
+Settings live in `settings.json`; the dashboard and service options come from environment variables.
+
+Change settings in the dashboard's **Settings** page or with `vllm-manager settings set` (see the [CLI reference](./cli.md#settings-commands)). The cache path can only change while no managed containers are running.
+
+<div className="screenshot-card">
+  <div className="screenshot-header">
+    <span>SETTINGS</span>
+    <span>Demo build, sample data</span>
+  </div>
+  <img src="/vllm-gpu-manager/img/screenshots/web/06-settings-configuration.png" alt="Settings page" />
+</div>
 
 ---
 
 ## `settings.json` Schema
 
-Settings are persisted in `settings.json` (located at `/var/lib/vllm-manager/settings.json` in packaged installations):
+`settings.json` is in the state directory (`/var/lib/vllm-manager/settings.json` for packaged installs, the current directory for a standalone binary), mode `0600`:
 
 ```json
 {

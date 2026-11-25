@@ -147,7 +147,7 @@ func newModelCommand(opts *cliOptions) *cobra.Command {
 		newModelDownloadCommand(opts),
 		&cobra.Command{
 			Use:   "progress <model>",
-			Short: "Show cached bytes for a model download",
+			Short: "Show a model download's state and bytes on disk",
 			Args:  cobra.ExactArgs(1),
 			RunE: func(_ *cobra.Command, args []string) error {
 				return cliModelProgress(args, *opts)

@@ -8,10 +8,12 @@ const projectName = process.env.GITHUB_REPOSITORY?.split('/')[1] ?? 'vllm-gpu-ma
 const repositoryUrl = `https://github.com/${organizationName}/${projectName}`;
 const editBranch = process.env.DOCS_EDIT_BRANCH ?? 'main';
 const isUserSite = projectName === `${organizationName}.github.io`;
+// CI passes the latest release tag; package.json is only a local fallback.
+const docsVersion = (process.env.DOCS_VERSION || `v${packageJson.version}`).trim();
 
 const config: Config = {
   title: 'vLLM GPU Manager',
-  tagline: 'Lightweight operations console, VRAM preflight engine, and OpenAI proxy for vLLM on NVIDIA GPUs.',
+  tagline: 'Run vLLM on your own GPU server.',
   favicon: 'img/favicon.svg',
   url: process.env.DOCS_URL ?? `https://${organizationName}.github.io`,
   baseUrl: process.env.DOCS_BASE_URL ?? (isUserSite ? '/' : `/${projectName}/`),
@@ -50,7 +52,7 @@ const config: Config = {
       {name: 'theme-color', content: '#10b981'},
       {
         name: 'description',
-        content: 'Documentation for vLLM GPU Manager — single-binary CLI and web console for vLLM on NVIDIA GPUs with VRAM preflight and OpenAI proxy.',
+        content: 'Documentation for vLLM GPU Manager: one binary with a CLI and web dashboard to run vLLM in Docker on NVIDIA GPUs, with VRAM checks and an OpenAI-compatible proxy.',
       },
     ],
     colorMode: {
@@ -62,12 +64,10 @@ const config: Config = {
       title: 'vLLM GPU Manager',
       logo: {alt: 'vLLM GPU Manager Logo', src: 'img/logo.svg'},
       items: [
-        {to: '/docs/getting-started/quickstart', label: 'Get Started', position: 'left'},
-        {to: '/docs/guides/deploying-models', label: 'Guides', position: 'left'},
+        {to: '/docs/quickstart', label: 'Get Started', position: 'left'},
+        {to: '/docs/guides/deploy', label: 'Guides', position: 'left'},
         {to: '/docs/reference/cli', label: 'Reference', position: 'left'},
-        {to: '/docs/architecture', label: 'Architecture', position: 'left'},
-        {to: '/docs/changelog', label: 'Changelog', position: 'left'},
-        {type: 'html', value: `<span style="font-family: var(--site-mono); font-size: 0.8rem; padding: 2px 8px; border: 1px solid var(--site-rule); border-radius: 4px; color: var(--ifm-color-primary);">v${packageJson.version}</span>`, position: 'right'},
+        {type: 'html', value: `<span style="font-family: var(--site-mono); font-size: 0.8rem; padding: 2px 8px; border: 1px solid var(--site-rule); border-radius: 4px; color: var(--ifm-color-primary);">${docsVersion}</span>`, position: 'right'},
         {href: repositoryUrl, label: 'GitHub', position: 'right'},
       ],
     },
@@ -75,44 +75,34 @@ const config: Config = {
       style: 'dark',
       links: [
         {
-          title: 'Learn',
+          title: 'Docs',
           items: [
-            {label: 'Quickstart', to: '/docs/getting-started/quickstart'},
-            {label: 'Installation', to: '/docs/getting-started/installation'},
-            {label: 'Core Concepts', to: '/docs/getting-started/core-concepts'},
-            {label: 'Deploying Models', to: '/docs/guides/deploying-models'},
-          ],
-        },
-        {
-          title: 'Guides & Ops',
-          items: [
-            {label: 'VRAM Calculation', to: '/docs/guides/vram-calculation'},
-            {label: 'Traffic Routing & Proxy', to: '/docs/guides/traffic-routing'},
-            {label: 'Prometheus Monitoring', to: '/docs/guides/monitoring'},
-            {label: 'Systemd Service', to: '/docs/guides/systemd-service'},
+            {label: 'Install', to: '/docs/install'},
+            {label: 'Quickstart', to: '/docs/quickstart'},
+            {label: 'Deploy models', to: '/docs/guides/deploy'},
+            {label: 'Proxy & routing', to: '/docs/guides/proxy'},
           ],
         },
         {
           title: 'Reference',
           items: [
-            {label: 'CLI Commands', to: '/docs/reference/cli'},
+            {label: 'CLI', to: '/docs/reference/cli'},
             {label: 'REST API', to: '/docs/reference/api'},
-            {label: 'Settings & Config', to: '/docs/reference/settings'},
-            {label: 'Hardware Matrix', to: '/docs/reference/hardware-compatibility'},
+            {label: 'Settings & environment', to: '/docs/reference/settings'},
+            {label: 'Security', to: '/docs/security'},
           ],
         },
         {
           title: 'Project',
           items: [
             {label: 'GitHub', href: repositoryUrl},
-            {label: 'Architecture', to: '/docs/architecture'},
-            {label: 'Security Model', to: '/docs/security'},
+            {label: 'Why I built it', href: 'https://amishtp.tech/blog/vllm-gpu-manager'},
             {label: 'Changelog', to: '/docs/changelog'},
             {label: 'Contributing', to: '/docs/contributing'},
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Vulcanite & vLLM GPU Manager Contributors. Open source under the Apache-2.0 License. Built with Docusaurus.`,
+      copyright: `Copyright © ${new Date().getFullYear()} Vulcanite and contributors. Apache-2.0 License.`,
     },
     prism: {
       theme: prismThemes.github,

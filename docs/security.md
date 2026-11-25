@@ -1,5 +1,6 @@
 ---
 title: Security Model
+sidebar_label: Security
 sidebar_position: 5
 ---
 

@@ -6,6 +6,7 @@ on:
       - "v*"
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -118,6 +119,13 @@ jobs:
           else
             gh release create "${TAG_NAME}" dist/* --title "${TAG_NAME}" --generate-notes
           fi
+
+      - name: Rebuild docs site with the new version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # A tag push does not match the Pages workflow's branch trigger, and
+        # workflow_dispatch is the one event GITHUB_TOKEN may start.
+        run: gh workflow run docs-pages.yml --ref "${{ github.event.repository.default_branch }}"
 
   changelog:
     name: Generate release changelog
