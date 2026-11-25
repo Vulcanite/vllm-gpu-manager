@@ -45,6 +45,8 @@ graph LR
 - Each login mints a unique 256-bit session token stored server-side with a 24-hour expiry. Logout deletes that token, so a stolen cookie cannot be reused after sign-out.
 - Login is rate-limited to five failed attempts per client IP per minute (`429 Too Many Requests`).
 - Session verification looks up the cookie against the in-memory session table. Sessions do not survive a dashboard restart.
+- Without a password, the dashboard refuses to bind to a non-loopback address unless `--insecure-no-auth` (or `VLLM_MANAGER_INSECURE_NO_AUTH=true`) is set.
+- Without a password, `/api/*` only answers requests whose `Host` is `localhost`, an IP address, or a name in `VLLM_MANAGER_ALLOWED_HOSTS`. This blocks DNS rebinding, where a web page points its own hostname at `127.0.0.1` to reach a local dashboard.
 - The dashboard password is not hashed. In systemd installations it is stored in `/etc/vllm-manager/service.env` (mode `0640`); the `manager.sh` helper stores it in `.vllm-manager.state` (mode `0600`). Treat both files as secrets.
 
 ### Proxy Client Tokens

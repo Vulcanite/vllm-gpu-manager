@@ -40,7 +40,8 @@ func TestGetDownloadedModelSizeRejectsMissingModel(t *testing.T) {
 func TestDownloadContainerForModelNormalizesCase(t *testing.T) {
 	snapshot := []managedVLLMContainer{
 		{
-			name: "vllm-download-qwen-2.5-7b-1234",
+			name:  "vllm-download-qwen-2.5-7b-1234",
+			state: "running",
 			labels: map[string]string{
 				containerModelLabel: "Qwen/Qwen2.5-7B-Instruct",
 			},
@@ -76,6 +77,9 @@ func TestIsModelDownloaded(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(hub, "models--Qwen--Qwen2.5-7B-Instruct", "snapshots", "abc", "weights.bin"), []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hub, "models--Qwen--Qwen2.5-7B-Instruct", "snapshots", "abc", "config.json"), []byte("{}"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -123,5 +127,55 @@ func TestIsModelDownloaded(t *testing.T) {
 	// the misconfiguration in the status payload.
 	if _, _, err := IsModelDownloaded("foo/bar", ""); err == nil {
 		t.Fatal("IsModelDownloaded()=nil error for empty cache path, want error")
+	}
+}
+
+func TestIsModelDownloadedTreatsPartialCacheAsNotDownloaded(t *testing.T) {
+	cache := t.TempDir()
+	model := filepath.Join(cache, "hub", "models--org--m")
+	for _, dir := range []string{"blobs", filepath.Join("snapshots", "abc")} {
+		if err := os.MkdirAll(filepath.Join(model, dir), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(rel, data string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(model, rel), []byte(data), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join("snapshots", "abc", "config.json"), "{}")
+	write(filepath.Join("blobs", "deadbeef.incomplete"), "half")
+
+	ok, size, err := IsModelDownloaded("org/m", cache)
+	if err != nil || ok || size == 0 {
+		t.Fatalf("interrupted download: ok=%v size=%d err=%v, want false, bytes>0, nil", ok, size, err)
+	}
+
+	if err := os.Remove(filepath.Join(model, "blobs", "deadbeef.incomplete")); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, _ := IsModelDownloaded("org/m", cache); !ok {
+		t.Fatal("finished download (config.json, no .incomplete) reported as not downloaded")
+	}
+
+	// Folder with no config at all (download died before the first file).
+	if err := os.MkdirAll(filepath.Join(cache, "hub", "models--org--empty", "blobs"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, _ := IsModelDownloaded("org/empty", cache); ok {
+		t.Fatal("cache folder without a config reported as downloaded")
+	}
+}
+
+func TestDownloadContainerForModelIgnoresFinishedContainers(t *testing.T) {
+	exited := managedVLLMContainer{name: "vllm-download-m-1", state: "exited", labels: map[string]string{containerModelLabel: "org/m"}}
+	if got := downloadContainerForModel([]managedVLLMContainer{exited}, "org/m"); got != "" {
+		t.Fatalf("exited container blocked as running download: %q", got)
+	}
+	running := exited
+	running.state = "running"
+	if got := downloadContainerForModel([]managedVLLMContainer{exited, running}, "org/m"); got != running.name {
+		t.Fatalf("got %q, want running container", got)
 	}
 }

@@ -24,6 +24,9 @@ func fetchHFModelInfo(model string) (HFModelInfo, error) {
 		return HFModelInfo{}, newAppError(http.StatusBadRequest, "model required")
 	}
 	info, err := api.FetchHFModelInfo(model, getSettings().HFToken)
+	if api.IsValidationError(err) {
+		return HFModelInfo{}, err
+	}
 	if err != nil {
 		return HFModelInfo{}, newAppError(http.StatusNotFound, "model not found or Hugging Face API error")
 	}

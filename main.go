@@ -43,10 +43,11 @@ func main() {
 			os.Exit(1)
 		}
 		runDashboard(dashboardOptions{
-			Host:         port.host,
-			Port:         port.value,
-			HTTPSEnabled: port.httpsEnabled,
-			ProxyEnabled: proxyEnabled,
+			Host:           port.host,
+			Port:           port.value,
+			HTTPSEnabled:   port.httpsEnabled,
+			ProxyEnabled:   proxyEnabled,
+			InsecureNoAuth: port.insecureNoAuth,
 			Monitoring: monitoringOptions{
 				Enabled:     port.monitoringEnabled,
 				TargetsFile: port.monitoringTargetsFile,
@@ -76,6 +77,7 @@ type dashboardFlagValues struct {
 	httpsEnabled          bool
 	monitoringEnabled     bool
 	monitoringTargetsFile string
+	insecureNoAuth        bool
 	extraArgs             []string
 }
 
@@ -90,6 +92,7 @@ func parseDashboardFlags(args []string, errOut io.Writer) (dashboardFlagValues, 
 	noProxy := fs.Bool("no-proxy", defaults.NoProxy, "disable the OpenAI-compatible proxy gateway on /v1/")
 	monitoring := fs.Bool("monitoring", defaults.Monitoring, "sync running vLLM servers into the Prometheus file-SD targets file")
 	monitoringTargetsFile := fs.String("monitoring-targets-file", defaults.MonitoringTargets, "Prometheus file-SD targets file for vLLM metrics")
+	insecureNoAuth := fs.Bool("insecure-no-auth", defaults.InsecureNoAuth, "allow a non-loopback --host without VLLM_MANAGER_PASSWORD (anyone who can reach the port controls Docker)")
 	fs.Usage = func() { printRootHelp(errOut) }
 	if err := fs.Parse(args); err != nil {
 		return dashboardFlagValues{}, false, err
@@ -100,6 +103,7 @@ func parseDashboardFlags(args []string, errOut io.Writer) (dashboardFlagValues, 
 		httpsEnabled:          *httpsEnabled,
 		monitoringEnabled:     *monitoring,
 		monitoringTargetsFile: *monitoringTargetsFile,
+		insecureNoAuth:        *insecureNoAuth,
 		extraArgs:             fs.Args(),
 	}, !*noProxy, nil
 }

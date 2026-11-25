@@ -28,6 +28,7 @@ const (
 	serviceMonitoringEnv        = "VLLM_MANAGER_MONITORING"
 	serviceMonitoringTargetsEnv = "VLLM_MANAGER_MONITORING_TARGETS_FILE"
 	servicePasswordEnv          = "VLLM_MANAGER_PASSWORD"
+	serviceInsecureNoAuthEnv    = "VLLM_MANAGER_INSECURE_NO_AUTH"
 )
 
 type serviceConfig struct {
@@ -38,6 +39,7 @@ type serviceConfig struct {
 	Monitoring        bool
 	MonitoringTargets string
 	Password          string
+	InsecureNoAuth    bool
 }
 
 type serviceConfigureOptions struct {
@@ -49,6 +51,7 @@ type serviceConfigureOptions struct {
 	MonitoringTargets string
 	PasswordFile      string
 	ClearPassword     bool
+	InsecureNoAuth    bool
 	NoRestart         bool
 }
 
@@ -59,6 +62,7 @@ type dashboardEnvDefaults struct {
 	NoProxy           bool
 	Monitoring        bool
 	MonitoringTargets string
+	InsecureNoAuth    bool
 }
 
 var serviceSystemctl = func(args ...string) error {
@@ -90,6 +94,7 @@ func dashboardDefaultsFromEnv() dashboardEnvDefaults {
 		NoProxy:           environmentBool(serviceNoProxyEnv),
 		Monitoring:        environmentBool(serviceMonitoringEnv),
 		MonitoringTargets: targets,
+		InsecureNoAuth:    environmentBool(serviceInsecureNoAuthEnv),
 	}
 }
 
@@ -129,6 +134,7 @@ func newServiceConfigureCommand() *cobra.Command {
 	cmd.Flags().StringVar(&opts.MonitoringTargets, "monitoring-targets-file", "", "Prometheus file-SD target path")
 	cmd.Flags().StringVar(&opts.PasswordFile, "password-file", "", "read dashboard password from a file")
 	cmd.Flags().BoolVar(&opts.ClearPassword, "clear-password", false, "disable dashboard password authentication")
+	cmd.Flags().BoolVar(&opts.InsecureNoAuth, "insecure-no-auth", false, "allow a non-loopback host without a dashboard password")
 	cmd.Flags().BoolVar(&opts.NoRestart, "no-restart", false, "do not restart an active service")
 	return cmd
 }
@@ -141,7 +147,7 @@ func configureService(cmd *cobra.Command, opts serviceConfigureOptions) error {
 	}
 	flags := cmd.Flags()
 	anyChanged := flags.Changed("host") || flags.Changed("port") || flags.Changed("https") || flags.Changed("proxy") ||
-		flags.Changed("monitoring") || flags.Changed("monitoring-targets-file") || flags.Changed("password-file") || flags.Changed("clear-password")
+		flags.Changed("monitoring") || flags.Changed("monitoring-targets-file") || flags.Changed("password-file") || flags.Changed("clear-password") || flags.Changed("insecure-no-auth")
 	if !anyChanged {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			return errors.New("no service settings provided; pass flags or run interactively")
@@ -168,6 +174,9 @@ func configureService(cmd *cobra.Command, opts serviceConfigureOptions) error {
 		}
 		if flags.Changed("monitoring-targets-file") {
 			config.MonitoringTargets = opts.MonitoringTargets
+		}
+		if flags.Changed("insecure-no-auth") {
+			config.InsecureNoAuth = opts.InsecureNoAuth
 		}
 		if opts.ClearPassword && strings.TrimSpace(opts.PasswordFile) != "" {
 			return errors.New("--clear-password and --password-file cannot be used together")
@@ -220,6 +229,9 @@ func validateServiceConfig(config serviceConfig) error {
 			return fmt.Errorf("invalid dashboard host: %v", err)
 		}
 	}
+	if !addr.IsLoopback() && strings.TrimSpace(config.Password) == "" && !config.InsecureNoAuth {
+		return errors.New("a non-loopback dashboard host needs a password (--password-file) or --insecure-no-auth")
+	}
 	port, err := strconv.Atoi(strings.TrimSpace(config.Port))
 	if err != nil || port < 1 || port > 65535 {
 		return errors.New("dashboard port must be between 1 and 65535")
@@ -243,6 +255,7 @@ func readServiceConfig(path string) (serviceConfig, error) {
 		Monitoring:        defaults.Monitoring,
 		MonitoringTargets: defaults.MonitoringTargets,
 		Password:          os.Getenv(servicePasswordEnv),
+		InsecureNoAuth:    defaults.InsecureNoAuth,
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -276,6 +289,7 @@ func readServiceConfig(path string) (serviceConfig, error) {
 	config.HTTPS = configBool(values, serviceHTTPSEnv, config.HTTPS)
 	config.Proxy = !configBool(values, serviceNoProxyEnv, !config.Proxy)
 	config.Monitoring = configBool(values, serviceMonitoringEnv, config.Monitoring)
+	config.InsecureNoAuth = configBool(values, serviceInsecureNoAuthEnv, config.InsecureNoAuth)
 	if value := values[serviceMonitoringTargetsEnv]; value != "" {
 		config.MonitoringTargets = value
 	}
@@ -310,6 +324,7 @@ func writeServiceConfig(path string, config serviceConfig) error {
 		serviceMonitoringEnv + "=" + strconv.FormatBool(config.Monitoring),
 		serviceMonitoringTargetsEnv + "=" + strconv.Quote(config.MonitoringTargets),
 		servicePasswordEnv + "=" + strconv.Quote(config.Password),
+		serviceInsecureNoAuthEnv + "=" + strconv.FormatBool(config.InsecureNoAuth),
 		configDirEnv + "=" + strconv.Quote(runtimeConfigDir()),
 		stateDirEnv + "=" + strconv.Quote(runtimeStateDir()),
 		"",

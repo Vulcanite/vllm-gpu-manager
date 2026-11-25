@@ -78,7 +78,9 @@ func (a *dashboardAuth) loginAttemptsExceeded(ip string) bool {
 func (a *dashboardAuth) recordLoginFailure(ip string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.loginAt[ip] = append(a.loginAt[ip], time.Now())
+	now := time.Now()
+	a.pruneLocked(now)
+	a.loginAt[ip] = append(a.loginAt[ip], now)
 }
 
 func (a *dashboardAuth) lookupSession(token string) bool {
@@ -100,11 +102,29 @@ func (a *dashboardAuth) lookupSession(token string) bool {
 
 func (a *dashboardAuth) createSession() (string, time.Time) {
 	token := randomSessionToken()
-	expiresAt := time.Now().Add(sessionTTL)
+	now := time.Now()
+	expiresAt := now.Add(sessionTTL)
 	a.mu.Lock()
+	a.pruneLocked(now)
 	a.sessions[token] = expiresAt
 	a.mu.Unlock()
 	return token, expiresAt
+}
+
+// pruneLocked drops expired sessions and IPs with no recent failed login, so
+// neither map grows for the life of the process. Runs on each login.
+func (a *dashboardAuth) pruneLocked(now time.Time) {
+	for token, expiresAt := range a.sessions {
+		if now.After(expiresAt) {
+			delete(a.sessions, token)
+		}
+	}
+	cutoff := now.Add(-loginRateLimitWindow)
+	for ip, attempts := range a.loginAt {
+		if len(attempts) == 0 || !attempts[len(attempts)-1].After(cutoff) {
+			delete(a.loginAt, ip)
+		}
+	}
 }
 
 func (a *dashboardAuth) deleteSession(token string) {

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -244,7 +245,7 @@ func TestBuildRoutingTableUsesServedModelNames(t *testing.T) {
 func TestDashboardAuthDisabledAllowsRequests(t *testing.T) {
 	auth := &dashboardAuth{}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/gpus", nil)
+	req := newLocalRequest(http.MethodGet, "/api/gpus", nil)
 	rr := httptest.NewRecorder()
 
 	auth.require(func(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +260,7 @@ func TestDashboardAuthDisabledAllowsRequests(t *testing.T) {
 func TestDashboardAuthRequiresSessionCookie(t *testing.T) {
 	auth := &dashboardAuth{password: "secret", sessions: map[string]time.Time{}}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/gpus", nil)
+	req := newLocalRequest(http.MethodGet, "/api/gpus", nil)
 	rr := httptest.NewRecorder()
 
 	auth.require(func(w http.ResponseWriter, r *http.Request) {
@@ -274,7 +275,7 @@ func TestDashboardAuthRequiresSessionCookie(t *testing.T) {
 func TestDashboardAuthLoginSetsUsableCookie(t *testing.T) {
 	auth := &dashboardAuth{password: "secret", sessions: map[string]time.Time{}, loginAt: map[string][]time.Time{}}
 
-	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"password":"secret"}`))
+	loginReq := newLocalRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"password":"secret"}`))
 	loginReq.Header.Set("Content-Type", "application/json")
 	loginRR := httptest.NewRecorder()
 	auth.loginHandler(loginRR, loginReq)
@@ -288,7 +289,7 @@ func TestDashboardAuthLoginSetsUsableCookie(t *testing.T) {
 		t.Fatalf("cookies=%d, want 1", len(cookies))
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/gpus", nil)
+	req := newLocalRequest(http.MethodGet, "/api/gpus", nil)
 	req.AddCookie(cookies[0])
 	rr := httptest.NewRecorder()
 	auth.require(func(w http.ResponseWriter, r *http.Request) {
@@ -303,7 +304,7 @@ func TestDashboardAuthLoginSetsUsableCookie(t *testing.T) {
 func TestDashboardAuthLogoutRevokesSession(t *testing.T) {
 	auth := &dashboardAuth{password: "secret", sessions: map[string]time.Time{}, loginAt: map[string][]time.Time{}}
 
-	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"password":"secret"}`))
+	loginReq := newLocalRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"password":"secret"}`))
 	loginReq.Header.Set("Content-Type", "application/json")
 	loginRR := httptest.NewRecorder()
 	auth.loginHandler(loginRR, loginReq)
@@ -315,7 +316,7 @@ func TestDashboardAuthLogoutRevokesSession(t *testing.T) {
 		t.Fatalf("cookies=%d, want 1", len(cookies))
 	}
 
-	logoutReq := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	logoutReq := newLocalRequest(http.MethodPost, "/api/auth/logout", nil)
 	logoutReq.AddCookie(cookies[0])
 	logoutRR := httptest.NewRecorder()
 	auth.logoutHandler(logoutRR, logoutReq)
@@ -323,7 +324,7 @@ func TestDashboardAuthLogoutRevokesSession(t *testing.T) {
 		t.Fatalf("logout status=%d, want %d", logoutRR.Code, http.StatusOK)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/gpus", nil)
+	req := newLocalRequest(http.MethodGet, "/api/gpus", nil)
 	req.AddCookie(cookies[0])
 	rr := httptest.NewRecorder()
 	auth.require(func(w http.ResponseWriter, r *http.Request) {
@@ -338,7 +339,7 @@ func TestDashboardAuthLoginRateLimit(t *testing.T) {
 	auth := &dashboardAuth{password: "secret", sessions: map[string]time.Time{}, loginAt: map[string][]time.Time{}}
 
 	for i := 0; i < loginRateLimitMax; i++ {
-		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"password":"wrong"}`))
+		req := newLocalRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"password":"wrong"}`))
 		req.Header.Set("Content-Type", "application/json")
 		req.RemoteAddr = "192.0.2.10:1234"
 		rr := httptest.NewRecorder()
@@ -348,7 +349,7 @@ func TestDashboardAuthLoginRateLimit(t *testing.T) {
 		}
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"password":"secret"}`))
+	req := newLocalRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"password":"secret"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "192.0.2.10:1234"
 	rr := httptest.NewRecorder()
@@ -750,7 +751,7 @@ func TestCorsMiddlewareRejectsBadOrigin(t *testing.T) {
 	handler := corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	req := newLocalRequest(http.MethodGet, "/api/settings", nil)
 	req.Host = "example.test:9090"
 	req.Header.Set("Origin", "http://evil.test")
 	rr := httptest.NewRecorder()
@@ -786,7 +787,7 @@ func TestInferenceProxyStripsAuthorizationForBackend(t *testing.T) {
 		RoutingTable: map[string]int{"test-model": mustAtoi(t, port)},
 	}, true)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model"}`))
+	req := newLocalRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model"}`))
 	req.Header.Set("Authorization", "Bearer proxy-secret")
 	rr := httptest.NewRecorder()
 
@@ -827,7 +828,7 @@ func TestInferenceProxyForwardsLegacyContainerAPIKey(t *testing.T) {
 		RoutingTable: map[string]int{"test-model": portNum},
 	}, true)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model"}`))
+	req := newLocalRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test-model"}`))
 	req.Header.Set("Authorization", "Bearer proxy-secret")
 	rr := httptest.NewRecorder()
 
@@ -855,7 +856,7 @@ func TestSettingsEndpointReturnsStatus(t *testing.T) {
 	cacheDir := t.TempDir()
 	resetSettingsCache(t, Settings{HFCache: cacheDir, HFToken: "hf-secret", VLLMAPIKey: "api-secret", EnableCUDACompatibility: true, HFHubOffline: true, VLLMImage: "vllm/vllm-openai:v0.4.3"}, true)
 	mux, _ := newDashboardMuxWithOptions(dashboardOptions{ProxyEnabled: true})
-	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	req := newLocalRequest(http.MethodGet, "/api/settings", nil)
 	rr := httptest.NewRecorder()
 
 	mux.ServeHTTP(rr, req)
@@ -878,7 +879,7 @@ func TestSettingsEndpointReturnsStatus(t *testing.T) {
 func TestSPAFallbackServesIndex(t *testing.T) {
 	t.Setenv("VLLM_MANAGER_PASSWORD", "")
 	mux, _ := newDashboardMuxWithOptions(dashboardOptions{ProxyEnabled: true})
-	req := httptest.NewRequest(http.MethodGet, "/settings", nil)
+	req := newLocalRequest(http.MethodGet, "/settings", nil)
 	rr := httptest.NewRecorder()
 
 	mux.ServeHTTP(rr, req)
@@ -905,6 +906,9 @@ func TestModelsInfoEndpointReportsDownloadedState(t *testing.T) {
 	if err := os.WriteFile(snapDir+"/weights.bin", []byte("hello"), 0644); err != nil {
 		t.Fatalf("write weights: %v", err)
 	}
+	if err := os.WriteFile(snapDir+"/config.json", []byte("{}"), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	resetSettingsCache(t, Settings{HFCache: cacheDir}, true)
 	mux, _ := newDashboardMuxWithOptions(dashboardOptions{ProxyEnabled: true})
@@ -917,7 +921,7 @@ func TestModelsInfoEndpointReportsDownloadedState(t *testing.T) {
 	t.Cleanup(func() { fetchHFModelInfoForTest = original })
 
 	// Hit case.
-	req := httptest.NewRequest(http.MethodGet, "/api/models/info?model=Qwen/Qwen2.5-7B-Instruct", nil)
+	req := newLocalRequest(http.MethodGet, "/api/models/info?model=Qwen/Qwen2.5-7B-Instruct", nil)
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -935,7 +939,7 @@ func TestModelsInfoEndpointReportsDownloadedState(t *testing.T) {
 	}
 
 	// Miss case.
-	req = httptest.NewRequest(http.MethodGet, "/api/models/info?model=meta-llama/Missing", nil)
+	req = newLocalRequest(http.MethodGet, "/api/models/info?model=meta-llama/Missing", nil)
 	rr = httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -1153,6 +1157,9 @@ func TestModelDownloadRefusesAlreadyDownloaded(t *testing.T) {
 	if err := os.WriteFile(snapDir+"/weights.bin", []byte("hello"), 0644); err != nil {
 		t.Fatalf("write weights: %v", err)
 	}
+	if err := os.WriteFile(snapDir+"/config.json", []byte("{}"), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	// Capture stdout/stderr so the error message doesn't pollute test
 	// output. We only care about the error itself.
@@ -1220,6 +1227,9 @@ func TestModelInfoReportsDownloadedState(t *testing.T) {
 	}
 	if err := os.WriteFile(snapDir+"/weights.bin", []byte("model-payload"), 0644); err != nil {
 		t.Fatalf("write weights: %v", err)
+	}
+	if err := os.WriteFile(snapDir+"/config.json", []byte("{}"), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
 	}
 
 	// Stub the network call so the test never hits Hugging Face.
@@ -1307,12 +1317,15 @@ func TestModelsDownloadEndpointReturns409WhenAlreadyDownloaded(t *testing.T) {
 	if err := os.WriteFile(snapDir+"/weights.bin", []byte("hello"), 0644); err != nil {
 		t.Fatalf("write weights: %v", err)
 	}
+	if err := os.WriteFile(snapDir+"/config.json", []byte("{}"), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	resetSettingsCache(t, Settings{HFCache: cacheDir}, true)
 	mux, _ := newDashboardMuxWithOptions(dashboardOptions{ProxyEnabled: true})
 
 	body := strings.NewReader(`{"model":"Qwen/Qwen2.5-7B-Instruct"}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/models/download", body)
+	req := newLocalRequest(http.MethodPost, "/api/models/download", body)
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 
@@ -1345,5 +1358,101 @@ func TestUpdateSettingsRejectsNonExistentTag(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "does not exist on Docker Hub") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// newLocalRequest is httptest.NewRequest addressed to localhost: without a
+// dashboard password the API rejects other Host headers (DNS rebinding guard).
+func newLocalRequest(method, target string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, target, body)
+	req.Host = "localhost"
+	return req
+}
+
+func TestHostGuardBlocksRebindingWithoutPassword(t *testing.T) {
+	t.Setenv("VLLM_MANAGER_PASSWORD", "")
+	t.Setenv("VLLM_MANAGER_ALLOWED_HOSTS", "gpu-box")
+	resetSettingsCache(t, Settings{HFCache: t.TempDir()}, true)
+	mux, _ := newDashboardMuxWithOptions(dashboardOptions{ProxyEnabled: true})
+
+	for host, want := range map[string]int{
+		"evil.example:9090": http.StatusForbidden, // rebound DNS name
+		"localhost:9090":    http.StatusOK,
+		"127.0.0.1:9090":    http.StatusOK,
+		"[::1]:9090":        http.StatusOK,
+		"10.0.0.5:9090":     http.StatusOK, // IP literals cannot be rebound
+		"gpu-box:9090":      http.StatusOK, // VLLM_MANAGER_ALLOWED_HOSTS
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+		req.Host = host
+		req.Header.Set("Origin", "http://"+host)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		if rr.Code != want {
+			t.Errorf("Host %s: status=%d, want %d", host, rr.Code, want)
+		}
+	}
+}
+
+func TestHostGuardOffWhenPasswordSet(t *testing.T) {
+	t.Setenv("VLLM_MANAGER_PASSWORD", "secret")
+	mux, _ := newDashboardMuxWithOptions(dashboardOptions{ProxyEnabled: true})
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
+	req.Host = "gpu.internal:9090"
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200: a password-protected dashboard may be reached by hostname", rr.Code)
+	}
+}
+
+func TestCheckDashboardExposure(t *testing.T) {
+	lan := netip.MustParseAddr("0.0.0.0")
+	if err := checkDashboardExposure(netip.MustParseAddr("127.0.0.1"), "", false); err != nil {
+		t.Fatalf("loopback without password: %v", err)
+	}
+	if err := checkDashboardExposure(lan, "", false); err == nil {
+		t.Fatal("0.0.0.0 without password or --insecure-no-auth: err=nil, want refusal")
+	}
+	if err := checkDashboardExposure(lan, "secret", false); err != nil {
+		t.Fatalf("0.0.0.0 with password: %v", err)
+	}
+	if err := checkDashboardExposure(lan, "", true); err != nil {
+		t.Fatalf("0.0.0.0 with --insecure-no-auth: %v", err)
+	}
+}
+
+func TestParseDashboardFlagsInsecureNoAuth(t *testing.T) {
+	values, _, err := parseDashboardFlags([]string{"--dashboard", "--insecure-no-auth"}, io.Discard)
+	if err != nil || !values.insecureNoAuth {
+		t.Fatalf("insecureNoAuth=%v err=%v, want true", values.insecureNoAuth, err)
+	}
+}
+
+func TestValidateServiceConfigNeedsPasswordOffLoopback(t *testing.T) {
+	config := serviceConfig{Host: "0.0.0.0", Port: "9090"}
+	if err := validateServiceConfig(config); err == nil {
+		t.Fatal("0.0.0.0 without password: err=nil, want refusal")
+	}
+	config.InsecureNoAuth = true
+	if err := validateServiceConfig(config); err != nil {
+		t.Fatalf("0.0.0.0 with insecure-no-auth: %v", err)
+	}
+}
+
+func TestAuthPrunesExpiredSessionsAndStaleIPs(t *testing.T) {
+	a := &dashboardAuth{password: "x", sessions: map[string]time.Time{}, loginAt: map[string][]time.Time{}}
+	old := time.Now().Add(-2 * time.Hour)
+	a.sessions["expired"] = old
+	a.loginAt["10.0.0.1"] = []time.Time{old}
+	a.createSession()
+	if _, ok := a.sessions["expired"]; ok {
+		t.Fatal("expired session not pruned")
+	}
+	if _, ok := a.loginAt["10.0.0.1"]; ok {
+		t.Fatal("stale failed-login IP not pruned")
+	}
+	if len(a.sessions) != 1 {
+		t.Fatalf("sessions=%d, want only the new one", len(a.sessions))
 	}
 }

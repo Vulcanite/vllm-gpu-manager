@@ -185,11 +185,15 @@ Destructive CLI commands prompt by default. Use `--yes` for non-interactive auto
 ./vllm-manager --dashboard --port 9090
 ```
 
-By default, the dashboard binds to `127.0.0.1`. Bind the dashboard to a specific interface with `--host`:
+By default, the dashboard binds to `127.0.0.1`. Bind the dashboard to a specific interface with `--host`. A non-loopback host needs `VLLM_MANAGER_PASSWORD`; the dashboard refuses to start without one, because anyone who reaches it controls Docker on the host:
 
 ```bash
-./vllm-manager --dashboard --host 0.0.0.0 --port 9090
+VLLM_MANAGER_PASSWORD='change-me' ./vllm-manager --dashboard --host 0.0.0.0 --port 9090
 ```
+
+To run on a trusted network without a password anyway, pass `--insecure-no-auth` (or set `VLLM_MANAGER_INSECURE_NO_AUTH=true`; `service configure --insecure-no-auth` for the systemd service).
+
+Without a password, the dashboard API only answers requests addressed to `localhost` or an IP address. This blocks DNS rebinding, where a web page you visit points its own hostname at `127.0.0.1`. To reach a password-less dashboard by hostname, list it in `VLLM_MANAGER_ALLOWED_HOSTS` (comma-separated).
 
 Dashboard HTTP is the default. Add `--https` to serve the dashboard with generated self-signed TLS files (`certs/server.crt` and `certs/server.key` for portable runs):
 
@@ -326,7 +330,7 @@ The Hugging Face cache path can only be changed when no managed vLLM containers 
 Downloads run in detached Docker containers using the vLLM image. The backend creates them through the Docker Engine API with settings equivalent to:
 
 ```bash
-docker run -d --rm \
+docker run -d \
   --network host \
   -v <hf_cache>:/hf_cache \
   -e HF_HOME=/hf_cache \
@@ -335,7 +339,7 @@ docker run -d --rm \
   download <model>
 ```
 
-The UI shows progress by polling cached bytes on disk through `/api/models/download/progress`. The progress is an estimate based on expected Hugging Face model size and the current cache directory size.
+The UI polls `/api/models/download/progress`, which reports the download container's state (`running`, `succeeded`, `failed` with the exit code and last log lines, or `stopped`) and the bytes on disk. The expected size is the sum of the repo files that will actually be downloaded. When a repo ships `.safetensors`, other weight formats vLLM does not load (`*.bin`, `*.pt`, `*.pth`, ONNX, GGUF and similar) are excluded from the download. An interrupted download is not counted as downloaded; starting it again resumes it.
 
 Before a download starts, the backend checks Hugging Face model size metadata against free space on the configured cache filesystem when that metadata is available. Known insufficient disk space blocks the download; unknown model size is allowed with a warning.
 
@@ -482,7 +486,7 @@ All APIs are under `/api`.
 | `GET`  | `/models/downloaded`                   | List cached Hugging Face models and local size/KV metadata.               |
 | `GET`  | `/models/info?model=<id>`              | Fetch model metadata from the Hugging Face API.                           |
 | `POST` | `/models/download`                     | Start a background model download container.                              |
-| `GET`  | `/models/download/progress?model=<id>` | Return current cached byte count for a model.                             |
+| `GET`  | `/models/download/progress?model=<id>` | Return download state and cached byte count for a model.                  |
 | `GET`  | `/models/logs?container_id=<id>`       | Return recent logs for a managed container.                               |
 | `GET`  | `/models/logs/stream?container_id=<id>` | Stream container logs as server-sent events.                              |
 | `POST` | `/models/import-command`               | Parse a pasted Docker/vLLM command into deploy form fields and safe extra args. |

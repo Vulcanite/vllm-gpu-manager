@@ -96,20 +96,36 @@ func downloadContainerModelName(vc managedVLLMContainer) string {
 	return ""
 }
 
-// downloadContainerForModel returns the name of an in-progress download
-// container for the given model, or "" if none, scanning a snapshot taken by
-// the caller. The comparison is done on the lowercased normalized model key
-// so case-different labels are treated as the same download.
-func downloadContainerForModel(containers []managedVLLMContainer, model string) string {
+// downloadContainersForModel returns every download container (any state) for
+// the model in a snapshot taken by the caller. Matching uses the lowercased
+// normalized model key so case-different labels are the same download.
+func downloadContainersForModel(containers []managedVLLMContainer, model string) []managedVLLMContainer {
 	want := NormalizeModelKeyForMatch(model)
 	if want == "" {
-		return ""
+		return nil
 	}
+	var result []managedVLLMContainer
 	for _, vc := range containers {
 		if !strings.HasPrefix(vc.name, "vllm-download-") {
 			continue
 		}
 		if NormalizeModelKeyForMatch(downloadContainerModelName(vc)) == want {
+			result = append(result, vc)
+		}
+	}
+	return result
+}
+
+func isDownloadRunning(vc managedVLLMContainer) bool {
+	return vc.state == "running" || vc.state == "created" || vc.state == "restarting"
+}
+
+// downloadContainerForModel returns the name of a still-running download
+// container for the model, or "". Finished containers are kept until their
+// result is read (see GetDownloadStatus) and do not block anything.
+func downloadContainerForModel(containers []managedVLLMContainer, model string) string {
+	for _, vc := range downloadContainersForModel(containers, model) {
+		if isDownloadRunning(vc) {
 			return vc.name
 		}
 	}
@@ -270,10 +286,11 @@ func GetDownloadedModels(hfCache string) ([]DownloadedModel, error) {
 	return models, nil
 }
 
-// IsModelDownloaded reports whether a model identifier is already present in
-// the configured Hugging Face cache. It returns (true, on-disk size in bytes,
-// nil) on a hit, (false, 0, nil) on a miss, and an error only if the cache
-// directory itself is misconfigured (not if the model is merely absent).
+// IsModelDownloaded reports whether the model is fully present in the cache.
+// It returns the bytes on disk even for a partial download, and an error only
+// if the cache directory itself is misconfigured. Complete means a snapshot
+// has config.json (or Mistral's params.json) and no blob is still
+// "*.incomplete", which is what hf download leaves behind when it stops early.
 func IsModelDownloaded(model string, hfCache string) (bool, uint64, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
@@ -300,10 +317,36 @@ func IsModelDownloaded(model string, hfCache string) (bool, uint64, error) {
 	if !info.IsDir() {
 		return false, 0, nil
 	}
-	// Reuse the existing size calculator so the on-disk bytes include all
-	// the snapshots/weights/refs the cache may have.
 	bytes, _, sizeErr := GetDownloadedModelSize(hfCache, model)
-	return true, bytes, sizeErr
+	return modelCacheComplete(dir), bytes, sizeErr
+}
+
+func modelCacheComplete(dir string) bool {
+	if partial, _ := filepath.Glob(filepath.Join(dir, "blobs", "*.incomplete")); len(partial) > 0 {
+		return false
+	}
+	for _, name := range []string{"config.json", "params.json"} {
+		// Glob follows the snapshot symlinks, so a dangling link to a
+		// missing blob does not count.
+		matches, _ := filepath.Glob(filepath.Join(dir, "snapshots", "*", name))
+		for _, match := range matches {
+			if _, err := os.Stat(match); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// AlreadyDownloadedError means the model is fully cached; delete it first to
+// download again.
+type AlreadyDownloadedError struct {
+	Model string
+	Bytes uint64
+}
+
+func (e AlreadyDownloadedError) Error() string {
+	return fmt.Sprintf("%s is already downloaded (%s on disk); delete it from the cache first to re-download", e.Model, FormatBytes(e.Bytes))
 }
 
 func DownloadModel(model string, hfCache string, hfToken string) (string, error) {
@@ -312,24 +355,20 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 		return "", validationError("hugging face cache directory is required")
 	}
 	model = strings.TrimSpace(model)
-	if model == "" {
-		return "", validationError("model is required")
+	if err := ValidateModelID(model); err != nil {
+		return "", err
 	}
 
 	lock := getModelOperationLock(hfCache, model)
 	lock.Lock()
 	defer lock.Unlock()
 
-	// Refuse to re-download a model that is already fully present on disk.
-	// Re-running the downloader would still be a no-op (HF skips existing
-	// files) but it spins up a Docker container and burns time, and the
-	// user almost certainly hit "Download" by accident. Callers that
-	// genuinely need to force a fresh download should remove the cache
-	// directory first.
-	if downloaded, _, err := IsModelDownloaded(model, hfCache); err != nil {
+	// Refuse to re-download a model that is fully present. A partial cache is
+	// not "downloaded": hf download resumes it.
+	if downloaded, size, err := IsModelDownloaded(model, hfCache); err != nil {
 		return "", fmt.Errorf("failed to check existing cache: %v", err)
 	} else if downloaded {
-		return "", validationError("%s is already downloaded; remove it first if you want to re-download", model)
+		return "", AlreadyDownloadedError{Model: model, Bytes: size}
 	}
 
 	containers, err := snapshotManagedVLLMContainers()
@@ -340,13 +379,14 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 		return "", validationError("%s is already being downloaded by %s", model, containerName)
 	}
 
-	if warning, err := CheckDownloadPreflight(model, hfCache, hfToken); err != nil {
+	hfInfo := LazyHFInfo(model, hfToken)
+	if warning, err := CheckDownloadPreflight(model, hfCache, hfInfo); err != nil {
 		return "", err
 	} else if warning != "" {
 		logDockerMessage("WARNING: %s", warning)
 	}
 	if gpus, err := GetGPUInfo(); err == nil {
-		if warning, err := CheckModelQuantizationCompatibility(model, hfCache, hfToken, gpus); err != nil {
+		if warning, err := CheckModelQuantizationCompatibility(model, hfCache, hfInfo, gpus); err != nil {
 			return "", err
 		} else if warning != "" {
 			logDockerMessage("WARNING: %s", warning)
@@ -375,17 +415,34 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 		env = append(env, fmt.Sprintf("HF_TOKEN=%s", hfToken))
 	}
 
+	// Unknown file list (Hub unreachable): download everything, as before.
+	var excludes []string
+	if info, err := hfInfo(); err == nil {
+		excludes = info.DownloadExcludes
+	}
+
 	var containerID string
 	err = withDockerClient(execTimeoutStart, func(ctx context.Context, cli *dockerclient.Client) error {
 		if err := ensureDockerImage(ctx, cli, VLLMImage); err != nil {
 			return fmt.Errorf("failed to ensure vLLM image: %v", err)
 		}
+		// Clear finished download containers for this model so a retry
+		// starts clean.
+		for _, old := range downloadContainersForModel(containers, model) {
+			if !isDownloadRunning(old) {
+				logDockerAPI("container remove", old.id, "force=true")
+				_, _ = cli.ContainerRemove(ctx, old.id, dockerclient.ContainerRemoveOptions{Force: true})
+			}
+		}
 
+		// Exclude patterns arrive as positional args ("$@"), never through
+		// the shell's word splitting.
 		downloadScript := strings.Join([]string{
+			"if [ \"$#\" -gt 0 ]; then set -- --exclude \"$@\"; fi",
 			"if command -v hf >/dev/null 2>&1; then",
-			"  exec hf download \"$MODEL_ID\";",
+			"  exec hf download \"$MODEL_ID\" \"$@\";",
 			"elif command -v huggingface-cli >/dev/null 2>&1; then",
-			"  exec huggingface-cli download \"$MODEL_ID\";",
+			"  exec huggingface-cli download \"$MODEL_ID\" \"$@\";",
 			"else",
 			"  echo \"neither hf nor huggingface-cli is available in the vLLM image\" >&2;",
 			"  exit 127;",
@@ -397,22 +454,23 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 			containerName,
 			"image="+VLLMImage,
 			"network=host",
-			"autoremove=true",
 			"entrypoint=sh -lc",
 			"bind="+fmt.Sprintf("%s:/hf_cache", hfCache),
 			"cmd=download "+model,
+			"exclude="+strings.Join(excludes, ","),
 		)
 		created, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
 			Name: containerName,
 			Config: &container.Config{
 				Image:      VLLMImage,
 				Entrypoint: []string{"sh", "-lc"},
-				Cmd:        []string{downloadScript},
+				Cmd:        append([]string{downloadScript, "vllm-download"}, excludes...),
 				Env:        env,
 				Labels:     labels,
 			},
+			// No AutoRemove: a failed download must keep its exit code and
+			// logs until GetDownloadStatus reports them.
 			HostConfig: &container.HostConfig{
-				AutoRemove:  true,
 				NetworkMode: container.NetworkMode("host"),
 				Binds:       []string{fmt.Sprintf("%s:/hf_cache", hfCache)},
 			},
@@ -432,4 +490,74 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 		return "", fmt.Errorf("failed to start download container: %v", err)
 	}
 	return containerID, nil
+}
+
+// DownloadStatus is what a progress poll returns for one model.
+type DownloadStatus struct {
+	// State is "running", "succeeded", "failed" or "stopped" (no download
+	// container and the cache is not complete).
+	State           string `json:"state"`
+	DownloadedBytes uint64 `json:"downloaded_bytes"`
+	ExitCode        int    `json:"exit_code,omitempty"`
+	Error           string `json:"error,omitempty"`
+}
+
+const downloadErrorTailBytes = 2000
+
+// GetDownloadStatus reports the model's download. A finished download
+// container is removed once its result has been read.
+func GetDownloadStatus(model string, hfCache string) (DownloadStatus, error) {
+	model = strings.TrimSpace(model)
+	if err := ValidateModelID(model); err != nil {
+		return DownloadStatus{}, err
+	}
+	size, err := GetModelDirectorySize(model, hfCache)
+	if err != nil {
+		return DownloadStatus{}, err
+	}
+	status := DownloadStatus{DownloadedBytes: size}
+
+	err = withDockerClient(execTimeoutShort, func(ctx context.Context, cli *dockerclient.Client) error {
+		containers, err := listManagedVLLMContainers(ctx, cli)
+		if err != nil {
+			return err
+		}
+		matches := downloadContainersForModel(containers, model)
+		for _, vc := range matches {
+			if isDownloadRunning(vc) {
+				status.State = "running"
+				return nil
+			}
+		}
+		for _, vc := range matches {
+			exitCode := 0
+			if vc.metadata.State != nil {
+				exitCode = vc.metadata.State.ExitCode
+			}
+			if exitCode != 0 && status.State != "failed" {
+				status.State = "failed"
+				status.ExitCode = exitCode
+				logs := dockerContainerLogs(ctx, cli, vc.id)
+				if len(logs) > downloadErrorTailBytes {
+					logs = logs[len(logs)-downloadErrorTailBytes:]
+				}
+				status.Error = logs
+			}
+			logDockerAPI("container remove", vc.id, "force=true")
+			_, _ = cli.ContainerRemove(ctx, vc.id, dockerclient.ContainerRemoveOptions{Force: true})
+		}
+		return nil
+	})
+	if err != nil {
+		return DownloadStatus{}, fmt.Errorf("failed to read download container state: %v", err)
+	}
+	if status.State != "" {
+		return status, nil
+	}
+	if complete, _, _ := IsModelDownloaded(model, hfCache); complete {
+		status.State = "succeeded"
+	} else {
+		status.State = "stopped"
+	}
+	return status, nil
 }

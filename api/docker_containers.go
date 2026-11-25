@@ -1302,7 +1302,7 @@ func StartModel(cfg LaunchConfig) error {
 		return err
 	}
 
-	if warning, err := CheckModelQuantizationCompatibility(model, hfCache, hfToken, selectedGPUs); err != nil {
+	if warning, err := CheckModelQuantizationCompatibility(model, hfCache, LazyHFInfo(model, hfToken), selectedGPUs); err != nil {
 		return err
 	} else if warning != "" {
 		logDockerMessage("WARNING: %s", warning)

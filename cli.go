@@ -85,6 +85,7 @@ func newCLICommand(out io.Writer, errOut io.Writer) *cobra.Command {
 		"  vllm-manager --dashboard --port 9090",
 		"  vllm-manager --dashboard --port 9090 --https",
 		"  vllm-manager --dashboard --host 127.0.0.1 --port 9090",
+		"  VLLM_MANAGER_PASSWORD=... vllm-manager --dashboard --host 0.0.0.0 --port 9090",
 		"  vllm-manager --dashboard --port 9090 --no-proxy",
 		"  vllm-manager --dashboard --port 9090 --monitoring",
 	}, "\n")
@@ -654,16 +655,11 @@ var downloadModelForCLI = api.DownloadModel
 
 func cliModelDownload(args []string, opts cliOptions) error {
 	settings := getSettings()
-
-	// Pre-flight: surface a clear hint before the API call so the operator
-	// knows what to do next. The API still enforces this server-side, so
-	// this only affects the error message; re-downloading an already-present
-	// model requires `cache delete <model>` first.
-	if downloaded, size, err := api.IsModelDownloaded(args[0], settings.HFCache); err == nil && downloaded {
-		return fmt.Errorf("refused: %s is already downloaded (%s on disk). Run `vllm-manager cache delete %s` first if you want to re-download", args[0], api.FormatBytes(size), args[0])
-	}
-
 	containerID, err := downloadModelForCLI(args[0], settings.HFCache, settings.HFToken)
+	var already api.AlreadyDownloadedError
+	if errors.As(err, &already) {
+		return fmt.Errorf("refused: %s is already downloaded (%s on disk). Run `vllm-manager cache delete %s` first if you want to re-download", already.Model, api.FormatBytes(already.Bytes), already.Model)
+	}
 	if err != nil {
 		return err
 	}
@@ -686,21 +682,20 @@ func newModelDownloadCommand(opts *cliOptions) *cobra.Command {
 }
 
 func cliModelProgress(args []string, opts cliOptions) error {
-	size, err := api.GetModelDirectorySize(args[0], getSettings().HFCache)
+	status, err := api.GetDownloadStatus(args[0], getSettings().HFCache)
 	if err != nil {
 		return err
 	}
-	payload := struct {
-		Model           string `json:"model"`
-		DownloadedBytes uint64 `json:"downloaded_bytes"`
-	}{
-		Model:           args[0],
-		DownloadedBytes: size,
-	}
 	if opts.JSON {
-		return printJSON(payload)
+		return printJSON(struct {
+			Model string `json:"model"`
+			api.DownloadStatus
+		}{Model: args[0], DownloadStatus: status})
 	}
-	printMarkdownTable(os.Stdout, []string{"Model", "Downloaded"}, [][]string{{args[0], api.FormatBytes(size)}})
+	printMarkdownTable(os.Stdout, []string{"Model", "State", "Downloaded"}, [][]string{{args[0], status.State, api.FormatBytes(status.DownloadedBytes)}})
+	if status.State == "failed" {
+		fmt.Fprintf(os.Stderr, "download failed (exit %d):\n%s\n", status.ExitCode, status.Error)
+	}
 	return nil
 }
 

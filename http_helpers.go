@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -286,6 +288,30 @@ func isAllowedOrigin(origin string, requestHost string) bool {
 
 	for _, allowed := range strings.Split(os.Getenv("VLLM_MANAGER_ALLOWED_ORIGINS"), ",") {
 		if strings.TrimSpace(allowed) == origin {
+			return true
+		}
+	}
+	return false
+}
+
+// isAllowedHost guards the unauthenticated dashboard against DNS rebinding: a
+// page on evil.com whose DNS flips to 127.0.0.1 sends Host: evil.com, so only
+// loopback names, IP literals (which cannot be rebound) and hosts listed in
+// VLLM_MANAGER_ALLOWED_HOSTS are accepted.
+func isAllowedHost(requestHost string) bool {
+	host := requestHost
+	if h, _, err := net.SplitHostPort(requestHost); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.Trim(host, "[]"))
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return true
+	}
+	for _, allowed := range strings.Split(os.Getenv("VLLM_MANAGER_ALLOWED_HOSTS"), ",") {
+		if allowed = strings.ToLower(strings.TrimSpace(allowed)); allowed != "" && allowed == host {
 			return true
 		}
 	}
