@@ -11,6 +11,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.1.1] - 2026-11-25
+
+### Changed
+- `manager.sh` supports `--insecure-no-auth`, preserves the setting on restart, and warns that an unauthenticated non-loopback dashboard grants control to anyone who can reach it.
+
+### Fixed
+- `manager.sh` reports when the dashboard exits during startup and rejects unknown options instead of treating them as a password.
+
+---
+
 ## [1.1.0] - 2026-11-25
 
 ### Security
