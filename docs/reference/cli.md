@@ -20,6 +20,7 @@ Comprehensive reference for all `vllm-manager` command-line commands and flags.
 | `--host` | String | Host IP to bind dashboard on (default `127.0.0.1`). |
 | `--https` | Boolean | Enable HTTPS with local self-signed TLS certificates. |
 | `--no-proxy` | Boolean | Disable the OpenAI-compatible proxy gateway on `/v1/`. |
+| `--insecure-no-auth` | Boolean | Allow a non-loopback `--host` without `VLLM_MANAGER_PASSWORD`. Anyone who can reach the port controls Docker. |
 | `--monitoring`| Boolean | Sync active model servers into Prometheus file-SD target file. |
 
 ---
@@ -59,7 +60,7 @@ vllm-manager model download <model-id>
 ```
 
 ### `model progress`
-Check downloaded bytes and download progress for a model:
+Show a download's state (`running`, `succeeded`, `failed` or `stopped`) and bytes on disk. A failed download prints its exit code and the end of its log:
 
 ```bash
 vllm-manager model progress <model-id> [--json]

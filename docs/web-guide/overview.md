@@ -16,8 +16,10 @@ It provides real-time cluster telemetry, an interactive VRAM preflight deploymen
 Start the dashboard daemon on your GPU host:
 
 ```bash
-vllm-manager --dashboard --port 9090 --host 0.0.0.0
+VLLM_MANAGER_PASSWORD='change-me' vllm-manager --dashboard --port 9090 --host 0.0.0.0
 ```
+
+A non-loopback `--host` needs `VLLM_MANAGER_PASSWORD`; without one the dashboard refuses to start unless you pass `--insecure-no-auth`. See [Security](../security.md).
 
 Open your browser at `http://<your-server-ip>:9090` (or `https://...` if `--https` is enabled).
 

@@ -45,7 +45,7 @@ sudo vllm-manager settings set \
   --hf-token "hf_..."
 ```
 
-Other flags: `--monitoring[=false]`, `--monitoring-targets-file <path>`, `--clear-password`, and `--no-restart`. An active service is restarted after a change unless `--no-restart` is given.
+Other flags: `--monitoring[=false]`, `--monitoring-targets-file <path>`, `--clear-password`, `--insecure-no-auth`, and `--no-restart`. A non-loopback `--host` needs a password or `--insecure-no-auth`. An active service is restarted after a change unless `--no-restart` is given.
 
 ---
 

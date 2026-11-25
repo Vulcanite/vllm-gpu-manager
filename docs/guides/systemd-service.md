@@ -41,15 +41,14 @@ WantedBy=multi-user.target
 Use the `service configure` subcommand to modify `/etc/vllm-manager/service.env` atomically:
 
 ```bash
-# Configure host IP and port
-sudo vllm-manager service configure --host 0.0.0.0 --port 9090
+# Listen on all interfaces; a non-loopback host needs a password
+sudo vllm-manager service configure --host 0.0.0.0 --port 9090 --password-file /root/.vllm_pass
 
 # Enable HTTPS and monitoring
 sudo vllm-manager service configure --https=true --monitoring=true
-
-# Set dashboard authentication password from a secure file
-sudo vllm-manager service configure --password-file /root/.vllm_pass
 ```
+
+A non-loopback `--host` without a password is rejected. On a trusted network you can add `--insecure-no-auth` instead; anyone who can reach the port then controls Docker on the host.
 
 ### Environment Variables in `service.env`
 
@@ -60,7 +59,9 @@ sudo vllm-manager service configure --password-file /root/.vllm_pass
 | `VLLM_MANAGER_HTTPS` | `false` | Enable HTTPS with local self-signed TLS certificates. |
 | `VLLM_MANAGER_NO_PROXY` | `false` | Disable `/v1/` reverse proxy gateway. |
 | `VLLM_MANAGER_MONITORING` | `false` | Enable Prometheus target sync to `vllm-targets.yml`. |
-| `VLLM_MANAGER_PASSWORD` | `""` | Password required to access dashboard and APIs. |
+| `VLLM_MANAGER_PASSWORD` | `""` | Password required to access dashboard and APIs. Required when `VLLM_MANAGER_HOST` is not loopback. |
+| `VLLM_MANAGER_INSECURE_NO_AUTH` | `false` | Allow a non-loopback host without a password. |
+| `VLLM_MANAGER_ALLOWED_HOSTS` | `""` | Comma-separated hostnames a password-less dashboard answers to, besides `localhost` and IP addresses. |
 
 ---
 
