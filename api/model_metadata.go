@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -20,21 +22,68 @@ type HFModelInfo struct {
 	CompatibilityWarning  string   `json:"compatibility_warning,omitempty"`
 	DownloadWarning       string   `json:"download_warning,omitempty"`
 	DownloadBlockedReason string   `json:"download_blocked_reason,omitempty"`
+	// DownloadExcludes are the --exclude patterns the download will use;
+	// SizeBytes already leaves those files out.
+	DownloadExcludes []string `json:"-"`
 }
 
-var fetchHFModelInfoForTest func(model string, hfToken string) (HFModelInfo, error)
+// Hugging Face repo ids: optional "org/" then a name, ASCII letters, digits,
+// "_", "-" and ".", with no "--" or ".." (the Hub rejects both).
+var modelIDPattern = regexp.MustCompile(`^(?:[A-Za-z0-9][A-Za-z0-9_.-]*/)?[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// ValidateModelID rejects anything that is not a Hugging Face repo id before it
+// reaches a URL, a cache path or the download container.
+func ValidateModelID(model string) error {
+	if len(model) > 200 || !modelIDPattern.MatchString(model) || strings.Contains(model, "--") || strings.Contains(model, "..") {
+		return validationError("invalid model id %q: expected a Hugging Face repo id like org/model-name", model)
+	}
+	return nil
+}
+
+// unusedWeightPatterns are weight formats vLLM never loads when a repo also
+// ships safetensors. They go to `hf download --exclude` (fnmatch rules) and to
+// excluded below, so every pattern must be "*.ext" or "dir/*".
+var unusedWeightPatterns = []string{
+	"*.bin", "*.pt", "*.pth", "*.h5", "*.msgpack", "*.ot", "*.gguf",
+	"*.onnx", "*.onnx_data", "*.tflite", "*.mlmodel", "onnx/*", "coreml/*", "openvino/*",
+}
+
+func downloadExcludes(files []string) []string {
+	for _, file := range files {
+		if strings.HasSuffix(file, ".safetensors") {
+			return unusedWeightPatterns
+		}
+	}
+	return nil
+}
+
+// excluded matches the two pattern shapes the way fnmatch does: "*.ext" is a
+// suffix anywhere in the path ("*" crosses "/"), "dir/*" is a path prefix.
+func excluded(name string, patterns []string) bool {
+	for _, pattern := range patterns {
+		if ext, ok := strings.CutPrefix(pattern, "*"); ok && strings.HasSuffix(name, ext) {
+			return true
+		}
+		if dir, ok := strings.CutSuffix(pattern, "*"); ok && strings.HasPrefix(name, dir) {
+			return true
+		}
+	}
+	return false
+}
 
 func FetchHFModelInfo(model string, hfToken string) (HFModelInfo, error) {
-	if fetchHFModelInfoForTest != nil {
-		return fetchHFModelInfoForTest(model, hfToken)
-	}
 	model = strings.TrimSpace(model)
-	if model == "" {
-		return HFModelInfo{}, validationError("model required")
+	if err := ValidateModelID(model); err != nil {
+		return HFModelInfo{}, err
 	}
 
 	client := http.Client{Timeout: 5 * time.Second}
-	reqHF, _ := http.NewRequest("GET", "https://huggingface.co/api/models/"+model, nil)
+	// blobs=true adds per-file sizes; usedStorage counts old file versions too
+	// and overstates the download several times over.
+	reqHF, err := http.NewRequest(http.MethodGet, "https://huggingface.co/api/models/"+model+"?blobs=true", nil)
+	if err != nil {
+		return HFModelInfo{}, validationError("invalid model id %q", model)
+	}
 	if strings.TrimSpace(hfToken) != "" {
 		reqHF.Header.Set("Authorization", "Bearer "+strings.TrimSpace(hfToken))
 	}
@@ -49,29 +98,61 @@ func FetchHFModelInfo(model string, hfToken string) (HFModelInfo, error) {
 	defer resp.Body.Close()
 
 	var hfResp struct {
-		UsedStorage int64    `json:"usedStorage"`
-		Downloads   int      `json:"downloads"`
-		Likes       int      `json:"likes"`
-		Tags        []string `json:"tags"`
+		Downloads int      `json:"downloads"`
+		Likes     int      `json:"likes"`
+		Tags      []string `json:"tags"`
+		Siblings  []struct {
+			RFilename string `json:"rfilename"`
+			Size      int64  `json:"size"`
+		} `json:"siblings"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&hfResp); err != nil {
 		return HFModelInfo{}, fmt.Errorf("failed to parse Hugging Face model metadata: %v", err)
 	}
 
+	files := make([]string, 0, len(hfResp.Siblings))
+	for _, sibling := range hfResp.Siblings {
+		files = append(files, sibling.RFilename)
+	}
+	excludes := downloadExcludes(files)
+	var size int64
+	for _, sibling := range hfResp.Siblings {
+		if !excluded(sibling.RFilename, excludes) {
+			size += sibling.Size
+		}
+	}
+
 	return HFModelInfo{
-		Model:     model,
-		SizeBytes: hfResp.UsedStorage,
-		Downloads: hfResp.Downloads,
-		Likes:     hfResp.Likes,
-		Tags:      hfResp.Tags,
+		Model:            model,
+		SizeBytes:        size,
+		Downloads:        hfResp.Downloads,
+		Likes:            hfResp.Likes,
+		Tags:             hfResp.Tags,
+		DownloadExcludes: excludes,
 	}, nil
 }
 
-func CheckDownloadPreflight(model string, hfCache string, hfToken string) (string, error) {
+// HFInfoSource returns Hugging Face metadata for one model. Callers share one
+// source across checks so a request makes at most one Hub call.
+type HFInfoSource func() (HFModelInfo, error)
+
+// LazyHFInfo fetches on first use and reuses the result.
+func LazyHFInfo(model string, hfToken string) HFInfoSource {
+	return sync.OnceValues(func() (HFModelInfo, error) {
+		return FetchHFModelInfo(model, hfToken)
+	})
+}
+
+// KnownHFInfo wraps a result the caller already fetched.
+func KnownHFInfo(info HFModelInfo, err error) HFInfoSource {
+	return func() (HFModelInfo, error) { return info, err }
+}
+
+func CheckDownloadPreflight(model string, hfCache string, hfInfo HFInfoSource) (string, error) {
 	if isGGUFModelHint(model) {
 		return "", validationError("GGUF models are not supported by vllm-manager downloads; vLLM GGUF support is experimental and requires a separate plugin")
 	}
-	info, err := FetchHFModelInfo(model, hfToken)
+	info, err := hfInfo()
 	if err != nil || info.SizeBytes <= 0 {
 		return "Model size could not be confirmed before download; disk space was not preflighted.", nil
 	}
@@ -106,8 +187,8 @@ func FreeBytesForPath(path string) (uint64, error) {
 	return stat.Bavail * uint64(stat.Bsize), nil
 }
 
-func CheckModelQuantizationCompatibility(model string, hfCache string, hfToken string, selectedGPUs []GPUInfo) (string, error) {
-	quant, warning := DetectModelQuantization(model, hfCache, hfToken)
+func CheckModelQuantizationCompatibility(model string, hfCache string, hfInfo HFInfoSource, selectedGPUs []GPUInfo) (string, error) {
+	quant, warning := DetectModelQuantization(model, hfCache, hfInfo)
 	if quant == "" {
 		return warning, nil
 	}
@@ -122,11 +203,11 @@ func CheckModelQuantizationCompatibility(model string, hfCache string, hfToken s
 	return warning, nil
 }
 
-func DetectModelQuantization(model string, hfCache string, hfToken string) (string, string) {
+func DetectModelQuantization(model string, hfCache string, hfInfo HFInfoSource) (string, string) {
 	if quant := detectLocalQuantization(model, hfCache); quant != "" {
 		return quant, ""
 	}
-	if info, err := FetchHFModelInfo(model, hfToken); err == nil {
+	if info, err := hfInfo(); err == nil {
 		if quant := quantizationFromStrings(info.Tags...); quant != "" {
 			return quant, ""
 		}

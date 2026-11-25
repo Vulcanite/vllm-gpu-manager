@@ -6,6 +6,8 @@ import { formatBytes } from '../lib/format.js';
 
 export const DownloadProgressPanel = ({ modelName, expectedSize, onDismiss }) => {
   const [downloadedBytes, setDownloadedBytes] = useState(0);
+  const [state, setState] = useState('running');
+  const [failure, setFailure] = useState('');
   const [progressError, setProgressError] = useState('');
   const [showCompletion, setShowCompletion] = useState(true);
 
@@ -16,10 +18,16 @@ export const DownloadProgressPanel = ({ modelName, expectedSize, onDismiss }) =>
     const fetchProgress = async () => {
       try {
         const response = await getDownloadProgress(modelName);
-        const bytes = response.data?.downloaded_bytes || 0;
-        setDownloadedBytes(bytes);
+        const data = response.data || {};
+        setDownloadedBytes(data.downloaded_bytes || 0);
         setProgressError('');
-        if (expectedSize && expectedSize > 0 && bytes >= expectedSize) {
+        if (data.state && data.state !== 'running') {
+          // The server removes a finished download container once it has
+          // reported it, so stop polling and keep the final state.
+          setState(data.state);
+          if (data.state === 'failed') {
+            setFailure(`Download failed (exit ${data.exit_code})${data.error ? `:\n${data.error}` : ''}`);
+          }
           clearInterval(interval);
         }
       } catch (error) {
@@ -33,8 +41,9 @@ export const DownloadProgressPanel = ({ modelName, expectedSize, onDismiss }) =>
   }, [modelName, expectedSize]);
 
   const hasExpectedSize = expectedSize && expectedSize > 0;
-  const percent = hasExpectedSize ? Math.min(100, Math.round((downloadedBytes / expectedSize) * 100)) : 0;
-  const isComplete = hasExpectedSize && downloadedBytes >= expectedSize;
+  const isComplete = state === 'succeeded';
+  // Bytes on disk include partial files, so only the server's state says 100%.
+  const percent = isComplete ? 100 : hasExpectedSize ? Math.min(99, Math.round((downloadedBytes / expectedSize) * 100)) : 0;
 
   useEffect(() => {
     if (!isComplete || !showCompletion) return undefined;
@@ -67,6 +76,8 @@ export const DownloadProgressPanel = ({ modelName, expectedSize, onDismiss }) =>
         </div>
       )}
       {isComplete && showCompletion && <div className="alert alert-success compact-alert">Download completed</div>}
+      {state === 'failed' && <pre className="alert alert-danger compact-alert" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{failure}</pre>}
+      {state === 'stopped' && <div className="alert alert-danger compact-alert">Download stopped before it finished. Start it again to resume.</div>}
       {progressError && <div className="alert alert-danger compact-alert">{progressError}</div>}
     </div>
   );

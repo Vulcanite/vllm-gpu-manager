@@ -107,7 +107,7 @@ Remove a stopped container by container ID (`{"container_id": "..."}`).
 Start a background model download (`{"model": "Qwen/Qwen2.5-Coder-7B-Instruct"}`).
 
 ### `GET /api/models/download/progress?model=<id>`
-Retrieve downloaded byte count for an in-progress download.
+Report a download: `{"state": "running|succeeded|failed|stopped", "downloaded_bytes": N, "exit_code": N, "error": "..."}`. `failed` includes the exit code and the end of the container log; the finished download container is removed once its state has been reported.
 
 ### `POST /api/models/downloaded/delete`
 Purge a cached model directory (`{"model": "..."}`).

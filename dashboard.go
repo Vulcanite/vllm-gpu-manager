@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strconv"
@@ -25,7 +26,9 @@ type dashboardOptions struct {
 	Port         string
 	HTTPSEnabled bool
 	ProxyEnabled bool
-	Monitoring   monitoringOptions
+	// InsecureNoAuth allows a non-loopback bind without a dashboard password.
+	InsecureNoAuth bool
+	Monitoring     monitoringOptions
 }
 
 type startModelRequest struct {
@@ -60,11 +63,20 @@ type startModelRequest struct {
 func newDashboardMuxWithOptions(opts dashboardOptions) (*http.ServeMux, *dashboardAuth) {
 	mux := http.NewServeMux()
 	auth := newDashboardAuth()
-	apiHandler := func(next http.HandlerFunc) http.HandlerFunc {
-		return corsMiddleware(auth.require(next))
-	}
 	authHandler := func(next http.HandlerFunc) http.HandlerFunc {
-		return corsMiddleware(next)
+		handler := corsMiddleware(next)
+		return func(w http.ResponseWriter, r *http.Request) {
+			// Without a password, refuse Host names a rebound DNS entry
+			// could use (see isAllowedHost).
+			if !auth.required() && !isAllowedHost(r.Host) {
+				writeJSONError(w, http.StatusForbidden, "host not allowed; set VLLM_MANAGER_PASSWORD or add it to VLLM_MANAGER_ALLOWED_HOSTS")
+				return
+			}
+			handler(w, r)
+		}
+	}
+	apiHandler := func(next http.HandlerFunc) http.HandlerFunc {
+		return authHandler(auth.require(next))
 	}
 
 	mux.HandleFunc("/api/auth/status", authHandler(auth.statusHandler))
@@ -758,24 +770,26 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 	}))
 
 	mux.HandleFunc("/api/models/info", apiHandler(func(w http.ResponseWriter, r *http.Request) {
-		model := r.URL.Query().Get("model")
+		model := strings.TrimSpace(r.URL.Query().Get("model"))
 		info, err := fetchHFModelInfo(model)
 		if err != nil {
 			writeAPIError(w, err)
 			return
 		}
 		settings := getSettings()
-		quant, warning := api.DetectModelQuantization(model, settings.HFCache, settings.HFToken)
+		// One Hub call per request: every check below reuses this result.
+		hfInfo := api.KnownHFInfo(info, nil)
+		quant, warning := api.DetectModelQuantization(model, settings.HFCache, hfInfo)
 		info.Quantization = quant
 		info.CompatibilityWarning = warning
 		if gpus, gpuErr := api.GetGPUInfo(); gpuErr == nil {
-			if compatWarning, compatErr := api.CheckModelQuantizationCompatibility(model, settings.HFCache, settings.HFToken, gpus); compatErr != nil {
+			if compatWarning, compatErr := api.CheckModelQuantizationCompatibility(model, settings.HFCache, hfInfo, gpus); compatErr != nil {
 				info.CompatibilityWarning = compatErr.Error()
 			} else if compatWarning != "" {
 				info.CompatibilityWarning = compatWarning
 			}
 		}
-		if downloadWarning, preflightErr := api.CheckDownloadPreflight(model, settings.HFCache, settings.HFToken); preflightErr != nil {
+		if downloadWarning, preflightErr := api.CheckDownloadPreflight(model, settings.HFCache, hfInfo); preflightErr != nil {
 			info.DownloadBlockedReason = preflightErr.Error()
 		} else {
 			info.DownloadWarning = downloadWarning
@@ -818,23 +832,16 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 		}
 
 		settings := getSettings()
-		// Refuse the download when the model is already on disk. Returning
-		// 409 (Conflict) with a typed error code lets the UI render a
-		// specific message ("already downloaded, click here to manage
-		// cache") instead of a generic 400. A misconfigured cache path
-		// silently falls through so the real error from DownloadModel
-		// surfaces.
-		if downloaded, size, err := api.IsModelDownloaded(req.Model, settings.HFCache); err == nil && downloaded {
-			// Headers must be set before the body. Best-effort hints
-			// for clients that want to render state without re-parsing
-			// the detail string.
+		containerID, err := api.DownloadModel(req.Model, settings.HFCache, settings.HFToken)
+		var already api.AlreadyDownloadedError
+		if errors.As(err, &already) {
+			// 409 plus headers so the UI can say "already downloaded"
+			// without parsing the message.
 			w.Header().Set("X-Cache-State", "downloaded")
-			w.Header().Set("X-Cached-Bytes", strconv.FormatUint(size, 10))
+			w.Header().Set("X-Cached-Bytes", strconv.FormatUint(already.Bytes, 10))
 			writeJSONError(w, http.StatusConflict, "model is already downloaded")
 			return
 		}
-
-		containerID, err := api.DownloadModel(req.Model, settings.HFCache, settings.HFToken)
 		if err != nil {
 			writeAPIError(w, err)
 			return
@@ -852,12 +859,12 @@ func registerAPIRoutes(mux *http.ServeMux, apiHandler func(http.HandlerFunc) htt
 			writeJSONError(w, http.StatusBadRequest, "model required")
 			return
 		}
-		size, err := api.GetModelDirectorySize(model, getSettings().HFCache)
+		status, err := api.GetDownloadStatus(model, getSettings().HFCache)
 		if err != nil {
 			writeAPIError(w, err)
 			return
 		}
-		writeJSON(w, map[string]interface{}{"downloaded_bytes": size})
+		writeJSON(w, status)
 	})))
 
 	mux.HandleFunc("/api/models/logs", apiHandler(func(w http.ResponseWriter, r *http.Request) {
@@ -983,6 +990,9 @@ func runDashboard(opts dashboardOptions) {
 	if err != nil {
 		log.Fatalf("invalid dashboard host: %v", err)
 	}
+	if err := checkDashboardExposure(hostAddr, os.Getenv(servicePasswordEnv), opts.InsecureNoAuth); err != nil {
+		log.Fatal(err)
+	}
 	if strings.TrimSpace(opts.Port) == "" {
 		opts.Port = defaultDashboardPort
 	}
@@ -1096,4 +1106,17 @@ func startHeartbeatRefresher() func() {
 		}
 	}()
 	return func() { close(stop) }
+}
+
+// checkDashboardExposure refuses to expose an unauthenticated dashboard beyond
+// loopback: the API drives Docker, which is root on the host.
+func checkDashboardExposure(host netip.Addr, password string, insecureNoAuth bool) error {
+	if host.IsLoopback() || strings.TrimSpace(password) != "" {
+		return nil
+	}
+	if insecureNoAuth {
+		log.Printf("WARNING: dashboard on %s has no password; anyone who can reach it controls Docker on this host", host)
+		return nil
+	}
+	return fmt.Errorf("refusing to bind the dashboard to %s without VLLM_MANAGER_PASSWORD; set a password or pass --insecure-no-auth", host)
 }

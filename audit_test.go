@@ -66,7 +66,7 @@ func TestAuditLogsEndpointReturnsEvents(t *testing.T) {
 	appendAuditEvent(auditEvent{Action: "proxy_api_key_created", Result: "success", Username: "alice", Summary: "Created proxy API key for alice"})
 	mux, _ := newDashboardMuxWithOptions(dashboardOptions{ProxyEnabled: true})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/audit-logs?limit=5", nil)
+	req := newLocalRequest(http.MethodGet, "/api/audit-logs?limit=5", nil)
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 
@@ -98,7 +98,7 @@ func TestProxyUserHandlerWritesAuditEventWithoutSecret(t *testing.T) {
 	resetSettingsCache(t, Settings{HFCache: t.TempDir()}, true)
 	mux, _ := newDashboardMuxWithOptions(dashboardOptions{ProxyEnabled: true})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/proxy-users", strings.NewReader(`{"username":"alice"}`))
+	req := newLocalRequest(http.MethodPost, "/api/proxy-users", strings.NewReader(`{"username":"alice"}`))
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 
