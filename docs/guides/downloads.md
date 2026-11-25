@@ -75,10 +75,10 @@ vllm-manager model cached
      -v <hf_cache>:/hf_cache -e HF_HOME=/hf_cache \
      --entrypoint hf vllm/vllm-openai:v0.23.0 \
      download deepseek-ai/DeepSeek-R1-Distill-Qwen-14B \
-     --exclude "*.bin" "*.pt" "*.pth" "*.onnx" "*.gguf" ...
+     --exclude "*.bin" --exclude "*.pt" --exclude "*.pth" --exclude "*.onnx" ...
    ```
 
-   The `--exclude` list is added only when the repo ships `.safetensors`. It skips weight formats vLLM does not load, which can be most of the repo.
+   The `--exclude` patterns are added only when the repo ships `.safetensors`. They skip weight formats vLLM does not load, which can be most of the repo. `hf download` takes one pattern per `--exclude`.
 4. **Progress reports the result.** `model progress` (or the dashboard panel) shows `running`, `succeeded`, `failed` with the exit code and the end of the log, or `stopped`. The finished container is removed once its result has been read.
 
 ### Interrupted downloads

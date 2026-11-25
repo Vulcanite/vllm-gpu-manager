@@ -436,12 +436,16 @@ func DownloadModel(model string, hfCache string, hfToken string) (string, error)
 		}
 
 		// Exclude patterns arrive as positional args ("$@"), never through
-		// the shell's word splitting.
+		// the shell's word splitting. `hf download` takes one pattern per
+		// --exclude and treats any further bare argument as a file name to
+		// fetch, so each pattern gets its own flag. The older huggingface-cli
+		// takes them all after a single --exclude.
 		downloadScript := strings.Join([]string{
-			"if [ \"$#\" -gt 0 ]; then set -- --exclude \"$@\"; fi",
 			"if command -v hf >/dev/null 2>&1; then",
+			"  for pattern in \"$@\"; do set -- \"$@\" --exclude \"$pattern\"; shift; done;",
 			"  exec hf download \"$MODEL_ID\" \"$@\";",
 			"elif command -v huggingface-cli >/dev/null 2>&1; then",
+			"  if [ \"$#\" -gt 0 ]; then set -- --exclude \"$@\"; fi;",
 			"  exec huggingface-cli download \"$MODEL_ID\" \"$@\";",
 			"else",
 			"  echo \"neither hf nor huggingface-cli is available in the vLLM image\" >&2;",
@@ -516,6 +520,9 @@ func GetDownloadStatus(model string, hfCache string) (DownloadStatus, error) {
 		return DownloadStatus{}, err
 	}
 	status := DownloadStatus{DownloadedBytes: size}
+	// Log tail of a download container that exited 0; used if the cache is
+	// still incomplete, which means the downloader fetched nothing useful.
+	cleanExitLogs, sawCleanExit := "", false
 
 	err = withDockerClient(execTimeoutShort, func(ctx context.Context, cli *dockerclient.Client) error {
 		containers, err := listManagedVLLMContainers(ctx, cli)
@@ -537,11 +544,10 @@ func GetDownloadStatus(model string, hfCache string) (DownloadStatus, error) {
 			if exitCode != 0 && status.State != "failed" {
 				status.State = "failed"
 				status.ExitCode = exitCode
-				logs := dockerContainerLogs(ctx, cli, vc.id)
-				if len(logs) > downloadErrorTailBytes {
-					logs = logs[len(logs)-downloadErrorTailBytes:]
-				}
-				status.Error = logs
+				status.Error = downloadLogTail(ctx, cli, vc.id)
+			} else if exitCode == 0 && !sawCleanExit {
+				sawCleanExit = true
+				cleanExitLogs = downloadLogTail(ctx, cli, vc.id)
 			}
 			logDockerAPI("container remove", vc.id, "force=true")
 			_, _ = cli.ContainerRemove(ctx, vc.id, dockerclient.ContainerRemoveOptions{Force: true})
@@ -554,10 +560,23 @@ func GetDownloadStatus(model string, hfCache string) (DownloadStatus, error) {
 	if status.State != "" {
 		return status, nil
 	}
-	if complete, _, _ := IsModelDownloaded(model, hfCache); complete {
+	complete, _, _ := IsModelDownloaded(model, hfCache)
+	switch {
+	case complete:
 		status.State = "succeeded"
-	} else {
+	case sawCleanExit:
+		status.State = "failed"
+		status.Error = strings.TrimSpace("the downloader exited without fetching the model files\n" + cleanExitLogs)
+	default:
 		status.State = "stopped"
 	}
 	return status, nil
+}
+
+func downloadLogTail(ctx context.Context, cli *dockerclient.Client, containerID string) string {
+	logs := dockerContainerLogs(ctx, cli, containerID)
+	if len(logs) > downloadErrorTailBytes {
+		logs = logs[len(logs)-downloadErrorTailBytes:]
+	}
+	return logs
 }
